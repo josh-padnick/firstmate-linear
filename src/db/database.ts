@@ -241,14 +241,17 @@ export class StateDatabase {
       WHERE d.core_request_id=?`).get(requestId) as DomainEvent | null;
   }
 
-  bindDeliverySequence(eventId: string, sequence: number): void {
-    if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error(`invalid core sequence: ${sequence}`);
-    const current = this.raw.query("SELECT core_seq FROM core_deliveries WHERE event_id=?").get(eventId) as { core_seq: number } | null;
-    if (!current) throw new Error(`core delivery not found: ${eventId}`);
-    if (current.core_seq !== 0 && current.core_seq !== sequence) {
-      throw new Error(`core sequence conflict for ${eventId}: ${current.core_seq} != ${sequence}`);
-    }
-    if (current.core_seq === 0) this.raw.query("UPDATE core_deliveries SET core_seq=? WHERE event_id=?").run(sequence, eventId);
+  bindDeliverySequence(eventId: string, sequence: number, at = nowIso()): void {
+    this.transaction(() => {
+      if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error(`invalid core sequence: ${sequence}`);
+      const current = this.raw.query("SELECT core_seq FROM core_deliveries WHERE event_id=?").get(eventId) as { core_seq: number } | null;
+      if (!current) throw new Error(`core delivery not found: ${eventId}`);
+      if (current.core_seq !== 0 && current.core_seq !== sequence) {
+        throw new Error(`core sequence conflict for ${eventId}: ${current.core_seq} != ${sequence}`);
+      }
+      if (current.core_seq === 0) this.raw.query("UPDATE core_deliveries SET core_seq=? WHERE event_id=?").run(sequence, eventId);
+      this.enqueueCoreAckIfBound(eventId, at);
+    });
   }
 
   deliveryForEvent(eventId: string): { core_request_id: string; core_seq: number; handled_at: string | null } | null {
@@ -258,6 +261,13 @@ export class StateDatabase {
 
   markDeliveryHandled(eventId: string, at = nowIso()): void {
     this.raw.query("UPDATE core_deliveries SET handled_at=? WHERE event_id=?").run(at, eventId);
+  }
+
+  private enqueueCoreAckIfBound(eventId: string, at: string): void {
+    const delivery = this.deliveryForEvent(eventId);
+    const event = this.event(eventId);
+    if (!delivery || delivery.core_seq <= 0 || delivery.handled_at || event?.disposition !== "handled-by-core") return;
+    this.enqueue({ key: `${eventId}:core-ack`, kind: "core.ack", target: eventId, payload: { event_id: eventId, source_id: "linear-main" } }, at);
   }
 
   nextForCore(requestId: string, sequence: number, at = nowIso()): DomainEvent | null {
@@ -324,9 +334,7 @@ export class StateDatabase {
       const result = this.raw.query("UPDATE events SET disposition='handled-by-core',disposition_at=?,note=COALESCE(?,note) WHERE id=? AND disposition='waiting-for-core'")
         .run(at, note, eventId);
       if (result.changes !== 1) throw new Error(`event is not awaiting core handling: ${eventId}`);
-      if (this.deliveryForEvent(eventId)) {
-        this.enqueue({ key: `${eventId}:core-ack`, kind: "core.ack", target: eventId, payload: { event_id: eventId, source_id: "linear-main" } }, at);
-      }
+      this.enqueueCoreAckIfBound(eventId, at);
       this.raw.query("UPDATE receipts SET consumed_at=? WHERE id=? AND consumed_at IS NULL").run(at, receiptId);
     });
   }
@@ -354,9 +362,7 @@ export class StateDatabase {
       for (const event of relevant) {
         this.raw.query("UPDATE events SET disposition='handled-by-core',disposition_at=?,note=? WHERE id=?")
           .run(at, options.note, event.id);
-        if (this.deliveryForEvent(event.id)) {
-          this.enqueue({ key: `${event.id}:core-ack`, kind: "core.ack", target: event.id, payload: { event_id: event.id, source_id: "linear-main" } }, at);
-        }
+        this.enqueueCoreAckIfBound(event.id, at);
       }
       this.raw.query("UPDATE receipts SET consumed_at=? WHERE id=?").run(at, options.receiptId);
       return relevant.map((event) => event.id);

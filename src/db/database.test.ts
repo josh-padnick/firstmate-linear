@@ -101,6 +101,19 @@ describe("state database", () => {
     db.close();
   });
 
+  test("binding a delayed delivery sequence creates the deferred acknowledgement", () => {
+    const db = database();
+    db.capture(event("event:delayed"));
+    db.nextForCore("request:delayed", 0);
+    const receipt = db.issueReceipt(["event:delayed"]);
+    db.handleWithReceipt("event:delayed", receipt, "done");
+    expect(db.jobs()).toHaveLength(0);
+    db.bindDeliverySequence("event:delayed", 9);
+    expect(db.jobs()).toHaveLength(1);
+    expect(db.jobs()[0]).toMatchObject({ kind: "core.ack", target: "event:delayed" });
+    db.close();
+  });
+
   test("events captured after receipt issuance invalidate it regardless of source time", () => {
     const db = database();
     db.capture(event("event:read"));

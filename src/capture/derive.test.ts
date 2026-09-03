@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { deriveComments, deriveHistory, type SeenStore } from "./derive.ts";
+import { deriveComments, deriveHistory, deriveIssueCreation, type SeenStore } from "./derive.ts";
 
 function seenStore(): SeenStore {
   const values = new Set<string>();
@@ -18,5 +18,10 @@ describe("capture derivation cutoffs", () => {
     }], seenStore(), "2026-01-01T00:01:00Z", "2026-01-01T00:00:00Z", "Firstmate");
     expect(comments).toHaveLength(1);
     expect(history).toHaveLength(1);
+    const issues = deriveIssueCreation([{
+      identifier: "ABC-1", createdAt: "2026-01-01T00:00:00.123Z", updatedAt: "2026-01-01T00:00:01Z",
+      creator: { displayName: "Captain" },
+    }], seenStore(), "2026-01-01T00:01:00Z", "2026-01-01T00:00:00Z", "Firstmate");
+    expect(issues).toHaveLength(1);
   });
 });

@@ -10,9 +10,10 @@ export type RelayDecision = {
   note: string;
 };
 
-function activeKeys(db: StateDatabase, issue: string): string[] {
+function activeKeys(db: StateDatabase, issue: string, task: string): string[] {
   const keys = new Set<string>();
   for (const event of db.observations(issue)) {
+    if (event.task !== task) continue;
     if (event.verb === "needs-decision" && event.key) keys.add(event.key);
     if (event.verb === "resolved" && event.key) keys.delete(event.key);
   }
@@ -47,7 +48,7 @@ export function decideRelay(options: {
   if (delegated(metaPath)) {
     return { disposition: "waiting-for-core", job: null, note: `relay task ${task.task} is delegated` };
   }
-  const keys = activeKeys(db, event.issue);
+  const keys = activeKeys(db, event.issue, task.task);
   const snapshot = db.latestSnapshot(event.issue);
   const team = config.teams.find((item) => item.key === event.team);
   const building = snapshot?.state === team?.statuses.building;

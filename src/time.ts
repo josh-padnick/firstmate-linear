@@ -67,15 +67,9 @@ export function formatIso(epochSeconds: number): string {
   );
 }
 
-// Lexicographic ISO compare is unsafe: "23:44:00.801Z" < "23:44:00Z"
-// because "." sorts before "Z", even though the fractional instant is later.
 export function isoAtOrAfter(candidate: string, baseline: string): boolean {
-  const left = parseIso(candidate);
-  const right = parseIso(baseline);
-  if (left === null || right === null) {
-    return false;
-  }
-  return left >= right;
+  const comparison = compareIso(candidate, baseline);
+  return comparison !== null && comparison >= 0;
 }
 
 export function compareIso(left: string, right: string): -1 | 0 | 1 | null {

@@ -67,4 +67,18 @@ describe("PR signals", () => {
     }
     db.close();
   });
+
+  test("multiple tasks on one issue record independent PR states", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    for (const task of ["primary", "support"]) writeFileSync(join(home, "state", `${task}.meta`), "pr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "primary", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.linkTask({ task: "support", issue: "ABC-1", role: "support", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    scanPullRequests(home, db, () => ({ state: "OPEN", headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] }));
+    scanPullRequests(home, db, () => ({ state: "MERGED", headRefOid: "abc123", baseRefName: "main", requiredChecks: [] }));
+    for (const verb of ["pr-green", "pr-merged"]) {
+      expect(db.observations("ABC-1").filter((item) => item.verb === verb).map((item) => item.task).sort()).toEqual(["primary", "support"]);
+    }
+    db.close();
+  });
 });

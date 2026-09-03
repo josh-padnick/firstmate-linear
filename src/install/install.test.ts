@@ -82,4 +82,26 @@ describe("installer", () => {
     uninstall({ FM_HOME: home, FM_LINEAR_SKIP_LAUNCHCTL: "1" });
     expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual(original);
   });
+
+  test("legacy managed accelerators remain removable after reinstall", () => {
+    const root = mkdtempSync("/private/tmp/fml-install-"); roots.push(root);
+    const home = join(root, "home"); mkdirSync(home);
+    const env = {
+      FM_HOME: home,
+      FM_LINEAR_INSTALL_ROOT: join(root, "runtime"),
+      FM_LINEAR_LAUNCH_AGENTS_DIR: join(root, "agents"),
+      FM_LINEAR_SKIP_LAUNCHCTL: "1",
+      FM_LINEAR_REAL_LINEAR_AXI: "/usr/bin/true",
+    };
+    install({ harnesses: ["codex"], bind: false, env });
+    const installRecord = join(home, "state", "linear", "install.json");
+    const legacy = JSON.parse(readFileSync(installRecord, "utf8"));
+    delete legacy.ownedFiles;
+    writeFileSync(installRecord, `${JSON.stringify(legacy)}\n`);
+    const accelerator = join(home, ".codex", "prompts", "report.md");
+    expect(existsSync(accelerator)).toBe(true);
+    install({ harnesses: ["codex"], bind: false, env });
+    uninstall(env);
+    expect(existsSync(accelerator)).toBe(false);
+  });
 });

@@ -21,19 +21,38 @@ export type CaptureCycleResult = {
 
 function maxIso(values: Array<string | null | undefined>): string | null {
   const present = values.filter((value): value is string => Boolean(value));
-  return present.length ? present.sort().at(-1) ?? null : null;
+  return present.reduce<string | null>((maximum, value) => {
+    if (compareIso(value, value) === null) throw new Error(`invalid timestamp: ${value}`);
+    if (maximum === null) return value;
+    const comparison = compareIso(value, maximum);
+    if (comparison === null) throw new Error(`invalid timestamp: ${value}`);
+    return comparison > 0 ? value : maximum;
+  }, null);
 }
 
 function minIso(values: Array<string | null | undefined>): string | null {
   const present = values.filter((value): value is string => Boolean(value));
-  return present.length ? present.sort().at(0) ?? null : null;
+  return present.reduce<string | null>((minimum, value) => {
+    if (compareIso(value, value) === null) throw new Error(`invalid timestamp: ${value}`);
+    if (minimum === null) return value;
+    const comparison = compareIso(value, minimum);
+    if (comparison === null) throw new Error(`invalid timestamp: ${value}`);
+    return comparison < 0 ? value : minimum;
+  }, null);
 }
 
 function snapshotAtRevision(current: IssueSnapshot | null, event: LedgerEvent, history: LinearHistory[]): IssueSnapshot | null {
   if (!current || event.event.type !== "comment") return current;
   let state = current.state;
-  const later = history
-    .filter((item) => item.issue === event.event.issue && item.fromState?.name && item.toState?.name && compareIso(item.createdAt, event.updated_at) === 1)
+  const transitions = history.filter((item) => item.issue === event.event.issue && item.fromState?.name && item.toState?.name);
+  if (transitions.some((item) => compareIso(item.createdAt, event.updated_at) === null)) {
+    throw new Error(`cannot reconstruct state for ${event.event.issue} at comment revision`);
+  }
+  if (transitions.some((item) => compareIso(item.createdAt, event.updated_at) === 0)) {
+    throw new Error(`cannot reconstruct state for ${event.event.issue} at ambiguous comment revision`);
+  }
+  const later = transitions
+    .filter((item) => compareIso(item.createdAt, event.updated_at) === 1)
     .sort((a, b) => -(compareIso(a.createdAt, b.createdAt) ?? 0) || b.id.localeCompare(a.id));
   for (const transition of later) {
     if (transition.toState?.name !== state) throw new Error(`cannot reconstruct state for ${event.event.issue} at comment revision`);
@@ -69,7 +88,7 @@ function managed(issue: LinearIssue, scope: "assignee:self" | "all", self: strin
 function snapshot(issue: LinearIssue, agentLabels: Record<string, string>, observedAt: string): IssueSnapshot {
   const labels = (issue.labels?.nodes ?? []).map((item) => item.name ?? "").filter(Boolean);
   const knownLabels = new Set(Object.values(agentLabels));
-  const history = [...(issue.history?.nodes ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const history = [...(issue.history?.nodes ?? [])].sort((a, b) => -(compareIso(a.createdAt, b.createdAt) ?? 0) || b.id.localeCompare(a.id));
   return {
     issue: issue.identifier,
     state: issue.state?.name ?? "",
@@ -167,7 +186,7 @@ export async function captureCycle(options: {
   let ignored = 0;
   let waiting = 0;
   let jobs = 0;
-  allEvents.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.dedupe_key.localeCompare(b.dedupe_key));
+  allEvents.sort((a, b) => (compareIso(a.created_at, b.created_at) ?? 0) || a.dedupe_key.localeCompare(b.dedupe_key));
   for (const legacy of allEvents) {
     const event = toClassifiable(legacy);
     const currentSnapshot = options.db.latestSnapshot(event.issue);
@@ -204,7 +223,7 @@ export async function captureCycle(options: {
 
   const commentsMax = maxIso(comments.comments.map((comment) => comment.updatedAt));
   if (commentsMax) {
-    if (commentsCursor && commentsMax < commentsCursor) throw new Error("comments cursor would move backwards");
+    if (commentsCursor && compareIso(commentsMax, commentsCursor) === -1) throw new Error("comments cursor would move backwards");
     options.db.setCursor("linear.comments", commentsMax, observedAt);
   }
   for (const team of options.config.teams) {
@@ -212,7 +231,7 @@ export async function captureCycle(options: {
     if (!value) continue;
     const name = `linear.issues.${team.key}`;
     const previous = options.db.cursor(name);
-    if (previous && value < previous) throw new Error(`${team.key} issue cursor would move backwards`);
+    if (previous && compareIso(value, previous) === -1) throw new Error(`${team.key} issue cursor would move backwards`);
     options.db.setCursor(name, value, observedAt);
   }
   return { captured, ignored, waiting, jobs, commentsMax, issuesMax: issueMax };

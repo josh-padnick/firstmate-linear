@@ -1,5 +1,5 @@
 import type { LinearTransport } from "../transport.ts";
-import { overlapTimestamp } from "../time.ts";
+import { compareIso, overlapTimestamp } from "../time.ts";
 import type { LinearComment, LinearHistory, LinearIssue } from "./types.ts";
 
 const DEFAULT_MAX_PAGES = 100;
@@ -121,7 +121,7 @@ export async function fetchIssues(
       const pageInfo = issue.history?.pageInfo;
       const nodes = issue.history?.nodes ?? [];
       const oldest = nodes.reduce<string | null>((min, node) => {
-        if (!min || node.createdAt < min) {
+        if (!min || compareIso(node.createdAt, min) === -1) {
           return node.createdAt;
         }
         return min;
@@ -129,7 +129,7 @@ export async function fetchIssues(
       if (
         pageInfo?.hasNextPage &&
         nodes.length === 10 &&
-        (!threshold || (oldest && oldest >= threshold))
+        (!threshold || (oldest && (compareIso(oldest, threshold) ?? -1) >= 0))
       ) {
         if (!pageInfo.endCursor) {
           throw new Error(`history pagination omitted endCursor for ${issue.identifier}`);

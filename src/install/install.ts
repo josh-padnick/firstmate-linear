@@ -141,7 +141,11 @@ function installExtension(root: string, env: NodeJS.ProcessEnv): ExtensionOwners
   return { packageRoot, bindOutput, registerOutput, bindingDigest, ownerToken: outputField(registerOutput, "owner-token") };
 }
 
-function installManagedFiles(specs: Array<{ path: string; contents: string; mode: number }>, prior: ManagedFileOwnership[]): ManagedFileOwnership[] {
+function installManagedFiles(
+  specs: Array<{ path: string; contents: string; mode: number }>,
+  prior: ManagedFileOwnership[],
+  legacyAccelerators: string[],
+): ManagedFileOwnership[] {
   const ownership = specs.map((spec) => {
     const existingOwnership = prior.find((item) => item.path === spec.path);
     const current = readText(spec.path);
@@ -149,6 +153,9 @@ function installManagedFiles(specs: Array<{ path: string; contents: string; mode
       throw new Error(`managed harness file changed since installation: ${spec.path}`);
     }
     if (existingOwnership) return { ...existingOwnership, installedSha: sha256(spec.contents) };
+    if (legacyAccelerators.includes(spec.path) && current !== null && sha256(current) === sha256(spec.contents)) {
+      return { path: spec.path, installedSha: sha256(spec.contents), previous: { existed: false } };
+    }
     return {
       path: spec.path,
       installedSha: sha256(spec.contents),
@@ -159,14 +166,14 @@ function installManagedFiles(specs: Array<{ path: string; contents: string; mode
   return ownership;
 }
 
-function installHarness(harness: string, home: string, priorFiles: ManagedFileOwnership[], priorClaudeSettings?: ClaudeSettingsOwnership): { ownedFiles: ManagedFileOwnership[]; claudeSettings?: ClaudeSettingsOwnership } {
+function installHarness(harness: string, home: string, priorFiles: ManagedFileOwnership[], legacyAccelerators: string[], priorClaudeSettings?: ClaudeSettingsOwnership): { ownedFiles: ManagedFileOwnership[]; claudeSettings?: ClaudeSettingsOwnership } {
   if (harness === "claude") {
     const command = join(home, ".claude", "commands", "report.md");
     const style = join(home, ".claude", "output-styles", "firstmate-linear.md");
     const ownedFiles = installManagedFiles([
       { path: command, contents: "Run `fm-linear report` and relay its current findings to the captain.\n", mode: 0o600 },
       { path: style, contents: ASSETS.outputStyle, mode: 0o600 },
-    ], priorFiles);
+    ], priorFiles, legacyAccelerators);
     const settings = join(home, ".claude", "settings.local.json");
     let current: Record<string, any> = {};
     try { current = JSON.parse(readFileSync(settings, "utf8")); } catch { current = {}; }
@@ -183,7 +190,7 @@ function installHarness(harness: string, home: string, priorFiles: ManagedFileOw
     return { ownedFiles, claudeSettings: ownership };
   } else if (harness === "codex") {
     const prompt = join(home, ".codex", "prompts", "report.md");
-    return { ownedFiles: installManagedFiles([{ path: prompt, contents: "Run `fm-linear report` and relay its current findings to the user.\n", mode: 0o600 }], priorFiles) };
+    return { ownedFiles: installManagedFiles([{ path: prompt, contents: "Run `fm-linear report` and relay its current findings to the user.\n", mode: 0o600 }], priorFiles, legacyAccelerators) };
   } else if (harness !== "grok") {
     throw new Error(`unknown harness: ${harness}`);
   }
@@ -213,7 +220,7 @@ export function install(options: { harnesses: string[]; bind: boolean; env?: Nod
     bindingDigest: installedExtension.bindingDigest ?? prior?.extension?.bindingDigest ?? null,
     ownerToken: installedExtension.ownerToken ?? prior?.extension?.ownerToken ?? null,
   } : prior?.extension ?? null;
-  const harnessResults = options.harnesses.map((harness) => installHarness(harness, home, prior?.ownedFiles ?? [], prior?.claudeSettings));
+  const harnessResults = options.harnesses.map((harness) => installHarness(harness, home, prior?.ownedFiles ?? [], prior?.accelerators ?? [], prior?.claudeSettings));
   const ownedFiles = [...new Map([...(prior?.ownedFiles ?? []), ...harnessResults.flatMap((result) => result.ownedFiles)].map((item) => [item.path, item])).values()];
   const accelerators = [...new Set([...(prior?.accelerators ?? []), ...ownedFiles.map((item) => item.path)])];
   const harnesses = [...new Set([...(prior?.harnesses ?? []), ...options.harnesses])];

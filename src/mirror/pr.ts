@@ -82,7 +82,7 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
       }, observations);
       if (snapshot.state === "MERGED" && base && snapshot.baseRefName === base) {
         record(db, {
-          id: `obs:${sha256(`${url}:${link.issue}:${snapshot.headRefOid}:merged:${snapshot.baseRefName}`)}`, source: "pr", task: link.task,
+          id: `obs:${sha256(`${link.task}:${link.issue}:${url}:${snapshot.headRefOid}:merged:${snapshot.baseRefName}`)}`, source: "pr", task: link.task,
           issue: link.issue, verb: "pr-merged", key: "pr", note: url, observed_at: nowIso(env),
         }, observations);
         continue;
@@ -103,7 +103,7 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
         issue: link.issue, verb: green ? "pr-green" : "pr-withdrawn", key: "pr",
         note: green ? `${url} head=${snapshot.headRefOid}` : `${url} current=${snapshot.headRefOid} expected=${expectedHead ?? "missing"}`,
         observed_at: nowIso(env),
-      }, `${url}:${link.issue}:${snapshot.headRefOid}:${green ? "green" : "not-green"}`, observations);
+      }, `${link.task}:${link.issue}:${url}:${snapshot.headRefOid}:${green ? "green" : "not-green"}`, observations);
     } catch (error) {
       findings.push({ code: "PR_INSPECTION_FAILED", issue: link.issue, detail: error instanceof Error ? error.message : String(error) });
     }

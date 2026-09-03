@@ -1,5 +1,6 @@
 import type { WorkflowConfig } from "../config/schema.ts";
 import type { NewJob, Observation, StateDatabase } from "../db/database.ts";
+import { compareIso } from "../time.ts";
 import { foldSignals, reduceTaskState, type TaskSignal } from "./reducer.ts";
 
 export type MirrorAction = { issue: string; cause: string; description: string; job: NewJob };
@@ -39,43 +40,59 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
     const relevant = db.observations(issue);
     const latest = relevant.at(-1);
     if (!latest) continue;
-    if (snapshot.last_actor === config.captain.display_name && latest.observed_at <= snapshot.observed_at) {
+    const links = new Map(db.taskLinks(issue, true).map((link) => [link.task, link.role]));
+    const primary = new Set([...links].filter(([, role]) => role === "primary").map(([task]) => task));
+    const primaryObservations = relevant.filter((item) => item.task !== null && primary.has(item.task));
+    const latestPrimary = primaryObservations.at(-1);
+    if (snapshot.last_actor === config.captain.display_name && (!latestPrimary || (compareIso(latestPrimary.observed_at, snapshot.observed_at) ?? -1) <= 0)) {
       findings.push({ code: "CAPTAIN_DRAG", issue, detail: `captain set ${snapshot.state}; no newer fleet signal permits repair` });
       continue;
     }
-    const links = new Map(db.taskLinks(issue, true).map((link) => [link.task, link.role]));
-    const latestIsPrimary = latest.task !== null && links.get(latest.task) === "primary";
     const taskSignals = relevant
       .map((item) => ({ item, signal: signal(item.verb) }))
       .filter((row): row is { item: Observation; signal: TaskSignal } => row.signal !== null && row.item.task !== null && links.has(row.item.task))
       .map((row) => ({ task: row.item.task!, role: links.get(row.item.task!)!, signal: row.signal, key: row.item.key }));
-    const reduced = reduceTaskState(foldSignals(taskSignals));
+    const reduced = primary.size > 0 ? reduceTaskState(foldSignals(taskSignals)) : null;
+    const prState = primaryObservations.filter((item) => ["pr-green", "pr-withdrawn", "pr-merged"].includes(item.verb)).at(-1);
+    let cause = latestPrimary ?? latest;
     let target: string | null = null;
-    if (latest.verb === "dispatch") {
+    if (prState?.verb === "pr-merged") {
+      target = team.statuses.done;
+      cause = prState;
+    } else if (prState?.verb === "pr-green") {
+      target = team.statuses.approve_deliverable;
+      cause = prState;
+    } else if (prState?.verb === "pr-withdrawn" && snapshot.state === team.statuses.approve_deliverable) {
+      target = team.statuses.building;
+      cause = prState;
+    } else if (latestPrimary?.verb === "dispatch") {
       const building = db.latestSnapshots().filter((item) => item.state === team.statuses.building).length;
       target = building >= laneCap ? team.statuses.waiting : team.statuses.building;
-    } else if (latest.verb === "dispatch-scout") target = team.statuses.plan_in_progress;
-    else if (latest.verb === "pr-green" && latestIsPrimary) target = team.statuses.approve_deliverable;
-    else if (latest.verb === "pr-merged" && latestIsPrimary) target = team.statuses.done;
-    else if (latest.verb === "pr-withdrawn" && latestIsPrimary && snapshot.state === team.statuses.approve_deliverable) target = team.statuses.building;
-    else if (latest.verb === "lane-cap") target = team.statuses.waiting;
+    } else if (latestPrimary?.verb === "dispatch-scout") target = team.statuses.plan_in_progress;
+    else if (latestPrimary?.verb === "lane-cap") target = team.statuses.waiting;
     else if (reduced === "needs-decision") target = team.statuses.needs_decision;
     else if (reduced === "blocked" || reduced === "failed") target = team.statuses.needs_firstmate_decision;
+    else if (reduced === "done") target = team.statuses.done;
     else if (reduced === "working") target = team.statuses.building;
 
-    if (latest.verb === "pr-reported") {
-      const url = latest.note?.match(/https:\/\/\S+/)?.[0];
-      if (url) actions.push({ issue, cause: latest.id, description: `attach ${url}`, job: { key: `${latest.id}:attachment`, kind: "linear.attachment", target: issue, payload: { issue, url, title: "Pull request" } } });
+    for (const observation of newObservations.filter((item) => item.issue === issue && item.verb === "pr-reported")) {
+      const url = observation.note?.match(/https:\/\/\S+/)?.[0];
+      if (url) actions.push({ issue, cause: observation.id, description: `attach ${url}`, job: { key: `${observation.id}:attachment`, kind: "linear.attachment", target: issue, payload: { issue, url, title: "Pull request" } } });
     }
-    if (latest.verb === "model-resolved" || latest.verb === "dispatch") {
-      const modelObservation = [...db.observations(issue)].reverse().find((item) => item.verb === "model-resolved");
-      const model = modelFrom(modelObservation ?? latest);
+    const newModels = newObservations.filter((item) => item.issue === issue && item.verb === "model-resolved" && item.task !== null && primary.has(item.task));
+    const labelCauses = newModels.length > 0
+      ? newModels.map((observation) => ({ cause: observation, model: observation }))
+      : latestPrimary?.verb === "dispatch"
+        ? [{ cause: latestPrimary, model: [...primaryObservations].reverse().find((item) => item.verb === "model-resolved") ?? latestPrimary }]
+        : [];
+    for (const { cause: labelCause, model: modelObservation } of labelCauses) {
+      const model = modelFrom(modelObservation);
       const label = team.agent_labels[model] ?? team.agent_labels.unknown;
       if (!team.agent_labels[model]) findings.push({ code: "UNKNOWN_MODEL", issue, detail: `unmapped model ${model}; using unknown` });
-      if (label) actions.push({ issue, cause: latest.id, description: `set agent label ${label}`, job: { key: `${latest.id}:agent-label:${label}`, kind: "linear.agent-label", target: issue, payload: { issue, label, known_labels: Object.values(team.agent_labels) } } });
+      if (label) actions.push({ issue, cause: labelCause.id, description: `set agent label ${label}`, job: { key: `${labelCause.id}:agent-label:${label}`, kind: "linear.agent-label", target: issue, payload: { issue, label, known_labels: Object.values(team.agent_labels) } } });
     }
     if (target && target !== snapshot.state) {
-      actions.push({ issue, cause: latest.id, description: `${snapshot.state} -> ${target}`, job: { key: `${latest.id}:state:${target}`, kind: "linear.issue-state", target: issue, payload: { issue, state: target, expected_state: snapshot.state, cause_observation: latest.id, actor: "service", comment: latest.verb === "pr-green" ? "Required checks passed for the current PR head. Walkthrough: pending." : undefined } } });
+      actions.push({ issue, cause: cause.id, description: `${snapshot.state} -> ${target}`, job: { key: `${cause.id}:state:${target}`, kind: "linear.issue-state", target: issue, payload: { issue, state: target, expected_state: snapshot.state, cause_observation: cause.id, actor: "service", comment: cause.verb === "pr-green" ? "Required checks passed for the current PR head. Walkthrough: pending." : undefined } } });
     }
   }
   return { actions, findings };

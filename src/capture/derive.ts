@@ -1,5 +1,5 @@
 import { sha256 } from "../hash.ts";
-import { isoAtOrAfter } from "../time.ts";
+import { compareIso, isoAtOrAfter } from "../time.ts";
 import type { LedgerEvent, LinearComment, LinearHistory, LinearIssue } from "./types.ts";
 
 export type SeenStore = {
@@ -150,7 +150,7 @@ export function deriveComments(
 ): LedgerEvent[] {
   const events: LedgerEvent[] = [];
   const sorted = [...comments].sort((a, b) =>
-    a.updatedAt === b.updatedAt ? a.id.localeCompare(b.id) : a.updatedAt.localeCompare(b.updatedAt),
+    (compareIso(a.updatedAt, b.updatedAt) ?? 0) || a.id.localeCompare(b.id),
   );
   for (const comment of sorted) {
     if (!comment.id || !comment.updatedAt) {
@@ -184,7 +184,7 @@ export function deriveHistory(
 ): LedgerEvent[] {
   const events: LedgerEvent[] = [];
   const sorted = [...items].sort((a, b) =>
-    a.createdAt === b.createdAt ? a.id.localeCompare(b.id) : a.createdAt.localeCompare(b.createdAt),
+    (compareIso(a.createdAt, b.createdAt) ?? 0) || a.id.localeCompare(b.id),
   );
   for (const item of sorted) {
     if (!item.id || !item.createdAt) {
@@ -233,15 +233,13 @@ export function deriveIssueCreation(
 ): LedgerEvent[] {
   const events: LedgerEvent[] = [];
   const sorted = [...issues].sort((a, b) =>
-    a.createdAt === b.createdAt
-      ? a.identifier.localeCompare(b.identifier)
-      : a.createdAt.localeCompare(b.createdAt),
+    (compareIso(a.createdAt, b.createdAt) ?? 0) || a.identifier.localeCompare(b.identifier),
   );
   for (const issue of sorted) {
     if (!issue.identifier || !issue.createdAt) {
       continue;
     }
-    if (creationCutoff && issue.createdAt < creationCutoff) {
+    if (creationCutoff && !isoAtOrAfter(issue.createdAt, creationCutoff)) {
       continue;
     }
     const key = `issue-created:${issue.identifier}`;

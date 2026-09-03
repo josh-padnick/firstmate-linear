@@ -133,4 +133,64 @@ describe("SQLite capture cycle", () => {
     expect(db.latestSnapshot("ABC-1")?.state).toBe("Approve Plan");
     db.close();
   });
+
+  test("fails closed when approval and a state transition share an instant", async () => {
+    const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" }, comments: { pageInfo: { hasNextPage: false }, nodes: [{
+        id: "comment-ambiguous", createdAt: "2026-01-01T00:01:00Z", updatedAt: "2026-01-01T00:01:00Z",
+        body: "approved", user: { displayName: "Captain" },
+        issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null }, parent: null,
+      }] },
+    } }));
+    await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify({ data: { issues: {
+      pageInfo: { hasNextPage: false }, nodes: [{
+        identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:01:00Z",
+        state: { name: "Approve Plan" }, assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" }, labels: { nodes: [] },
+        history: { pageInfo: { hasNextPage: false }, nodes: [{
+          id: "same-time-gate", createdAt: "2026-01-01T00:01:00Z", actor: { displayName: "Captain" },
+          fromState: { name: "Building" }, toState: { name: "Approve Plan" },
+        }] },
+      }],
+    } } }));
+    const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+    await expect(captureCycle({
+      config, db, transport: new LinearTransport({ fixtureDir: fixtures }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225780" },
+    })).rejects.toThrow("ambiguous comment revision");
+    expect(db.listEvents()).toHaveLength(0);
+    db.close();
+  });
+
+  test("fractional updates advance whole-second cursors", async () => {
+    const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" }, comments: { pageInfo: { hasNextPage: false }, nodes: [{
+        id: "fractional-comment", createdAt: "2026-01-01T00:00:00.123Z", updatedAt: "2026-01-01T00:00:00.123Z",
+        body: "continue", user: { displayName: "Captain" },
+        issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null }, parent: null,
+      }] },
+    } }));
+    await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify({ data: { issues: {
+      pageInfo: { hasNextPage: false }, nodes: [{
+        identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00.123Z",
+        state: { name: "Building" }, assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" }, labels: { nodes: [] },
+        history: { pageInfo: { hasNextPage: false }, nodes: [] },
+      }],
+    } } }));
+    const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+    db.setCursor("linear.comments", "2026-01-01T00:00:00Z");
+    db.setCursor("linear.issues.ABC", "2026-01-01T00:00:00Z");
+    db.setCursor("linear.full.ABC", "2026-01-01T00:00:00Z");
+    const result = await captureCycle({
+      config, db, transport: new LinearTransport({ fixtureDir: fixtures }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225660" },
+    });
+    expect(result.commentsMax).toBe("2026-01-01T00:00:00.123Z");
+    expect(db.cursor("linear.comments")).toBe("2026-01-01T00:00:00.123Z");
+    expect(db.cursor("linear.issues.ABC")).toBe("2026-01-01T00:00:00.123Z");
+    db.close();
+  });
 });
