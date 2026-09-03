@@ -11,6 +11,7 @@ const RESOLVE_STATE = `query($issue:String!){viewer{id displayName} issue(id:$is
 const UPDATE_STATE = `mutation($issue:String!,$state:String!,$assignee:String){issueUpdate(id:$issue,input:{stateId:$state,assigneeId:$assignee}){success issue{id state{name} assignee{displayName}}}}`;
 const CREATE_COMMENT = `mutation($id:String!,$issue:String!,$body:String!){commentCreate(input:{id:$id,issueId:$issue,body:$body}){success comment{id}}}`;
 const VERIFY_COMMENT = `query($id:String!){comment(id:$id){id}}`;
+const RESOLVE_ISSUE = `query($issue:String!){issue(id:$issue){id}}`;
 const RESOLVE_ATTACHMENTS = `query($issue:String!){issue(id:$issue){id attachments{nodes{id url}}}}`;
 const CREATE_ATTACHMENT = `mutation($issue:String!,$url:String!,$title:String!){attachmentCreate(input:{issueId:$issue,url:$url,title:$title}){success attachment{id url}}}`;
 const RESOLVE_TEAM_STATES = `query($team:String!){team(id:$team){id states{nodes{id name type}}}}`;
@@ -24,6 +25,7 @@ export type JobPayload = Record<string, unknown>;
 
 export type JobOutcome = {
   nativeId?: string | null;
+  followups?: Array<{ key: string; kind: string; target: string; payload: unknown }>;
 };
 
 function payload(job: Job): JobPayload {
@@ -52,7 +54,12 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
   const target = requiredString(body.state, "state");
   const resolved = value(await transport.call("job-resolve-state", { query: RESOLVE_STATE, variables: { issue } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
-  if (resolved.issue.state?.name === target) return { nativeId: resolved.issue.id };
+  const note = typeof body.comment === "string" ? body.comment.trim() : "";
+  const outcome = (): JobOutcome => ({
+    nativeId: resolved.issue.id,
+    followups: note ? [{ key: `${job.key}:comment`, kind: "linear.comment", target: issue, payload: { issue, body: note } }] : undefined,
+  });
+  if (resolved.issue.state?.name === target) return outcome();
   const expected = typeof body.expected_state === "string" ? body.expected_state : null;
   if (expected && resolved.issue.state?.name !== expected) {
     throw new Error(`precondition changed: ${issue} is ${resolved.issue.state?.name}, expected ${expected}`);
@@ -75,23 +82,16 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
     variables: { issue: resolved.issue.id, state: state.id, assignee: assigneeId },
   }));
   if (!updated?.issueUpdate?.success) throw new Error(`issue update was not successful: ${issue}`);
-  const note = typeof body.comment === "string" ? body.comment.trim() : "";
-  if (note) {
-    const id = nativeUuid(`${job.key}:comment`);
-    const commented = await transport.call("job-state-comment", {
-      query: CREATE_COMMENT,
-      variables: { id, issue: resolved.issue.id, body: note },
-    });
-    if (!commented.ok && commented.error.classification.class !== "already-satisfied") throw new Error(commented.error.message);
-  }
-  return { nativeId: resolved.issue.id };
+  return outcome();
 }
 
 async function createComment(job: Job, body: JobPayload, transport: LinearTransport): Promise<JobOutcome> {
   const issue = requiredString(body.issue ?? job.target, "issue");
   const text = requiredString(body.body, "body");
   const id = nativeUuid(job.key);
-  const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue, body: text } });
+  const resolved = value(await transport.call("job-resolve-comment-issue", { query: RESOLVE_ISSUE, variables: { issue } }));
+  if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
+  const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue: resolved.issue.id, body: text } });
   if (result.ok) return { nativeId: id };
   if (result.error.classification.class !== "already-satisfied" && result.error.classification.class !== "retryable") {
     throw new Error(result.error.message);
@@ -255,6 +255,7 @@ export async function processJobs(options: {
     try {
       const result = await executeJob(job, { db: options.db, config: options.config, transport: options.transport, env });
       options.db.transaction(() => {
+        for (const followup of result.followups ?? []) options.db.enqueue(followup, nowIso(env));
         if (job.kind === "relay") {
           const eventId = requiredString(payload(job).event_id, "event_id");
           options.db.setDisposition(eventId, "handled-by-service", `relayed to ${result.nativeId ?? job.target}`, nowIso(env));

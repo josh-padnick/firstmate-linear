@@ -3,6 +3,7 @@
 
 import { resolveHome, resolveStateDir } from "./env.ts";
 import { sha256 } from "./hash.ts";
+import { tmpdir } from "node:os";
 
 export type RuntimePaths = {
   home: string;
@@ -25,7 +26,7 @@ export function runtimePaths(env: NodeJS.ProcessEnv = process.env): RuntimePaths
   const preferredSocket = `${root}/service.sock`;
   const socket = Buffer.byteLength(preferredSocket) <= 100
     ? preferredSocket
-    : `/private/tmp/fm-linear-${process.getuid?.() ?? 0}-${sha256(home).slice(0, 12)}.sock`;
+    : `${tmpdir()}/fm-linear-${process.getuid?.() ?? 0}-${sha256(home).slice(0, 12)}/service.sock`;
   return {
     home,
     state,

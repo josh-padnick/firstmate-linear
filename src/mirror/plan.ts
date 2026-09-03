@@ -36,7 +36,7 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
       findings.push({ code: "MISSING_SNAPSHOT", issue, detail: "cannot mirror without a current managed issue snapshot" });
       continue;
     }
-    const relevant = db.observations(issue).sort((a, b) => a.observed_at.localeCompare(b.observed_at));
+    const relevant = db.observations(issue);
     const latest = relevant.at(-1);
     if (!latest) continue;
     if (snapshot.last_actor === config.captain.display_name && latest.observed_at <= snapshot.observed_at) {

@@ -35,4 +35,17 @@ describe("mirror plan", () => {
     expect(plan.findings[0]?.code).toBe("CAPTAIN_DRAG");
     db.close();
   });
+
+  test("same-second observations retain source insertion order", () => {
+    const root = mkdtempSync("/private/tmp/fml-plan-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.linkTask({ task: "a", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const working: Observation = { id: "z-first", source: "status", task: "a", issue: "ABC-1", verb: "working", key: "default", note: null, observed_at: "2026-01-01T00:01:00Z" };
+    const decision: Observation = { ...working, id: "a-second", verb: "needs-decision" };
+    db.observe(working); db.observe(decision);
+    const stateJob = planMirror(db, config, [working, decision]).actions.find((action) => action.job.kind === "linear.issue-state");
+    expect(stateJob?.job.payload).toMatchObject({ state: "Needs Decision" });
+    db.close();
+  });
 });

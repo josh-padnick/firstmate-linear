@@ -21,26 +21,56 @@ describe("job worker", () => {
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
     await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { viewer: { id: "me", displayName: "Firstmate" }, issue: { id: "issue-id", state: { id: "old", name: "Approve Deliverable" }, team: { states: { nodes: [{ id: "new", name: "Validating Code" }] }, members: { nodes: [] } } } } }));
     await Bun.write(join(fixtures, "02-update.json"), JSON.stringify({ data: { issueUpdate: { success: true, issue: { id: "issue-id", state: { name: "Validating Code" } } } } }));
-    await Bun.write(join(fixtures, "03-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
+    await Bun.write(join(fixtures, "03-resolve-comment.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "04-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
     db.enqueue({ key: "approve:1", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Validating Code", expected_state: "Approve Deliverable", comment: "Approved." } }, "2026-01-01T00:00:00Z");
-    const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
-    expect(result.done).toBe(1);
-    expect(db.jobs()[0]?.state).toBe("done");
+    const transport = new LinearTransport({ fixtureDir: fixtures });
+    expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
+    expect(db.jobs().map((job) => [job.kind, job.state])).toEqual([["linear.issue-state", "done"], ["linear.comment", "pending"]]);
+    expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
+    expect(db.jobs().map((job) => job.state)).toEqual(["done", "done"]);
+    db.close();
+  });
+
+  test("a failed state explanation retries without repeating the state update", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const log = join(root, "calls.log");
+    await Bun.write(join(fixtures, "01-resolve-state.json"), JSON.stringify({ data: { viewer: { id: "me" }, issue: { id: "issue-id", state: { name: "Building" }, team: { states: { nodes: [{ id: "done-id", name: "Done" }] }, members: { nodes: [] } } } } }));
+    await Bun.write(join(fixtures, "02-update.json"), JSON.stringify({ data: { issueUpdate: { success: true } } }));
+    await Bun.write(join(fixtures, "03-resolve-comment.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "04-fail-500.json"), "{}");
+    await Bun.write(join(fixtures, "05-verify-missing.json"), JSON.stringify({ data: { comment: null } }));
+    await Bun.write(join(fixtures, "06-resolve-comment.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "07-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.enqueue({ key: "state:done", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Done", comment: "Finished." } }, "2026-01-01T00:00:00Z");
+    const transport = new LinearTransport({ fixtureDir: fixtures, fixtureLog: log });
+    await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
+    expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).retried).toBe(1);
+    expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225610" } })).done).toBe(1);
+    const operations = readFileSync(log, "utf8").trim().split("\n").map((line) => line.split("\t")[0]);
+    expect(operations.filter((operation) => operation === "job-update-state")).toHaveLength(1);
+    expect(db.jobs().find((job) => job.kind === "linear.comment")?.state).toBe("done");
     db.close();
   });
 
   test("an ambiguous comment failure verifies the native client id and does not duplicate", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
-    await Bun.write(join(fixtures, "01-fail-500.json"), "{}");
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-fail-500.json"), "{}");
     const expectedId = "0f425027-ec05-4429-a159-e981bb14f01c";
-    await Bun.write(join(fixtures, "02-verify.json"), JSON.stringify({ data: { comment: { id: expectedId } } }));
+    await Bun.write(join(fixtures, "03-verify.json"), JSON.stringify({ data: { comment: { id: expectedId } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    const log = join(root, "calls.log");
     db.enqueue({ key: "comment:key", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "Hello" } }, "2026-01-01T00:00:00Z");
-    const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
+    const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
     expect(result.done).toBe(1);
     expect(db.jobs()[0]?.native_id).toBe(expectedId);
+    const createCall = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line.split("\t")[1]!)).find((call) => call.variables?.body === "Hello");
+    expect(createCall?.variables.issue).toBe("issue-id");
     db.close();
   });
 

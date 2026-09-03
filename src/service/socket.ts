@@ -1,6 +1,8 @@
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { existsSync, lstatSync, unlinkSync } from "node:fs";
+import { dirname } from "node:path";
 import type { StateDatabase } from "../db/database.ts";
+import { ensurePrivateDir } from "../fsutil.ts";
 import { handleLongPollRequest, type ServiceRequest, type ServiceResponse } from "./protocol.ts";
 
 const MAX_MESSAGE = 65_536;
@@ -10,6 +12,7 @@ function write(socket: Socket, response: ServiceResponse): void {
 }
 
 export function createSocketServer(path: string, db: StateDatabase, active: () => boolean = () => true): Server {
+  ensurePrivateDir(dirname(path));
   if (existsSync(path)) {
     const stat = lstatSync(path);
     if (!stat.isSocket()) throw new Error(`refusing to replace non-socket path: ${path}`);

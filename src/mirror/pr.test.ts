@@ -27,4 +27,19 @@ describe("PR signals", () => {
     expect(result.observations.some((item) => item.verb === "pr-withdrawn")).toBe(true);
     db.close();
   });
+
+  test("green is recorded again after checks regress and recover on the same head", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    writeFileSync(join(home, "state", "task.meta"), "pr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const snapshots = ["pass", "fail", "pass"];
+    for (const state of snapshots) {
+      scanPullRequests(home, db, () => ({ state: "OPEN", headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state }] }), { FM_LINEAR_NOW_EPOCH: "1767225600" });
+    }
+    const transitions = db.observations("ABC-1").filter((item) => ["pr-green", "pr-withdrawn"].includes(item.verb));
+    expect(transitions.map((item) => item.verb)).toEqual(["pr-green", "pr-withdrawn", "pr-green"]);
+    expect(new Set(transitions.map((item) => item.id)).size).toBe(3);
+    db.close();
+  });
 });

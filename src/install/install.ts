@@ -11,6 +11,12 @@ import { ASSETS } from "../assets.ts";
 const LABEL = "com.firstmate.linear";
 const CLAUDE_LINEAR_DENIES = ["Bash(linear-axi issue create:*)", "Bash(linear-axi issue update:*)", "Bash(linear-axi issue comment * --body:*)"] as const;
 
+type ClaudeSettingsOwnership = {
+  path: string;
+  addedDenies: string[];
+  previousOutputStyle: { present: boolean; value?: unknown };
+};
+
 function repoRoot(): string { return join(dirname(fileURLToPath(import.meta.url)), "../.."); }
 function uid(): string { return String(process.getuid?.() ?? 501); }
 
@@ -108,7 +114,7 @@ function installExtension(root: string, env: NodeJS.ProcessEnv): { packageRoot: 
   return { packageRoot, bindOutput, registerOutput, bindingDigest, ownerToken: outputField(registerOutput, "owner-token") };
 }
 
-function installHarness(harness: string, home: string): string[] {
+function installHarness(harness: string, home: string, priorClaudeSettings?: ClaudeSettingsOwnership): { files: string[]; claudeSettings?: ClaudeSettingsOwnership } {
   const installed: string[] = [];
   if (harness === "claude") {
     const command = join(home, ".claude", "commands", "report.md");
@@ -118,12 +124,18 @@ function installHarness(harness: string, home: string): string[] {
     const settings = join(home, ".claude", "settings.local.json");
     let current: Record<string, any> = {};
     try { current = JSON.parse(readFileSync(settings, "utf8")); } catch { current = {}; }
+    const ownership = priorClaudeSettings ?? {
+      path: settings,
+      addedDenies: CLAUDE_LINEAR_DENIES.filter((rule) => !current.permissions?.deny?.includes(rule)),
+      previousOutputStyle: { present: Object.hasOwn(current, "outputStyle"), value: current.outputStyle },
+    };
     const deny = new Set<string>(current.permissions?.deny ?? []);
     for (const rule of CLAUDE_LINEAR_DENIES) deny.add(rule);
     current.permissions = { ...(current.permissions ?? {}), deny: [...deny] };
     current.outputStyle = "firstmate-linear";
     atomicWriteFile(settings, `${JSON.stringify(current, null, 2)}\n`, 0o600);
     installed.push(command, style);
+    return { files: installed, claudeSettings: ownership };
   } else if (harness === "codex") {
     const prompt = join(home, ".codex", "prompts", "report.md");
     atomicWriteFile(prompt, "Run `fm-linear report` and relay its current findings to the user.\n", 0o600);
@@ -131,7 +143,7 @@ function installHarness(harness: string, home: string): string[] {
   } else if (harness !== "grok") {
     throw new Error(`unknown harness: ${harness}`);
   }
-  return installed;
+  return { files: installed };
 }
 
 export function install(options: { harnesses: string[]; bind: boolean; env?: NodeJS.ProcessEnv }): { binary: string; plist: string } {
@@ -143,12 +155,19 @@ export function install(options: { harnesses: string[]; bind: boolean; env?: Nod
   const linearAxiGuard = installLinearAxiGuard(root, env);
   const paths = runtimePaths(env);
   ensurePrivateDir(paths.root);
+  let priorClaudeSettings: ClaudeSettingsOwnership | undefined;
+  try {
+    const prior = JSON.parse(readFileSync(join(paths.root, "install.json"), "utf8")) as { schema?: string; claudeSettings?: ClaudeSettingsOwnership };
+    if (prior.schema === "fm-linear.install.v1") priorClaudeSettings = prior.claudeSettings;
+  } catch { /* first installation */ }
   const plist = join(agentsDir(env), `${LABEL}.plist`);
   mkdirSync(dirname(plist), { recursive: true });
   atomicWriteFile(plist, renderLaunchAgent(binary, home, paths.serviceLog, env.PATH || process.env.PATH), 0o644);
   const extension = options.bind ? installExtension(root, env) : null;
-  const accelerators = options.harnesses.flatMap((harness) => installHarness(harness, home));
-  atomicWriteFile(join(paths.root, "install.json"), `${JSON.stringify({ schema: "fm-linear.install.v1", binary, linearAxiGuard, plist, extension, harnesses: options.harnesses, accelerators }, null, 2)}\n`);
+  const harnessResults = options.harnesses.map((harness) => installHarness(harness, home, priorClaudeSettings));
+  const accelerators = harnessResults.flatMap((result) => result.files);
+  const claudeSettings = harnessResults.find((result) => result.claudeSettings)?.claudeSettings ?? priorClaudeSettings;
+  atomicWriteFile(join(paths.root, "install.json"), `${JSON.stringify({ schema: "fm-linear.install.v1", binary, linearAxiGuard, plist, extension, harnesses: options.harnesses, accelerators, claudeSettings }, null, 2)}\n`);
   if (!env.FM_LINEAR_SKIP_LAUNCHCTL) {
     spawnSync("launchctl", ["bootout", `gui/${uid()}/${LABEL}`], { encoding: "utf8" });
     const result = spawnSync("launchctl", ["bootstrap", `gui/${uid()}`, plist], { encoding: "utf8" });
@@ -162,9 +181,9 @@ export function uninstall(env: NodeJS.ProcessEnv = process.env): void {
   if (!env.FM_LINEAR_SKIP_LAUNCHCTL) spawnSync("launchctl", ["bootout", `gui/${uid()}/${LABEL}`], { encoding: "utf8" });
   const record = readText(join(paths.root, "install.json"));
   if (record) {
-    let parsed: { binary?: string; linearAxiGuard?: string; plist?: string; extension?: { packageRoot?: string; bindingDigest?: string | null; ownerToken?: string | null }; accelerators?: string[] } | null = null;
+    let parsed: { schema?: string; binary?: string; linearAxiGuard?: string; plist?: string; extension?: { packageRoot?: string; bindingDigest?: string | null; ownerToken?: string | null }; accelerators?: string[]; claudeSettings?: ClaudeSettingsOwnership } | null = null;
     try { parsed = JSON.parse(record); } catch { parsed = null; }
-    if (parsed) {
+    if (parsed?.schema === "fm-linear.install.v1") {
       const home = resolveHome(env);
       const firstmateRoot = env.FM_ROOT_OVERRIDE?.trim() || home;
       const common = { encoding: "utf8" as const, env: { ...process.env, ...env, FM_HOME: home } };
@@ -181,19 +200,24 @@ export function uninstall(env: NodeJS.ProcessEnv = process.env): void {
       if (parsed.binary) rmSync(parsed.binary, { force: true });
       if (parsed.linearAxiGuard) rmSync(parsed.linearAxiGuard, { force: true });
       if (parsed.extension?.packageRoot) rmSync(parsed.extension.packageRoot, { recursive: true, force: true });
+      if (parsed.claudeSettings) {
+        try {
+          const settings = JSON.parse(readFileSync(parsed.claudeSettings.path, "utf8")) as Record<string, any>;
+          if (Array.isArray(settings.permissions?.deny)) {
+            const added = new Set(parsed.claudeSettings.addedDenies);
+            settings.permissions.deny = settings.permissions.deny.filter((rule: unknown) => typeof rule !== "string" || !added.has(rule));
+            if (settings.permissions.deny.length === 0) delete settings.permissions.deny;
+          }
+          if (settings.outputStyle === "firstmate-linear") {
+            if (parsed.claudeSettings.previousOutputStyle.present) settings.outputStyle = parsed.claudeSettings.previousOutputStyle.value;
+            else delete settings.outputStyle;
+          }
+          atomicWriteFile(parsed.claudeSettings.path, `${JSON.stringify(settings, null, 2)}\n`, 0o600);
+        } catch { /* no managed Claude settings */ }
+      }
       rmSync(join(paths.root, "install.json"), { force: true });
     }
   }
-  const claudeSettings = join(resolveHome(env), ".claude", "settings.local.json");
-  try {
-    const settings = JSON.parse(readFileSync(claudeSettings, "utf8")) as Record<string, any>;
-    if (Array.isArray(settings.permissions?.deny)) {
-      settings.permissions.deny = settings.permissions.deny.filter((rule: unknown) => typeof rule !== "string" || !CLAUDE_LINEAR_DENIES.includes(rule as typeof CLAUDE_LINEAR_DENIES[number]));
-      if (settings.permissions.deny.length === 0) delete settings.permissions.deny;
-    }
-    if (settings.outputStyle === "firstmate-linear") delete settings.outputStyle;
-    atomicWriteFile(claudeSettings, `${JSON.stringify(settings, null, 2)}\n`, 0o600);
-  } catch { /* no managed Claude settings */ }
   const captainPath = join(resolveHome(env), "data", "captain.md");
   try {
     const text = readFileSync(captainPath, "utf8");

@@ -1,13 +1,25 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
 import { handleLongPollRequest, handleServiceRequest } from "./protocol.ts";
+import { runtimePaths } from "../paths.ts";
+import { createSocketServer } from "./socket.ts";
 
 const cleanup: Array<() => void> = [];
 afterEach(() => { for (const fn of cleanup.splice(0)) fn(); });
 
 describe("service protocol", () => {
+  test("long runtime paths use a private per-user socket directory", async () => {
+    const root = mkdtempSync("/private/tmp/fml-");
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    const paths = runtimePaths({ FM_HOME: join(root, "x".repeat(140)) });
+    const server = createSocketServer(paths.socket, db);
+    if (!server.listening) await new Promise<void>((resolve, reject) => server.once("error", reject).once("listening", resolve));
+    expect(statSync(join(paths.socket, "..")).mode & 0o777).toBe(0o700);
+    cleanup.push(() => { server.close(); db.close(); rmSync(join(paths.socket, ".."), { recursive: true, force: true }); rmSync(root, { recursive: true, force: true }); });
+  });
+
   test("delivers a stable event over the adapter request boundary", () => {
     const root = mkdtempSync("/private/tmp/fml-");
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));

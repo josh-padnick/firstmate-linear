@@ -316,7 +316,9 @@ export class StateDatabase {
       const result = this.raw.query("UPDATE events SET disposition='handled-by-core',disposition_at=?,note=COALESCE(?,note) WHERE id=? AND disposition='waiting-for-core'")
         .run(at, note, eventId);
       if (result.changes !== 1) throw new Error(`event is not awaiting core handling: ${eventId}`);
-      this.enqueue({ key: `${eventId}:core-ack`, kind: "core.ack", target: eventId, payload: { event_id: eventId, source_id: "linear-main" } }, at);
+      if (this.deliveryForEvent(eventId)) {
+        this.enqueue({ key: `${eventId}:core-ack`, kind: "core.ack", target: eventId, payload: { event_id: eventId, source_id: "linear-main" } }, at);
+      }
       this.raw.query("UPDATE receipts SET consumed_at=? WHERE id=? AND consumed_at IS NULL").run(at, receiptId);
     });
   }
@@ -344,7 +346,9 @@ export class StateDatabase {
       for (const event of relevant) {
         this.raw.query("UPDATE events SET disposition='handled-by-core',disposition_at=?,note=? WHERE id=?")
           .run(at, options.note, event.id);
-        this.enqueue({ key: `${event.id}:core-ack`, kind: "core.ack", target: event.id, payload: { event_id: event.id, source_id: "linear-main" } }, at);
+        if (this.deliveryForEvent(event.id)) {
+          this.enqueue({ key: `${event.id}:core-ack`, kind: "core.ack", target: event.id, payload: { event_id: event.id, source_id: "linear-main" } }, at);
+        }
       }
       this.raw.query("UPDATE receipts SET consumed_at=? WHERE id=?").run(at, options.receiptId);
       return relevant.map((event) => event.id);
@@ -460,7 +464,7 @@ export class StateDatabase {
       args.push(since);
     }
     const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
-    return this.raw.query(`SELECT * FROM observations${where} ORDER BY observed_at,id`).all(...args) as Observation[];
+    return this.raw.query(`SELECT * FROM observations${where} ORDER BY observed_at,rowid`).all(...args) as Observation[];
   }
 
   observationsAfterRowid(rowid: number): Array<{ rowid: number; observation: Observation }> {

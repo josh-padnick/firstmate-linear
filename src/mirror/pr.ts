@@ -47,6 +47,14 @@ function record(db: StateDatabase, observation: Observation, out: Observation[])
   if (db.observe(observation)) out.push(observation);
 }
 
+function recordPrState(db: StateDatabase, observation: Observation, identity: string, out: Observation[]): void {
+  const previous = db.observations(observation.issue)
+    .filter((item) => item.source === "pr" && item.task === observation.task && item.key === "pr" && ["pr-green", "pr-withdrawn"].includes(item.verb))
+    .at(-1);
+  if (previous?.verb === observation.verb && previous.note === observation.note) return;
+  record(db, { ...observation, id: `obs:${sha256(`${identity}:${previous?.id ?? "initial"}`)}` }, out);
+}
+
 export function scanPullRequests(home: string, db: StateDatabase, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): { observations: Observation[]; findings: Array<{ code: string; issue: string; detail: string }> } {
   const observations: Observation[] = [];
   const findings: Array<{ code: string; issue: string; detail: string }> = [];
@@ -82,12 +90,12 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
       const green = snapshot.state === "OPEN" && Boolean(expectedHead) && snapshot.headRefOid === expectedHead
         && snapshot.requiredChecks.length > 0
         && snapshot.requiredChecks.every((check) => ["pass", "success", "skipping"].includes(check.state.toLowerCase()));
-      record(db, {
-        id: `obs:${sha256(`${url}:${snapshot.headRefOid}:${green ? "green" : "not-green"}`)}`, source: "pr", task: link.task,
+      recordPrState(db, {
+        id: "", source: "pr", task: link.task,
         issue: link.issue, verb: green ? "pr-green" : "pr-withdrawn", key: "pr",
         note: green ? `${url} head=${snapshot.headRefOid}` : `${url} current=${snapshot.headRefOid} expected=${expectedHead ?? "missing"}`,
         observed_at: nowIso(env),
-      }, observations);
+      }, `${url}:${snapshot.headRefOid}:${green ? "green" : "not-green"}`, observations);
     } catch (error) {
       findings.push({ code: "PR_INSPECTION_FAILED", issue: link.issue, detail: error instanceof Error ? error.message : String(error) });
     }

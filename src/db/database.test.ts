@@ -76,6 +76,30 @@ describe("state database", () => {
     db.close();
   });
 
+  test("handling an event before core delivery creates no impossible acknowledgement", () => {
+    const db = database();
+    db.capture(event("event:early"));
+    const receipt = db.issueReceipt(["event:early"]);
+    db.handleWithReceipt("event:early", receipt, "handled");
+    expect(db.jobs()).toHaveLength(0);
+    expect(db.nextForCore("request:later", 0)).toBeNull();
+    db.close();
+  });
+
+  test("receipt-gated actions only acknowledge events already delivered to core", () => {
+    const db = database();
+    db.capture(event("event:delivered"));
+    db.capture({ ...event("event:early"), issue: "ABC-2" });
+    db.nextForCore("request:delivered", 0);
+    db.bindDeliverySequence("event:delivered", 12);
+    const deliveredReceipt = db.issueReceipt(["event:delivered"]);
+    const earlyReceipt = db.issueReceipt(["event:early"]);
+    db.actWithReceipt({ receiptId: deliveredReceipt, issue: "ABC-1", captain: "captain", jobs: [], note: "done" });
+    db.actWithReceipt({ receiptId: earlyReceipt, issue: "ABC-2", captain: "captain", jobs: [], note: "done" });
+    expect(db.jobs().map((job) => job.target)).toEqual(["event:delivered"]);
+    db.close();
+  });
+
   test("report consumption follows insertion order when a late event has an old source timestamp", () => {
     const db = database();
     db.capture(event("event:first"));

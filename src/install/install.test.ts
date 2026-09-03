@@ -43,12 +43,31 @@ describe("installer", () => {
     expect(runInit(["--captain", "Captain", "--team", "ABC"], env)).toBe(0);
     const database = join(home, "state", "linear", "fm-linear.db");
     const config = join(home, "config", "linear-workflow.yaml");
+    const settings = join(home, ".claude", "settings.local.json");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(settings, `${JSON.stringify({ permissions: { deny: ["Bash(linear-axi issue create:*)", "Bash(git push:*)"] }, outputStyle: "concise" })}\n`);
+    install({ harnesses: ["claude"], bind: false, env });
     install({ harnesses: ["claude"], bind: false, env });
     uninstall(env);
     expect(existsSync(database)).toBe(true);
     expect(existsSync(config)).toBe(true);
     expect(readFileSync(join(home, "data", "captain.md"), "utf8")).not.toContain("fm-linear:start");
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { deny: ["Bash(linear-axi issue create:*)", "Bash(git push:*)"] }, outputStyle: "concise" });
     expect(runInit([], env)).toBe(0);
     expect(readFileSync(join(home, "data", "captain.md"), "utf8")).toContain("fm-linear:start");
+  });
+
+  test("uninstall leaves Claude settings unchanged without a valid install record", () => {
+    const root = mkdtempSync("/private/tmp/fml-install-"); roots.push(root);
+    const home = join(root, "home");
+    const settings = join(home, ".claude", "settings.local.json");
+    const installRecord = join(home, "state", "linear", "install.json");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    mkdirSync(join(home, "state", "linear"), { recursive: true });
+    const original = { permissions: { deny: ["Bash(linear-axi issue update:*)"] }, outputStyle: "firstmate-linear" };
+    writeFileSync(settings, `${JSON.stringify(original)}\n`);
+    writeFileSync(installRecord, "{not-json\n");
+    uninstall({ FM_HOME: home, FM_LINEAR_SKIP_LAUNCHCTL: "1" });
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual(original);
   });
 });
