@@ -13,6 +13,13 @@ export type PrSnapshot = {
 };
 
 export type PrInspect = (url: string) => PrSnapshot;
+type CommandResult = { status: number | null; stdout: string; stderr: string; error?: Error };
+type CommandRunner = (command: string, args: string[], options: { encoding: "utf8"; timeout: number }) => CommandResult;
+
+const runCommand: CommandRunner = (command, args, options) => {
+  const result = spawnSync(command, args, options);
+  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "", error: result.error };
+};
 
 function meta(path: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -31,13 +38,14 @@ function expectedBase(link: TaskLink, values: Record<string, string>): string | 
   return result.stdout.trim().replace(/^origin\//, "") || null;
 }
 
-export function inspectPr(url: string): PrSnapshot {
-  const view = spawnSync("gh", ["pr", "view", url, "--json", "state,mergedAt,baseRefName,headRefOid"], { encoding: "utf8", timeout: 20_000 });
-  if (view.status !== 0) throw new Error((view.stderr || view.stdout || "gh pr view failed").trim());
-  const checks = spawnSync("gh", ["pr", "checks", url, "--required", "--json", "name,state,bucket"], { encoding: "utf8", timeout: 20_000 });
+export function inspectPr(url: string, run: CommandRunner = runCommand): PrSnapshot {
+  const view = run("gh", ["pr", "view", url, "--json", "state,mergedAt,baseRefName,headRefOid"], { encoding: "utf8", timeout: 20_000 });
+  if (view.status !== 0) throw new Error((view.stderr || view.stdout || view.error?.message || "gh pr view failed").trim());
+  const checks = run("gh", ["pr", "checks", url, "--required", "--json", "name,state,bucket"], { encoding: "utf8", timeout: 20_000 });
+  if (!checks.stdout.trim()) throw new Error((checks.stderr || checks.error?.message || "gh pr checks failed").trim());
   let requiredChecks: Array<{ name: string; state: string }> = [];
   try {
-    requiredChecks = (JSON.parse(checks.stdout || "[]") as Array<{ name?: string; state?: string; bucket?: string }>).map((item) => ({ name: item.name ?? "check", state: item.bucket ?? item.state ?? "unknown" }));
+    requiredChecks = (JSON.parse(checks.stdout) as Array<{ name?: string; state?: string; bucket?: string }>).map((item) => ({ name: item.name ?? "check", state: item.bucket ?? item.state ?? "unknown" }));
   } catch { throw new Error("gh pr checks returned malformed JSON"); }
   const data = JSON.parse(view.stdout) as { state: "OPEN" | "MERGED" | "CLOSED"; mergedAt?: string | null; baseRefName: string; headRefOid: string };
   return { state: data.mergedAt ? "MERGED" : data.state, headRefOid: data.headRefOid, baseRefName: data.baseRefName, requiredChecks };

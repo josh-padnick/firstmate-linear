@@ -92,6 +92,7 @@ export async function fetchIssues(
   const history: LinearHistory[] = [];
   const pending: Array<{ identifier: string; after: string }> = [];
   let after = "";
+  let exhausted = false;
   const maxPages = options.maxPages ?? Number(process.env.FM_LINEAR_MAX_PAGES ?? DEFAULT_MAX_PAGES);
   const threshold = historyCutoff ?? cursor ?? "";
 
@@ -137,6 +138,7 @@ export async function fetchIssues(
       }
     }
     if (!data.issues.pageInfo?.hasNextPage) {
+      exhausted = true;
       break;
     }
     const endCursor = data.issues.pageInfo.endCursor;
@@ -144,6 +146,9 @@ export async function fetchIssues(
       throw new Error("issues pagination omitted endCursor");
     }
     after = endCursor;
+  }
+  if (!exhausted) {
+    throw new Error("issues pagination exceeded limit");
   }
 
   const maxHistoryPages = Number(process.env.FM_LINEAR_MAX_HISTORY_PAGES ?? DEFAULT_MAX_PAGES);

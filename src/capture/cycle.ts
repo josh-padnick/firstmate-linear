@@ -8,7 +8,7 @@ import { LinearTransport } from "../transport.ts";
 import { decideRelay } from "../relay/decide.ts";
 import { deriveComments, deriveHistory, deriveIssueCreation, type SeenStore } from "./derive.ts";
 import { fetchComments, fetchIssues } from "./fetch.ts";
-import type { LedgerEvent, LinearIssue } from "./types.ts";
+import type { LedgerEvent, LinearHistory, LinearIssue } from "./types.ts";
 
 export type CaptureCycleResult = {
   captured: number;
@@ -22,6 +22,24 @@ export type CaptureCycleResult = {
 function maxIso(values: Array<string | null | undefined>): string | null {
   const present = values.filter((value): value is string => Boolean(value));
   return present.length ? present.sort().at(-1) ?? null : null;
+}
+
+function minIso(values: Array<string | null | undefined>): string | null {
+  const present = values.filter((value): value is string => Boolean(value));
+  return present.length ? present.sort().at(0) ?? null : null;
+}
+
+function snapshotAtRevision(current: IssueSnapshot | null, event: LedgerEvent, history: LinearHistory[]): IssueSnapshot | null {
+  if (!current || event.event.type !== "comment") return current;
+  let state = current.state;
+  const later = history
+    .filter((item) => item.issue === event.event.issue && item.fromState?.name && item.toState?.name && item.createdAt > event.updated_at)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+  for (const transition of later) {
+    if (transition.toState?.name !== state) throw new Error(`cannot reconstruct state for ${event.event.issue} at comment revision`);
+    state = transition.fromState?.name ?? state;
+  }
+  return { ...current, state };
 }
 
 class DatabaseSeenStore implements SeenStore {
@@ -102,6 +120,7 @@ export async function captureCycle(options: {
   const self = comments.viewer || env.FM_LINEAR_SELF_NAME?.trim() || "firstmate";
   const seen = new DatabaseSeenStore(options.db);
   const allEvents: LedgerEvent[] = [];
+  const allHistory: LinearHistory[] = [];
   const issueMax: Record<string, string | null> = {};
 
   for (const team of options.config.teams) {
@@ -111,13 +130,18 @@ export async function captureCycle(options: {
     const lastFull = options.db.cursor(`linear.full.${team.key}`);
     const fullDue = !lastFull || nowEpoch(env) - (parseIso(lastFull) ?? 0) >= 900;
     const eventCutoff = forceSince ?? (cursor ? overlapTimestamp(cursor) : bootstrapCutoff);
-    const result = await fetchIssues(transport, fullDue ? null : cursor, eventCutoff, {
+    const commentCutoff = minIso(comments.comments
+      .filter((comment) => teamFromIssue(comment.issue?.identifier ?? "") === team.key)
+      .map((comment) => comment.updatedAt));
+    const historyCutoff = minIso([eventCutoff, commentCutoff]);
+    const result = await fetchIssues(transport, fullDue ? null : cursor, historyCutoff, {
       team: team.key,
       forceSince: fullDue ? null : forceSince,
     });
     const managedIssues = result.issues.filter((issue) => managed(issue, team.managed, self, team.projects));
     const managedIds = new Set(managedIssues.map((issue) => issue.identifier));
     const managedHistory = result.history.filter((item) => managedIds.has(item.issue ?? ""));
+    allHistory.push(...managedHistory);
     for (const issue of managedIssues) options.db.snapshot(snapshot(issue, team.agent_labels, observedAt));
     allEvents.push(...deriveHistory(managedHistory, seen, observedAt, eventCutoff, self, bootstrapCutoff !== null));
     allEvents.push(...deriveIssueCreation(managedIssues, seen, observedAt, eventCutoff, self, bootstrapCutoff !== null));
@@ -147,10 +171,11 @@ export async function captureCycle(options: {
   for (const legacy of allEvents) {
     const event = toClassifiable(legacy);
     const currentSnapshot = options.db.latestSnapshot(event.issue);
-    const classification = classifyEvent(event, options.config, currentSnapshot);
+    const eventSnapshot = snapshotAtRevision(currentSnapshot, legacy, allHistory);
+    const classification = classifyEvent(event, options.config, eventSnapshot);
     const team = options.config.teams.find((item) => item.key === event.team);
     const relayEligible = classification.token === "comment"
-      || (classification.token === "ball-returned" && currentSnapshot?.state === team?.statuses.needs_decision);
+      || (classification.token === "ball-returned" && eventSnapshot?.state === team?.statuses.needs_decision);
     const relay = classification.disposition === "waiting-for-core" && relayEligible
       ? decideRelay({ event, db: options.db, config: options.config, home: resolveHome(env) })
       : null;

@@ -15,8 +15,9 @@ export function planReviewDeadlines(home: string, db: StateDatabase, config: Wor
     const teamKey = snapshot.issue.slice(0, snapshot.issue.indexOf("-")).toUpperCase();
     const team = config.teams.find((item) => item.key === teamKey);
     if (!team || snapshot.state !== team.statuses.approve_deliverable) continue;
-    const green = db.observations(snapshot.issue).filter((item) => item.verb === "pr-green").at(-1);
-    if (!green) continue;
+    const latestPrState = db.observations(snapshot.issue).filter((item) => item.verb === "pr-green" || item.verb === "pr-withdrawn").at(-1);
+    if (latestPrState?.verb !== "pr-green") continue;
+    const green = latestPrState;
     const path = join(home, "data", snapshot.issue.toLowerCase(), "review-walkthrough.html");
     let errors: string[];
     if (!existsSync(path)) errors = ["walkthrough file is missing"];

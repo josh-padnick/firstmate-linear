@@ -94,4 +94,40 @@ describe("SQLite capture cycle", () => {
     expect(db.latestSnapshot("ABC-1")?.state).toBe("Building");
     db.close();
   });
+
+  test("classifies approval against the state at the comment revision", async () => {
+    const root = mkdtempSync("/private/tmp/fml-capture-");
+    roots.push(root);
+    const fixtures = join(root, "fixtures");
+    mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" },
+      comments: { pageInfo: { hasNextPage: false }, nodes: [{
+        id: "comment-before-gate", createdAt: "2026-01-01T00:01:00Z", updatedAt: "2026-01-01T00:01:00Z",
+        body: "approved", user: { displayName: "Captain" },
+        issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null }, parent: null,
+      }] },
+    } }));
+    await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify({ data: {
+      issues: { pageInfo: { hasNextPage: false }, nodes: [{
+        identifier: "ABC-1", title: "Ship", description: "", createdAt: "2025-12-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:02:00Z", state: { name: "Approve Plan" },
+        assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" }, labels: { nodes: [] },
+        history: { pageInfo: { hasNextPage: false }, nodes: [{
+          id: "move-to-gate", createdAt: "2026-01-01T00:02:00Z", actor: { displayName: "Captain" },
+          fromState: { name: "Building" }, toState: { name: "Approve Plan" },
+        }] },
+      }] },
+    } }));
+    const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+    await captureCycle({
+      config, db, transport: new LinearTransport({ fixtureDir: fixtures }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225780" },
+    });
+    const comment = db.listEvents().find((event) => event.type === "comment");
+    expect(comment?.token).toBe("comment");
+    expect(db.jobs()).toHaveLength(0);
+    expect(db.latestSnapshot("ABC-1")?.state).toBe("Approve Plan");
+    db.close();
+  });
 });

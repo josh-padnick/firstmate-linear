@@ -26,4 +26,15 @@ describe("review deadline reconciler", () => {
     expect(planReviewDeadlines(root, db, config, { FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T01:00:00Z") / 1000) }).jobs).toHaveLength(0);
     db.close();
   });
+
+  test("a withdrawn current PR state suppresses historical green reminders", () => {
+    const root = mkdtempSync("/private/tmp/fml-review-deadline-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: "service", last_signal: "pr-green", observed_at: "2026-01-01T00:00:00Z" });
+    db.observe({ id: "obs:green", source: "pr", task: "task", issue: "ABC-1", verb: "pr-green", key: "pr", note: "https://example.test/pr/1", observed_at: "2026-01-01T00:00:00Z" });
+    db.observe({ id: "obs:withdrawn", source: "pr", task: "task", issue: "ABC-1", verb: "pr-withdrawn", key: "pr", note: "https://example.test/pr/1", observed_at: "2026-01-01T00:01:00Z" });
+    const plan = planReviewDeadlines(root, db, config, { FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T01:00:00Z") / 1000) });
+    expect(plan).toEqual({ jobs: [], findings: [] });
+    db.close();
+  });
 });

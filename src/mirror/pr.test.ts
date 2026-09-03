@@ -2,12 +2,24 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
-import { scanPullRequests } from "./pr.ts";
+import { inspectPr, scanPullRequests } from "./pr.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("PR signals", () => {
+  test("check command failures fail closed while failed-check JSON remains inspectable", () => {
+    const view = JSON.stringify({ state: "OPEN", mergedAt: null, baseRefName: "main", headRefOid: "abc123" });
+    const failedCommand = (_command: string, args: string[]) => args[1] === "view"
+      ? { status: 0, stdout: view, stderr: "" }
+      : { status: 1, stdout: "", stderr: "authentication failed" };
+    expect(() => inspectPr("https://example.test/pr/1", failedCommand)).toThrow("authentication failed");
+    const failedChecks = (_command: string, args: string[]) => args[1] === "view"
+      ? { status: 0, stdout: view, stderr: "" }
+      : { status: 1, stdout: JSON.stringify([{ name: "ci", bucket: "fail" }]), stderr: "" };
+    expect(inspectPr("https://example.test/pr/1", failedChecks).requiredChecks).toEqual([{ name: "ci", state: "fail" }]);
+  });
+
   test("green is bound to the mapped current head SHA", () => {
     const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
     writeFileSync(join(home, "state", "task.meta"), "pr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
