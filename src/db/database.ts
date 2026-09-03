@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
-import { nowIso } from "../time.ts";
+import { compareIso, nowIso } from "../time.ts";
 import { MIGRATE_TO_V2_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
 export type EventDisposition =
@@ -478,12 +478,12 @@ export class StateDatabase {
       clauses.push("issue=?");
       args.push(issue);
     }
-    if (since) {
-      clauses.push("observed_at>?");
-      args.push(since);
-    }
     const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
-    return this.raw.query(`SELECT * FROM observations${where} ORDER BY observed_at,rowid`).all(...args) as Observation[];
+    const rows = this.raw.query(`SELECT rowid AS _rowid,* FROM observations${where}`).all(...args) as Array<Observation & { _rowid: number }>;
+    return rows
+      .filter((row) => !since || compareIso(row.observed_at, since) === 1)
+      .sort((left, right) => (compareIso(left.observed_at, right.observed_at) ?? 0) || left._rowid - right._rowid)
+      .map(({ _rowid: _ignored, ...observation }) => observation);
   }
 
   observationsAfterRowid(rowid: number): Array<{ rowid: number; observation: Observation }> {

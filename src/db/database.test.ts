@@ -151,4 +151,14 @@ describe("state database", () => {
     expect(db.eventsAfterRowid(first[0]!.rowid).map((item) => item.event.id)).toEqual(["event:late"]);
     db.close();
   });
+
+  test("observations use chronological instants with insertion-order ties", () => {
+    const db = database();
+    db.observe({ id: "whole", source: "status", task: "a", issue: "ABC-1", verb: "working", key: "default", note: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.observe({ id: "fractional", source: "status", task: "a", issue: "ABC-1", verb: "done", key: "default", note: null, observed_at: "2026-01-01T00:00:00.123Z" });
+    db.observe({ id: "tie", source: "status", task: "a", issue: "ABC-1", verb: "blocked", key: "default", note: null, observed_at: "2026-01-01T00:00:00.123Z" });
+    expect(db.observations("ABC-1").map((item) => item.id)).toEqual(["whole", "fractional", "tie"]);
+    expect(db.observations("ABC-1", "2026-01-01T00:00:00Z").map((item) => item.id)).toEqual(["fractional", "tie"]);
+    db.close();
+  });
 });

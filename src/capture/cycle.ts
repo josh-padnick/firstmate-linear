@@ -1,4 +1,4 @@
-import { classifyEvent, type ClassifiableEvent } from "../classify/classify.ts";
+import { classifyEvent, isExactApproval, type ClassifiableEvent } from "../classify/classify.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase, type IssueSnapshot } from "../db/database.ts";
 import { loadKey, resolveHome } from "../env.ts";
@@ -41,16 +41,14 @@ function minIso(values: Array<string | null | undefined>): string | null {
   }, null);
 }
 
-function snapshotAtRevision(current: IssueSnapshot | null, event: LedgerEvent, history: LinearHistory[]): IssueSnapshot | null {
-  if (!current || event.event.type !== "comment") return current;
+function snapshotAtRevision(current: IssueSnapshot | null, event: LedgerEvent, history: LinearHistory[], failOnAmbiguous: boolean): { snapshot: IssueSnapshot | null; ambiguous: boolean } {
+  if (!current || event.event.type !== "comment") return { snapshot: current, ambiguous: false };
   let state = current.state;
   const transitions = history.filter((item) => item.issue === event.event.issue && item.fromState?.name && item.toState?.name);
   if (transitions.some((item) => compareIso(item.createdAt, event.updated_at) === null)) {
     throw new Error(`cannot reconstruct state for ${event.event.issue} at comment revision`);
   }
-  if (transitions.some((item) => compareIso(item.createdAt, event.updated_at) === 0)) {
-    throw new Error(`cannot reconstruct state for ${event.event.issue} at ambiguous comment revision`);
-  }
+  if (failOnAmbiguous && transitions.some((item) => compareIso(item.createdAt, event.updated_at) === 0)) return { snapshot: current, ambiguous: true };
   const later = transitions
     .filter((item) => compareIso(item.createdAt, event.updated_at) === 1)
     .sort((a, b) => -(compareIso(a.createdAt, b.createdAt) ?? 0) || b.id.localeCompare(a.id));
@@ -58,7 +56,7 @@ function snapshotAtRevision(current: IssueSnapshot | null, event: LedgerEvent, h
     if (transition.toState?.name !== state) throw new Error(`cannot reconstruct state for ${event.event.issue} at comment revision`);
     state = transition.fromState?.name ?? state;
   }
-  return { ...current, state };
+  return { snapshot: { ...current, state }, ambiguous: false };
 }
 
 class DatabaseSeenStore implements SeenStore {
@@ -190,8 +188,16 @@ export async function captureCycle(options: {
   for (const legacy of allEvents) {
     const event = toClassifiable(legacy);
     const currentSnapshot = options.db.latestSnapshot(event.issue);
-    const eventSnapshot = snapshotAtRevision(currentSnapshot, legacy, allHistory);
-    const classification = classifyEvent(event, options.config, eventSnapshot);
+    const revision = snapshotAtRevision(
+      currentSnapshot,
+      legacy,
+      allHistory,
+      event.type === "comment" && event.author === options.config.captain.display_name && isExactApproval(event.body ?? ""),
+    );
+    const eventSnapshot = revision.snapshot;
+    const classification = revision.ambiguous
+      ? { token: "approval" as const, disposition: "waiting-for-core" as const, jobs: [], note: "approval chronology is ambiguous; automatic transition withheld" }
+      : classifyEvent(event, options.config, eventSnapshot);
     const team = options.config.teams.find((item) => item.key === event.team);
     const relayEligible = classification.token === "comment"
       || (classification.token === "ball-returned" && eventSnapshot?.state === team?.statuses.needs_decision);

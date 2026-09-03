@@ -104,4 +104,22 @@ describe("installer", () => {
     uninstall(env);
     expect(existsSync(accelerator)).toBe(false);
   });
+
+  test("Claude installation refuses malformed user settings without rewriting them", () => {
+    const root = mkdtempSync("/private/tmp/fml-install-"); roots.push(root);
+    const home = join(root, "home");
+    const settings = join(home, ".claude", "settings.local.json");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(settings, "{user-owned-invalid-json\n");
+    const env = {
+      FM_HOME: home,
+      FM_LINEAR_INSTALL_ROOT: join(root, "runtime"),
+      FM_LINEAR_LAUNCH_AGENTS_DIR: join(root, "agents"),
+      FM_LINEAR_SKIP_LAUNCHCTL: "1",
+      FM_LINEAR_REAL_LINEAR_AXI: "/usr/bin/true",
+    };
+    expect(() => install({ harnesses: ["claude"], bind: false, env })).toThrow("refusing to overwrite malformed Claude settings");
+    expect(readFileSync(settings, "utf8")).toBe("{user-owned-invalid-json\n");
+    expect(existsSync(join(home, ".claude", "commands", "report.md"))).toBe(false);
+  });
 });

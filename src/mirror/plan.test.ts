@@ -125,4 +125,18 @@ describe("mirror plan", () => {
     expect(label?.cause).toBe("model");
     db.close();
   });
+
+  test("one primary PR cannot bypass unfinished primary tasks", () => {
+    for (const verb of ["pr-green", "pr-merged"]) {
+      const root = mkdtempSync("/private/tmp/fml-plan-"); roots.push(root);
+      const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+      db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+      for (const task of ["a", "b"]) db.linkTask({ task, issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+      const pr: Observation = { id: `a-${verb}`, source: "pr", task: "a", issue: "ABC-1", verb, key: "pr", note: null, observed_at: "2026-01-01T00:01:00Z" };
+      const working: Observation = { ...pr, id: `b-working-${verb}`, source: "status", task: "b", verb: "working", key: "default", observed_at: "2026-01-01T00:02:00Z" };
+      db.observe(pr); db.observe(working);
+      expect(planMirror(db, config, [pr, working]).actions.filter((action) => action.job.kind === "linear.issue-state")).toHaveLength(0);
+      db.close();
+    }
+  });
 });

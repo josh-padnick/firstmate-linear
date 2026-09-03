@@ -15,6 +15,14 @@ describe("task reducer", () => {
       { task: "b", role: "primary", signal: "working" },
       { task: "s", role: "support", signal: "failed" },
     ])).toBe("working");
+    expect(reduceTaskState([
+      { task: "a", role: "primary", signal: "review-ready" },
+      { task: "b", role: "primary", signal: "working" },
+    ])).toBe("working");
+    expect(reduceTaskState([
+      { task: "a", role: "primary", signal: "review-ready" },
+      { task: "b", role: "primary", signal: "done" },
+    ])).toBe("review-ready");
   });
 
   test("resolved clears one task signal", () => {

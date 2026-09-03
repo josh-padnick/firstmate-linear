@@ -134,7 +134,7 @@ describe("SQLite capture cycle", () => {
     db.close();
   });
 
-  test("fails closed when approval and a state transition share an instant", async () => {
+  test("persists exact approval for core review when state chronology is ambiguous", async () => {
     const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
     await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify({ data: {
@@ -155,11 +155,44 @@ describe("SQLite capture cycle", () => {
       }],
     } } }));
     const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
-    await expect(captureCycle({
+    const result = await captureCycle({
       config, db, transport: new LinearTransport({ fixtureDir: fixtures }),
       env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225780" },
-    })).rejects.toThrow("ambiguous comment revision");
-    expect(db.listEvents()).toHaveLength(0);
+    });
+    expect(result.captured).toBe(2);
+    const approval = db.listEvents().find((event) => event.type === "comment");
+    expect(approval).toMatchObject({ token: "approval", disposition: "waiting-for-core" });
+    expect(approval?.note).toContain("chronology is ambiguous");
+    expect(db.jobs()).toHaveLength(0);
+    expect(db.cursor("linear.comments")).toBe("2026-01-01T00:01:00Z");
+    db.close();
+  });
+
+  test("an ordinary same-time comment does not wedge capture", async () => {
+    const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" }, comments: { pageInfo: { hasNextPage: false }, nodes: [{
+        id: "comment-feedback", createdAt: "2026-01-01T00:01:00Z", updatedAt: "2026-01-01T00:01:00Z",
+        body: "please revise", user: { displayName: "Captain" },
+        issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null }, parent: null,
+      }] },
+    } }));
+    await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify({ data: { issues: {
+      pageInfo: { hasNextPage: false }, nodes: [{
+        identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:01:00Z",
+        state: { name: "Approve Plan" }, assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" }, labels: { nodes: [] },
+        history: { pageInfo: { hasNextPage: false }, nodes: [{
+          id: "same-time-gate", createdAt: "2026-01-01T00:01:00Z", actor: { displayName: "Captain" },
+          fromState: { name: "Building" }, toState: { name: "Approve Plan" },
+        }] },
+      }],
+    } } }));
+    const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+    const result = await captureCycle({ config, db, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225780" } });
+    expect(result.captured).toBe(2);
+    expect(db.listEvents().find((event) => event.type === "comment")?.token).toBe("ball-returned");
+    expect(db.cursor("linear.comments")).toBe("2026-01-01T00:01:00Z");
     db.close();
   });
 

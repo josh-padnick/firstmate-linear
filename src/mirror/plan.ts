@@ -7,11 +7,11 @@ export type MirrorAction = { issue: string; cause: string; description: string; 
 export type MirrorFinding = { code: string; issue: string; detail: string };
 
 function signal(verb: string): TaskSignal | null {
-  if (["working", "dispatch", "model-resolved", "pr-reported", "pr-green"].includes(verb)) return "working";
+  if (["working", "dispatch", "model-resolved", "pr-reported"].includes(verb)) return "working";
   if (verb === "needs-decision") return "needs-decision";
   if (verb === "blocked") return "blocked";
   if (verb === "failed") return "failed";
-  if (verb === "done" || verb === "pr-merged") return "done";
+  if (verb === "done") return "done";
   if (verb === "resolved") return "resolved";
   return null;
 }
@@ -48,31 +48,37 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
       findings.push({ code: "CAPTAIN_DRAG", issue, detail: `captain set ${snapshot.state}; no newer fleet signal permits repair` });
       continue;
     }
-    const taskSignals = relevant
+    const taskSignals: Array<{ task: string; role: "primary" | "support"; signal: TaskSignal; key?: string }> = [
+      ...[...primary].map((task) => ({ task, role: "primary" as const, signal: "working" as const, key: "default" })),
+      ...relevant
       .map((item) => ({ item, signal: signal(item.verb) }))
       .filter((row): row is { item: Observation; signal: TaskSignal } => row.signal !== null && row.item.task !== null && links.has(row.item.task))
-      .map((row) => ({ task: row.item.task!, role: links.get(row.item.task!)!, signal: row.signal, key: row.item.key }));
-    const reduced = primary.size > 0 ? reduceTaskState(foldSignals(taskSignals)) : null;
-    const prState = primaryObservations.filter((item) => ["pr-green", "pr-withdrawn", "pr-merged"].includes(item.verb)).at(-1);
+      .map((row) => ({ task: row.item.task!, role: links.get(row.item.task!)!, signal: row.signal, key: row.item.key })),
+    ];
+    const latestPrByTask = new Map<string, Observation>();
+    for (const observation of primaryObservations) {
+      if (["pr-green", "pr-withdrawn", "pr-merged"].includes(observation.verb)) latestPrByTask.set(observation.task!, observation);
+    }
+    for (const [task, observation] of latestPrByTask) {
+      taskSignals.push({ task, role: "primary", signal: observation.verb === "pr-merged" ? "done" : observation.verb === "pr-green" ? "review-ready" : "working", key: "pr" });
+    }
+    const reduced = primary.size > 0 && latestPrimary ? reduceTaskState(foldSignals(taskSignals)) : null;
     let cause = latestPrimary ?? latest;
     let target: string | null = null;
-    if (prState?.verb === "pr-merged") {
-      target = team.statuses.done;
-      cause = prState;
-    } else if (prState?.verb === "pr-green") {
-      target = team.statuses.approve_deliverable;
-      cause = prState;
-    } else if (prState?.verb === "pr-withdrawn" && snapshot.state === team.statuses.approve_deliverable) {
-      target = team.statuses.building;
-      cause = prState;
-    } else if (latestPrimary?.verb === "dispatch") {
+    if (latestPrimary?.verb === "dispatch") {
       const building = db.latestSnapshots().filter((item) => item.state === team.statuses.building).length;
       target = building >= laneCap ? team.statuses.waiting : team.statuses.building;
     } else if (latestPrimary?.verb === "dispatch-scout") target = team.statuses.plan_in_progress;
     else if (latestPrimary?.verb === "lane-cap") target = team.statuses.waiting;
     else if (reduced === "needs-decision") target = team.statuses.needs_decision;
     else if (reduced === "blocked" || reduced === "failed") target = team.statuses.needs_firstmate_decision;
-    else if (reduced === "done") target = team.statuses.done;
+    else if (reduced === "done") {
+      target = team.statuses.done;
+      cause = primaryObservations.filter((item) => item.verb === "pr-merged").at(-1) ?? cause;
+    } else if (reduced === "review-ready") {
+      target = team.statuses.approve_deliverable;
+      cause = primaryObservations.filter((item) => item.verb === "pr-green").at(-1) ?? cause;
+    }
     else if (reduced === "working") target = team.statuses.building;
 
     for (const observation of newObservations.filter((item) => item.issue === issue && item.verb === "pr-reported")) {

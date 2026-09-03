@@ -170,13 +170,22 @@ function installHarness(harness: string, home: string, priorFiles: ManagedFileOw
   if (harness === "claude") {
     const command = join(home, ".claude", "commands", "report.md");
     const style = join(home, ".claude", "output-styles", "firstmate-linear.md");
+    const settings = join(home, ".claude", "settings.local.json");
+    const settingsText = readText(settings);
+    let current: Record<string, any> = {};
+    if (settingsText !== null) {
+      try {
+        const parsed = JSON.parse(settingsText) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("settings must be an object");
+        current = parsed as Record<string, any>;
+      } catch {
+        throw new Error(`refusing to overwrite malformed Claude settings: ${settings}`);
+      }
+    }
     const ownedFiles = installManagedFiles([
       { path: command, contents: "Run `fm-linear report` and relay its current findings to the captain.\n", mode: 0o600 },
       { path: style, contents: ASSETS.outputStyle, mode: 0o600 },
     ], priorFiles, legacyAccelerators);
-    const settings = join(home, ".claude", "settings.local.json");
-    let current: Record<string, any> = {};
-    try { current = JSON.parse(readFileSync(settings, "utf8")); } catch { current = {}; }
     const ownership = priorClaudeSettings ?? {
       path: settings,
       addedDenies: CLAUDE_LINEAR_DENIES.filter((rule) => !current.permissions?.deny?.includes(rule)),

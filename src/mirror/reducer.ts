@@ -1,4 +1,4 @@
-export type TaskSignal = "working" | "needs-decision" | "blocked" | "failed" | "done" | "resolved";
+export type TaskSignal = "working" | "review-ready" | "needs-decision" | "blocked" | "failed" | "done" | "resolved";
 
 export type TaskState = {
   task: string;
@@ -6,7 +6,7 @@ export type TaskState = {
   signal: TaskSignal;
 };
 
-export type ReducedState = "working" | "needs-decision" | "blocked" | "failed" | "done";
+export type ReducedState = "working" | "review-ready" | "needs-decision" | "blocked" | "failed" | "done";
 
 export function reduceTaskState(tasks: TaskState[]): ReducedState {
   const primary = tasks.filter((task) => task.role === "primary");
@@ -14,6 +14,7 @@ export function reduceTaskState(tasks: TaskState[]): ReducedState {
   if (primary.some((task) => task.signal === "blocked")) return "blocked";
   if (primary.some((task) => task.signal === "needs-decision")) return "needs-decision";
   if (primary.length > 0 && primary.every((task) => task.signal === "done")) return "done";
+  if (primary.length > 0 && primary.every((task) => task.signal === "done" || task.signal === "review-ready")) return "review-ready";
   return "working";
 }
 
