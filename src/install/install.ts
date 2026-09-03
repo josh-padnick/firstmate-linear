@@ -207,6 +207,9 @@ function installHarness(harness: string, home: string, priorFiles: ManagedFileOw
 }
 
 export function install(options: { harnesses: string[]; bind: boolean; env?: NodeJS.ProcessEnv }): { binary: string; plist: string } {
+  const harnesses = [...new Set(options.harnesses)];
+  const invalidHarness = harnesses.find((harness) => !["claude", "codex", "grok"].includes(harness));
+  if (invalidHarness) throw new Error(`unknown harness: ${invalidHarness}`);
   const env = options.env ?? process.env;
   const home = resolveHome(env);
   const root = installRoot(env);
@@ -229,12 +232,12 @@ export function install(options: { harnesses: string[]; bind: boolean; env?: Nod
     bindingDigest: installedExtension.bindingDigest ?? prior?.extension?.bindingDigest ?? null,
     ownerToken: installedExtension.ownerToken ?? prior?.extension?.ownerToken ?? null,
   } : prior?.extension ?? null;
-  const harnessResults = options.harnesses.map((harness) => installHarness(harness, home, prior?.ownedFiles ?? [], prior?.accelerators ?? [], prior?.claudeSettings));
+  const harnessResults = harnesses.map((harness) => installHarness(harness, home, prior?.ownedFiles ?? [], prior?.accelerators ?? [], prior?.claudeSettings));
   const ownedFiles = [...new Map([...(prior?.ownedFiles ?? []), ...harnessResults.flatMap((result) => result.ownedFiles)].map((item) => [item.path, item])).values()];
   const accelerators = [...new Set([...(prior?.accelerators ?? []), ...ownedFiles.map((item) => item.path)])];
-  const harnesses = [...new Set([...(prior?.harnesses ?? []), ...options.harnesses])];
+  const installedHarnesses = [...new Set([...(prior?.harnesses ?? []), ...harnesses])];
   const claudeSettings = harnessResults.find((result) => result.claudeSettings)?.claudeSettings ?? prior?.claudeSettings;
-  atomicWriteFile(join(paths.root, "install.json"), `${JSON.stringify({ schema: "fm-linear.install.v1", binary, linearAxiGuard, plist, extension, harnesses, accelerators, ownedFiles, claudeSettings }, null, 2)}\n`);
+  atomicWriteFile(join(paths.root, "install.json"), `${JSON.stringify({ schema: "fm-linear.install.v1", binary, linearAxiGuard, plist, extension, harnesses: installedHarnesses, accelerators, ownedFiles, claudeSettings }, null, 2)}\n`);
   if (!env.FM_LINEAR_SKIP_LAUNCHCTL) {
     spawnSync("launchctl", ["bootout", `gui/${uid()}/${LABEL}`], { encoding: "utf8" });
     const result = spawnSync("launchctl", ["bootstrap", `gui/${uid()}`, plist], { encoding: "utf8" });

@@ -122,4 +122,39 @@ describe("installer", () => {
     expect(readFileSync(settings, "utf8")).toBe("{user-owned-invalid-json\n");
     expect(existsSync(join(home, ".claude", "commands", "report.md"))).toBe(false);
   });
+
+  test("invalid harnesses fail before creating installation artifacts", () => {
+    const root = mkdtempSync("/private/tmp/fml-install-"); roots.push(root);
+    const home = join(root, "home");
+    const runtime = join(root, "runtime");
+    const agents = join(root, "agents");
+    const env = {
+      FM_HOME: home,
+      FM_LINEAR_INSTALL_ROOT: runtime,
+      FM_LINEAR_LAUNCH_AGENTS_DIR: agents,
+      FM_LINEAR_SKIP_LAUNCHCTL: "1",
+      FM_LINEAR_REAL_LINEAR_AXI: "/usr/bin/true",
+    };
+    expect(() => install({ harnesses: ["typo"], bind: false, env })).toThrow("unknown harness: typo");
+    expect(existsSync(runtime)).toBe(false);
+    expect(existsSync(agents)).toBe(false);
+    expect(existsSync(join(home, "state", "linear", "install.json"))).toBe(false);
+  });
+
+  test("duplicate harness selections retain removable file ownership", () => {
+    const root = mkdtempSync("/private/tmp/fml-install-"); roots.push(root);
+    const home = join(root, "home"); mkdirSync(home);
+    const env = {
+      FM_HOME: home,
+      FM_LINEAR_INSTALL_ROOT: join(root, "runtime"),
+      FM_LINEAR_LAUNCH_AGENTS_DIR: join(root, "agents"),
+      FM_LINEAR_SKIP_LAUNCHCTL: "1",
+      FM_LINEAR_REAL_LINEAR_AXI: "/usr/bin/true",
+    };
+    install({ harnesses: ["codex", "codex"], bind: false, env });
+    const accelerator = join(home, ".codex", "prompts", "report.md");
+    expect(existsSync(accelerator)).toBe(true);
+    uninstall(env);
+    expect(existsSync(accelerator)).toBe(false);
+  });
 });

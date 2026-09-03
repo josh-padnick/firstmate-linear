@@ -28,8 +28,8 @@ describe("v6 act read gate", () => {
     const { env, receipt } = setup();
     expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"], env)).toBe(0);
     const db = StateDatabase.open(env);
-    expect(db.jobs()).toHaveLength(3);
-    expect(db.jobs().map((job) => job.kind)).toContain("core.ack");
+    expect(db.jobs()).toHaveLength(2);
+    expect(db.jobs().map((job) => job.kind)).not.toContain("core.ack");
     expect(db.receipt(receipt)?.consumed_at).not.toBeNull();
     expect(db.event("event:one")?.disposition).toBe("handled-by-core"); db.close();
   });
@@ -49,6 +49,17 @@ describe("v6 act read gate", () => {
     const { env } = setup();
     expect(runActV6(["status", "ABC-1", "--status", "Building", "--actor", "service"], env)).toBe(1);
     const db = StateDatabase.open(env);
+    expect(db.jobs()).toHaveLength(0);
+    db.close();
+  });
+
+  test("status requires a non-empty target before consuming its receipt", () => {
+    const { env, receipt } = setup();
+    expect(runActV6(["status", "ABC-1", "--receipt", receipt], env)).toBe(1);
+    expect(runActV6(["status", "ABC-1", "--receipt", receipt, "--status", "   "], env)).toBe(1);
+    const db = StateDatabase.open(env);
+    expect(db.receipt(receipt)?.consumed_at).toBeNull();
+    expect(db.event("event:one")?.disposition).toBe("waiting-for-core");
     expect(db.jobs()).toHaveLength(0);
     db.close();
   });

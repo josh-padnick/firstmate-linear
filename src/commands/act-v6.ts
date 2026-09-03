@@ -68,8 +68,10 @@ export function runActV6(args: string[], env: NodeJS.ProcessEnv = process.env): 
     const text = body(args).trim();
     const verdict = flag(args, "--verdict");
     const owner = flag(args, "--to");
+    const explicitStatus = flag(args, "--status")?.trim() || null;
     if (verdict && !VERDICTS.has(verdict)) throw new Error(`unknown verdict: ${verdict}`);
     if (owner && !OWNERS.has(owner)) throw new Error(`unknown owner: ${owner}`);
+    if (verb === "status" && !explicitStatus) throw new Error("status requires --status");
     db = StateDatabase.open(env);
     const snapshot = db.latestSnapshot(issue);
     const gates = new Set([team.statuses.approve_plan, team.statuses.approve_deliverable, team.statuses.needs_decision]);
@@ -79,7 +81,7 @@ export function runActV6(args: string[], env: NodeJS.ProcessEnv = process.env): 
     if (TEXT_VERBS.has(verb) && !text) throw new Error(`${verb} requires --comment or --comment-file`);
     const rendered = TEXT_VERBS.has(verb) ? renderReply(text, verdict, config.templates.reply) : "";
     if (TEXT_VERBS.has(verb)) lintReply(rendered);
-    const target = statusFor(verb, verdict, owner, team, flag(args, "--status"));
+    const target = statusFor(verb, verdict, owner, team, explicitStatus);
     const receipt = flag(args, "--receipt");
     if (!receipt) throw new Error(`${verb} requires an inbox receipt`);
     const keyBase = `${receipt}:${verb}:${issue}`;

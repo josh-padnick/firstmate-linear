@@ -52,4 +52,16 @@ describe("review deadline reconciler", () => {
     expect(planReviewDeadlines(root, db, config, { FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T01:00:00Z") / 1000) })).toEqual({ jobs: [], findings: [] });
     db.close();
   });
+
+  test("every active primary task must remain review-ready", () => {
+    const root = mkdtempSync("/private/tmp/fml-review-deadline-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: "service", last_signal: "pr-green", observed_at: "2026-01-01T00:00:00Z" });
+    for (const task of ["a", "b"]) db.linkTask({ task, issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.observe({ id: "green-a", source: "pr", task: "a", issue: "ABC-1", verb: "pr-green", key: "pr", note: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.observe({ id: "withdrawn-a", source: "pr", task: "a", issue: "ABC-1", verb: "pr-withdrawn", key: "pr", note: null, observed_at: "2026-01-01T00:01:00Z" });
+    db.observe({ id: "green-b", source: "pr", task: "b", issue: "ABC-1", verb: "pr-green", key: "pr", note: null, observed_at: "2026-01-01T00:02:00Z" });
+    expect(planReviewDeadlines(root, db, config, { FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T01:00:00Z") / 1000) })).toEqual({ jobs: [], findings: [] });
+    db.close();
+  });
 });
