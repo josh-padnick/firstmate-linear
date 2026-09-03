@@ -275,7 +275,7 @@ export class StateDatabase {
       const prior = this.deliveredEvent(requestId, sequence);
       if (prior) return prior;
       const event = this.raw.query(`SELECT * FROM events WHERE disposition IN ('waiting-for-core','handled-by-service','ignored')
-        AND id NOT IN (SELECT event_id FROM core_deliveries) ORDER BY created_at,id LIMIT 1`).get() as DomainEvent | null;
+        AND id NOT IN (SELECT event_id FROM core_deliveries) ORDER BY rowid LIMIT 1`).get() as DomainEvent | null;
       if (!event) return null;
       this.delivery(requestId, sequence, event.id, at);
       return event;

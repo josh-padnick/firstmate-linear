@@ -11,7 +11,8 @@ const OWNERS = new Set(["captain", "firstmate", "none"]);
 
 function flag(args: string[], name: string): string | null {
   const index = args.indexOf(name);
-  return index >= 0 ? args[index + 1] ?? null : null;
+  const value = index >= 0 ? args[index + 1] : null;
+  return value && !value.startsWith("--") ? value : null;
 }
 
 function body(args: string[]): string {
@@ -63,7 +64,7 @@ export function runActV6(args: string[], env: NodeJS.ProcessEnv = process.env): 
   const config = loadConfig(env);
   let db: StateDatabase | null = null;
   try {
-    if (flag(args, "--actor")) throw new Error("--actor is reserved for the service and is not a public override");
+    if (args.includes("--actor")) throw new Error("--actor is reserved for the service and is not a public override");
     const team = teamFor(issue, config.teams);
     const text = body(args).trim();
     const verdict = flag(args, "--verdict");

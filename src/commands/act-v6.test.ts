@@ -57,6 +57,7 @@ describe("v6 act read gate", () => {
     const { env, receipt } = setup();
     expect(runActV6(["status", "ABC-1", "--receipt", receipt], env)).toBe(1);
     expect(runActV6(["status", "ABC-1", "--receipt", receipt, "--status", "   "], env)).toBe(1);
+    expect(runActV6(["status", "ABC-1", "--status", "--receipt", receipt], env)).toBe(1);
     const db = StateDatabase.open(env);
     expect(db.receipt(receipt)?.consumed_at).toBeNull();
     expect(db.event("event:one")?.disposition).toBe("waiting-for-core");

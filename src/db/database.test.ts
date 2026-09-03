@@ -65,6 +65,16 @@ describe("state database", () => {
     db.close();
   });
 
+  test("core delivery follows ledger insertion order", () => {
+    const db = database();
+    db.capture({ ...event("event:first"), created_at: "2026-01-01T00:00:01Z" });
+    db.capture({ ...event("event:second"), created_at: "2025-01-01T00:00:00Z" });
+    expect(db.nextForCore("request:first", 1)?.id).toBe("event:first");
+    db.markCoreHandled("event:first", "done");
+    expect(db.nextForCore("request:second", 2)?.id).toBe("event:second");
+    db.close();
+  });
+
   test("receipts bind exact events and detect newer captain input", () => {
     const db = database();
     db.capture(event("event:1"));

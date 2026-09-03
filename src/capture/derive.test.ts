@@ -24,4 +24,12 @@ describe("capture derivation cutoffs", () => {
     }], seenStore(), "2026-01-01T00:01:00Z", "2026-01-01T00:00:00Z", "Firstmate");
     expect(issues).toHaveLength(1);
   });
+
+  test("edited comments are aged from their revision time", () => {
+    const comments = deriveComments([{
+      id: "comment-edited", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
+      body: "updated answer", user: { displayName: "Captain" }, issue: { identifier: "ABC-1" },
+    }], seenStore(), "2026-01-01T00:01:00Z", null, "Firstmate");
+    expect(comments[0]?.created_at).toBe("2026-01-01T00:00:00Z");
+  });
 });

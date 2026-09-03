@@ -74,6 +74,19 @@ describe("job worker", () => {
     db.close();
   });
 
+  test("an unsuccessful comment mutation retries instead of completing", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-comment.json"), JSON.stringify({ data: { commentCreate: { success: false, comment: null } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.enqueue({ key: "comment:unsuccessful", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "Hello" } }, "2026-01-01T00:00:00Z");
+    const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
+    expect(result.retried).toBe(1);
+    expect(db.jobs()[0]).toMatchObject({ state: "retry", native_id: null });
+    db.close();
+  });
+
   test("an ambiguous attachment failure verifies the URL and does not duplicate", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);

@@ -92,7 +92,10 @@ async function createComment(job: Job, body: JobPayload, transport: LinearTransp
   const resolved = value(await transport.call("job-resolve-comment-issue", { query: RESOLVE_ISSUE, variables: { issue } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
   const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue: resolved.issue.id, body: text } });
-  if (result.ok) return { nativeId: id };
+  if (result.ok) {
+    if (!(result.value.data as any)?.commentCreate?.success) throw new Error(`comment creation was not successful: ${issue}`);
+    return { nativeId: id };
+  }
   if (result.error.classification.class !== "already-satisfied" && result.error.classification.class !== "retryable") {
     throw new Error(result.error.message);
   }

@@ -24,8 +24,8 @@ export function planReviewDeadlines(home: string, db: StateDatabase, config: Wor
     const current = [...currentByTask.values()];
     if (current.length !== primaryTasks.size || current.some((item) => item.verb !== "pr-green" && item.verb !== "pr-merged")) continue;
     const currentIds = new Set(current.map((item) => item.id));
-    const green = transitions.filter((item) => currentIds.has(item.id) && item.verb === "pr-green").at(-1);
-    if (!green) continue;
+    if (!current.some((item) => item.verb === "pr-green")) continue;
+    const ready = transitions.filter((item) => currentIds.has(item.id)).at(-1)!;
     const path = join(home, "data", snapshot.issue.toLowerCase(), "review-walkthrough.html");
     let errors: string[];
     if (!existsSync(path)) errors = ["walkthrough file is missing"];
@@ -35,14 +35,14 @@ export function planReviewDeadlines(home: string, db: StateDatabase, config: Wor
     }
     if (!errors.length) continue;
     findings.push({ code: "WALKTHROUGH_INVALID", issue: snapshot.issue, detail: errors.join("; ") });
-    const observed = parseIso(green.observed_at);
+    const observed = parseIso(ready.observed_at);
     if (observed === null) continue;
     const age = Math.max(0, now - observed);
     if (age < 15 * 60) continue;
     const rung = age >= 45 * 60 ? "45m" : "15m";
     const prefix = rung === "45m" ? `${config.captain.display_name}: ` : "";
     jobs.push({
-      key: `${green.id}:walkthrough:${rung}`,
+      key: `${ready.id}:walkthrough:${rung}`,
       kind: "linear.comment",
       target: snapshot.issue,
       payload: { issue: snapshot.issue, body: `${prefix}The review walkthrough is still incomplete after ${rung}. ${errors.join("; ")}.` },

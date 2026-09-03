@@ -121,6 +121,36 @@ describe("installer", () => {
     expect(() => install({ harnesses: ["claude"], bind: false, env })).toThrow("refusing to overwrite malformed Claude settings");
     expect(readFileSync(settings, "utf8")).toBe("{user-owned-invalid-json\n");
     expect(existsSync(join(home, ".claude", "commands", "report.md"))).toBe(false);
+    expect(existsSync(join(root, "runtime"))).toBe(false);
+    expect(existsSync(join(root, "agents"))).toBe(false);
+    expect(existsSync(join(home, "state", "linear", "install.json"))).toBe(false);
+  });
+
+  test("managed harness conflicts fail before creating installation artifacts", () => {
+    const root = mkdtempSync("/private/tmp/fml-install-"); roots.push(root);
+    const home = join(root, "home");
+    const prompt = join(home, ".codex", "prompts", "report.md");
+    const installRecord = join(home, "state", "linear", "install.json");
+    mkdirSync(join(home, ".codex", "prompts"), { recursive: true });
+    mkdirSync(join(home, "state", "linear"), { recursive: true });
+    writeFileSync(prompt, "user changed managed prompt\n");
+    writeFileSync(installRecord, `${JSON.stringify({
+      schema: "fm-linear.install.v1",
+      ownedFiles: [{ path: prompt, installedSha: "prior-managed-digest", previous: { existed: false } }],
+      accelerators: [prompt],
+      harnesses: ["codex"],
+    })}\n`);
+    const env = {
+      FM_HOME: home,
+      FM_LINEAR_INSTALL_ROOT: join(root, "runtime"),
+      FM_LINEAR_LAUNCH_AGENTS_DIR: join(root, "agents"),
+      FM_LINEAR_SKIP_LAUNCHCTL: "1",
+      FM_LINEAR_REAL_LINEAR_AXI: "/usr/bin/true",
+    };
+    expect(() => install({ harnesses: ["codex"], bind: false, env })).toThrow("managed harness file changed since installation");
+    expect(readFileSync(prompt, "utf8")).toBe("user changed managed prompt\n");
+    expect(existsSync(join(root, "runtime"))).toBe(false);
+    expect(existsSync(join(root, "agents"))).toBe(false);
   });
 
   test("invalid harnesses fail before creating installation artifacts", () => {

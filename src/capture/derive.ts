@@ -43,7 +43,7 @@ function commentEvent(
       title: null,
       labels: [],
     },
-    created_at: comment.createdAt,
+    created_at: comment.updatedAt,
     updated_at: comment.updatedAt,
     captured_at: observedAt,
     announced_at: null,

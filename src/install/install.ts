@@ -32,6 +32,8 @@ type ManagedFileOwnership = {
   previous: { existed: boolean; contents?: string; mode?: number };
 };
 
+type ManagedFileSpec = { path: string; contents: string; mode: number };
+
 type InstallRecord = {
   schema: "fm-linear.install.v1";
   binary?: string;
@@ -141,12 +143,12 @@ function installExtension(root: string, env: NodeJS.ProcessEnv): ExtensionOwners
   return { packageRoot, bindOutput, registerOutput, bindingDigest, ownerToken: outputField(registerOutput, "owner-token") };
 }
 
-function installManagedFiles(
-  specs: Array<{ path: string; contents: string; mode: number }>,
+function managedFileOwnership(
+  specs: ManagedFileSpec[],
   prior: ManagedFileOwnership[],
   legacyAccelerators: string[],
 ): ManagedFileOwnership[] {
-  const ownership = specs.map((spec) => {
+  return specs.map((spec) => {
     const existingOwnership = prior.find((item) => item.path === spec.path);
     const current = readText(spec.path);
     if (existingOwnership && current !== null && sha256(current) !== existingOwnership.installedSha) {
@@ -162,30 +164,53 @@ function installManagedFiles(
       previous: current === null ? { existed: false } : { existed: true, contents: current, mode: statSync(spec.path).mode & 0o777 },
     };
   });
+}
+
+function installManagedFiles(
+  specs: ManagedFileSpec[],
+  prior: ManagedFileOwnership[],
+  legacyAccelerators: string[],
+): ManagedFileOwnership[] {
+  const ownership = managedFileOwnership(specs, prior, legacyAccelerators);
   for (const spec of specs) atomicWriteFile(spec.path, spec.contents, spec.mode);
   return ownership;
 }
 
+function harnessFileSpecs(harness: string, home: string): ManagedFileSpec[] {
+  if (harness === "claude") {
+    return [
+      { path: join(home, ".claude", "commands", "report.md"), contents: "Run `fm-linear report` and relay its current findings to the captain.\n", mode: 0o600 },
+      { path: join(home, ".claude", "output-styles", "firstmate-linear.md"), contents: ASSETS.outputStyle, mode: 0o600 },
+    ];
+  }
+  if (harness === "codex") {
+    return [{ path: join(home, ".codex", "prompts", "report.md"), contents: "Run `fm-linear report` and relay its current findings to the user.\n", mode: 0o600 }];
+  }
+  return [];
+}
+
+function readClaudeSettings(home: string): { path: string; current: Record<string, any> } {
+  const path = join(home, ".claude", "settings.local.json");
+  const text = readText(path);
+  if (text === null) return { path, current: {} };
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("settings must be an object");
+    return { path, current: parsed as Record<string, any> };
+  } catch {
+    throw new Error(`refusing to overwrite malformed Claude settings: ${path}`);
+  }
+}
+
+function preflightHarness(harness: string, home: string, priorFiles: ManagedFileOwnership[], legacyAccelerators: string[]): void {
+  managedFileOwnership(harnessFileSpecs(harness, home), priorFiles, legacyAccelerators);
+  if (harness === "claude") readClaudeSettings(home);
+}
+
 function installHarness(harness: string, home: string, priorFiles: ManagedFileOwnership[], legacyAccelerators: string[], priorClaudeSettings?: ClaudeSettingsOwnership): { ownedFiles: ManagedFileOwnership[]; claudeSettings?: ClaudeSettingsOwnership } {
   if (harness === "claude") {
-    const command = join(home, ".claude", "commands", "report.md");
-    const style = join(home, ".claude", "output-styles", "firstmate-linear.md");
-    const settings = join(home, ".claude", "settings.local.json");
-    const settingsText = readText(settings);
-    let current: Record<string, any> = {};
-    if (settingsText !== null) {
-      try {
-        const parsed = JSON.parse(settingsText) as unknown;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("settings must be an object");
-        current = parsed as Record<string, any>;
-      } catch {
-        throw new Error(`refusing to overwrite malformed Claude settings: ${settings}`);
-      }
-    }
-    const ownedFiles = installManagedFiles([
-      { path: command, contents: "Run `fm-linear report` and relay its current findings to the captain.\n", mode: 0o600 },
-      { path: style, contents: ASSETS.outputStyle, mode: 0o600 },
-    ], priorFiles, legacyAccelerators);
+    const { path: settings, current } = readClaudeSettings(home);
+    const ownedFiles = installManagedFiles(harnessFileSpecs(harness, home), priorFiles, legacyAccelerators);
     const ownership = priorClaudeSettings ?? {
       path: settings,
       addedDenies: CLAUDE_LINEAR_DENIES.filter((rule) => !current.permissions?.deny?.includes(rule)),
@@ -198,8 +223,7 @@ function installHarness(harness: string, home: string, priorFiles: ManagedFileOw
     atomicWriteFile(settings, `${JSON.stringify(current, null, 2)}\n`, 0o600);
     return { ownedFiles, claudeSettings: ownership };
   } else if (harness === "codex") {
-    const prompt = join(home, ".codex", "prompts", "report.md");
-    return { ownedFiles: installManagedFiles([{ path: prompt, contents: "Run `fm-linear report` and relay its current findings to the user.\n", mode: 0o600 }], priorFiles, legacyAccelerators) };
+    return { ownedFiles: installManagedFiles(harnessFileSpecs(harness, home), priorFiles, legacyAccelerators) };
   } else if (harness !== "grok") {
     throw new Error(`unknown harness: ${harness}`);
   }
@@ -213,16 +237,17 @@ export function install(options: { harnesses: string[]; bind: boolean; env?: Nod
   const env = options.env ?? process.env;
   const home = resolveHome(env);
   const root = installRoot(env);
-  ensurePrivateDir(root);
-  const binary = installBinary(root);
-  const linearAxiGuard = installLinearAxiGuard(root, env);
   const paths = runtimePaths(env);
-  ensurePrivateDir(paths.root);
   let prior: InstallRecord | undefined;
   try {
     const parsed = JSON.parse(readFileSync(join(paths.root, "install.json"), "utf8")) as InstallRecord;
     if (parsed.schema === "fm-linear.install.v1") prior = parsed;
   } catch { /* first installation */ }
+  for (const harness of harnesses) preflightHarness(harness, home, prior?.ownedFiles ?? [], prior?.accelerators ?? []);
+  ensurePrivateDir(root);
+  const binary = installBinary(root);
+  const linearAxiGuard = installLinearAxiGuard(root, env);
+  ensurePrivateDir(paths.root);
   const plist = join(agentsDir(env), `${LABEL}.plist`);
   mkdirSync(dirname(plist), { recursive: true });
   atomicWriteFile(plist, renderLaunchAgent(binary, home, paths.serviceLog, env.PATH || process.env.PATH), 0o644);
