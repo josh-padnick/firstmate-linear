@@ -1,4 +1,5 @@
 import { sha256 } from "../hash.ts";
+import { isoAtOrAfter } from "../time.ts";
 import type { LedgerEvent, LinearComment, LinearHistory, LinearIssue } from "./types.ts";
 
 export type SeenStore = {
@@ -159,7 +160,7 @@ export function deriveComments(
     if (seen.has(event.dedupe_key)) {
       continue;
     }
-    if (cutoff && comment.updatedAt < cutoff) {
+    if (cutoff && !isoAtOrAfter(comment.updatedAt, cutoff)) {
       seen.add(event.dedupe_key, observedAt);
       continue;
     }
@@ -196,7 +197,7 @@ export function deriveHistory(
     if (seen.has(key)) {
       continue;
     }
-    if (cutoff && item.createdAt < cutoff) {
+    if (cutoff && !isoAtOrAfter(item.createdAt, cutoff)) {
       seen.add(key, observedAt);
       continue;
     }

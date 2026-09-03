@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { nowIso } from "../time.ts";
-import { SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
 export type EventDisposition =
   | "captured"
@@ -133,6 +133,7 @@ export class StateDatabase {
       db.exec("BEGIN IMMEDIATE");
       try {
         db.exec(SCHEMA_SQL);
+        if (from === 1) db.exec(MIGRATE_TO_V2_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -288,8 +289,9 @@ export class StateDatabase {
         }
       }
       const id = uuid();
-      this.raw.query("INSERT INTO receipts(id,event_ids,issued_at) VALUES(?,?,?)")
-        .run(id, JSON.stringify(eventIds), at);
+      const watermark = this.raw.query("SELECT COALESCE(MAX(rowid),0) AS rowid FROM events").get() as { rowid: number };
+      this.raw.query("INSERT INTO receipts(id,event_ids,issued_at,event_rowid) VALUES(?,?,?,?)")
+        .run(id, JSON.stringify(eventIds), at, watermark.rowid);
       for (const eventId of eventIds) {
         this.raw.query("UPDATE events SET receipt_id=? WHERE id=?").run(id, eventId);
       }
@@ -297,8 +299,8 @@ export class StateDatabase {
     });
   }
 
-  receipt(id: string): { id: string; event_ids: string[]; issued_at: string; consumed_at: string | null } | null {
-    const row = this.raw.query("SELECT * FROM receipts WHERE id=?").get(id) as { id: string; event_ids: string; issued_at: string; consumed_at: string | null } | null;
+  receipt(id: string): { id: string; event_ids: string[]; issued_at: string; event_rowid: number; consumed_at: string | null } | null {
+    const row = this.raw.query("SELECT * FROM receipts WHERE id=?").get(id) as { id: string; event_ids: string; issued_at: string; event_rowid: number; consumed_at: string | null } | null;
     return row ? { ...row, event_ids: JSON.parse(row.event_ids) as string[] } : null;
   }
 
@@ -312,6 +314,12 @@ export class StateDatabase {
       const receipt = this.receipt(receiptId);
       if (!receipt || receipt.consumed_at || !receipt.event_ids.includes(eventId)) {
         throw new Error("receipt does not authorize that event");
+      }
+      const authorized = this.event(eventId);
+      if (!authorized) throw new Error(`event not found: ${eventId}`);
+      const newer = this.newerCaptainEventAfterRowid(authorized.issue, receipt.event_rowid, authorized.author);
+      if (newer && !receipt.event_ids.includes(newer.id)) {
+        throw new Error(`stale receipt: newer captain event ${newer.id} must be read first`);
       }
       const result = this.raw.query("UPDATE events SET disposition='handled-by-core',disposition_at=?,note=COALESCE(?,note) WHERE id=? AND disposition='waiting-for-core'")
         .run(at, note, eventId);
@@ -338,7 +346,7 @@ export class StateDatabase {
       const events = receipt.event_ids.map((id) => this.event(id)).filter((event): event is DomainEvent => event !== null);
       const relevant = events.filter((event) => event.issue === options.issue && event.disposition === "waiting-for-core");
       if (!relevant.length) throw new Error(`receipt does not contain an event for ${options.issue}`);
-      const newer = this.newerCaptainEvent(options.issue, receipt.issued_at, options.captain);
+      const newer = this.newerCaptainEventAfterRowid(options.issue, receipt.event_rowid, options.captain);
       if (newer && !receipt.event_ids.includes(newer.id)) {
         throw new Error(`stale receipt: newer captain event ${newer.id} must be read first`);
       }
@@ -358,6 +366,11 @@ export class StateDatabase {
   newerCaptainEvent(issue: string, after: string, captain: string): DomainEvent | null {
     return this.raw.query(`SELECT * FROM events WHERE issue=? AND author=? AND created_at>?
       AND type='comment' ORDER BY created_at DESC LIMIT 1`).get(issue, captain, after) as DomainEvent | null;
+  }
+
+  newerCaptainEventAfterRowid(issue: string, afterRowid: number, captain: string): DomainEvent | null {
+    return this.raw.query(`SELECT * FROM events WHERE issue=? AND author=? AND rowid>?
+      AND type='comment' ORDER BY rowid DESC LIMIT 1`).get(issue, captain, afterRowid) as DomainEvent | null;
   }
 
   enqueue(job: NewJob, at = nowIso()): Job {

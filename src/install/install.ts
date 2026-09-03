@@ -17,6 +17,25 @@ type ClaudeSettingsOwnership = {
   previousOutputStyle: { present: boolean; value?: unknown };
 };
 
+type ExtensionOwnership = {
+  packageRoot: string;
+  bindOutput: string;
+  registerOutput: string;
+  bindingDigest: string | null;
+  ownerToken: string | null;
+};
+
+type InstallRecord = {
+  schema: "fm-linear.install.v1";
+  binary?: string;
+  linearAxiGuard?: string;
+  plist?: string;
+  extension?: ExtensionOwnership | null;
+  harnesses?: string[];
+  accelerators?: string[];
+  claudeSettings?: ClaudeSettingsOwnership;
+};
+
 function repoRoot(): string { return join(dirname(fileURLToPath(import.meta.url)), "../.."); }
 function uid(): string { return String(process.getuid?.() ?? 501); }
 
@@ -91,7 +110,7 @@ function outputField(output: string, name: string): string | null {
   return output.split(/\r?\n/).find((line) => line.startsWith(`${name}: `))?.slice(name.length + 2).trim() || null;
 }
 
-function installExtension(root: string, env: NodeJS.ProcessEnv): { packageRoot: string; bindOutput: string; registerOutput: string; bindingDigest: string | null; ownerToken: string | null } {
+function installExtension(root: string, env: NodeJS.ProcessEnv): ExtensionOwnership {
   const packageRoot = join(root, "extension", "1.0.0");
   mkdirSync(join(packageRoot, "bin"), { recursive: true });
   atomicWriteFile(join(packageRoot, "firstmate-extension.json"), ASSETS.extensionManifest, 0o644);
@@ -155,19 +174,25 @@ export function install(options: { harnesses: string[]; bind: boolean; env?: Nod
   const linearAxiGuard = installLinearAxiGuard(root, env);
   const paths = runtimePaths(env);
   ensurePrivateDir(paths.root);
-  let priorClaudeSettings: ClaudeSettingsOwnership | undefined;
+  let prior: InstallRecord | undefined;
   try {
-    const prior = JSON.parse(readFileSync(join(paths.root, "install.json"), "utf8")) as { schema?: string; claudeSettings?: ClaudeSettingsOwnership };
-    if (prior.schema === "fm-linear.install.v1") priorClaudeSettings = prior.claudeSettings;
+    const parsed = JSON.parse(readFileSync(join(paths.root, "install.json"), "utf8")) as InstallRecord;
+    if (parsed.schema === "fm-linear.install.v1") prior = parsed;
   } catch { /* first installation */ }
   const plist = join(agentsDir(env), `${LABEL}.plist`);
   mkdirSync(dirname(plist), { recursive: true });
   atomicWriteFile(plist, renderLaunchAgent(binary, home, paths.serviceLog, env.PATH || process.env.PATH), 0o644);
-  const extension = options.bind ? installExtension(root, env) : null;
-  const harnessResults = options.harnesses.map((harness) => installHarness(harness, home, priorClaudeSettings));
-  const accelerators = harnessResults.flatMap((result) => result.files);
-  const claudeSettings = harnessResults.find((result) => result.claudeSettings)?.claudeSettings ?? priorClaudeSettings;
-  atomicWriteFile(join(paths.root, "install.json"), `${JSON.stringify({ schema: "fm-linear.install.v1", binary, linearAxiGuard, plist, extension, harnesses: options.harnesses, accelerators, claudeSettings }, null, 2)}\n`);
+  const installedExtension = options.bind ? installExtension(root, env) : null;
+  const extension = installedExtension ? {
+    ...installedExtension,
+    bindingDigest: installedExtension.bindingDigest ?? prior?.extension?.bindingDigest ?? null,
+    ownerToken: installedExtension.ownerToken ?? prior?.extension?.ownerToken ?? null,
+  } : prior?.extension ?? null;
+  const harnessResults = options.harnesses.map((harness) => installHarness(harness, home, prior?.claudeSettings));
+  const accelerators = [...new Set([...(prior?.accelerators ?? []), ...harnessResults.flatMap((result) => result.files)])];
+  const harnesses = [...new Set([...(prior?.harnesses ?? []), ...options.harnesses])];
+  const claudeSettings = harnessResults.find((result) => result.claudeSettings)?.claudeSettings ?? prior?.claudeSettings;
+  atomicWriteFile(join(paths.root, "install.json"), `${JSON.stringify({ schema: "fm-linear.install.v1", binary, linearAxiGuard, plist, extension, harnesses, accelerators, claudeSettings }, null, 2)}\n`);
   if (!env.FM_LINEAR_SKIP_LAUNCHCTL) {
     spawnSync("launchctl", ["bootout", `gui/${uid()}/${LABEL}`], { encoding: "utf8" });
     const result = spawnSync("launchctl", ["bootstrap", `gui/${uid()}`, plist], { encoding: "utf8" });

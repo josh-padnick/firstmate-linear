@@ -76,7 +76,7 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
       db.linkTask({ ...link, worktree: meta.worktree || link.worktree, harness: meta.harness || link.harness });
       const model = meta.delegate === "devin" ? "devin" : meta.model || "unknown";
       const observation: Observation = {
-        id: `obs:${sha256(`${task}:${meta.spawn_gen ?? "spawn"}:model:${model}`)}`,
+        id: `obs:${sha256(`${task}:${link.issue}:${meta.spawn_gen ?? "spawn"}:model:${model}`)}`,
         source: "summary", task, issue: link.issue, verb: "model-resolved", key: "model",
         note: `model=${model}`, observed_at: nowIso(env),
       };
@@ -98,7 +98,7 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
         if (!parsed) continue;
         for (const link of links) {
           const observation: Observation = {
-            id: `obs:${sha256(`${path}:${stat.ino}:${row.offset}:${row.line}`)}`,
+            id: `obs:${sha256(`${path}:${link.issue}:${stat.ino}:${row.offset}:${row.line}`)}`,
             source: "status", task, issue: link.issue, verb: parsed.verb,
             key: parsed.key, note: parsed.note, observed_at: nowIso(env),
           };
@@ -116,7 +116,7 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
       for (const child of summary.active_children ?? []) {
         if (!child.id || !child.state) continue;
         for (const link of db.taskLinks(undefined, true).filter((item) => item.task === child.id)) {
-          const observation: Observation = { id: `obs:${sha256(`${summary.generated}:${child.id}:${child.state}`)}`, source: "summary", task: child.id, issue: link.issue, verb: child.state, key: "summary", note: null, observed_at: summary.generated ?? nowIso(env) };
+          const observation: Observation = { id: `obs:${sha256(`${summary.generated}:${child.id}:${link.issue}:${child.state}`)}`, source: "summary", task: child.id, issue: link.issue, verb: child.state, key: "summary", note: null, observed_at: summary.generated ?? nowIso(env) };
           if (db.observe(observation)) observations.push(observation);
         }
       }

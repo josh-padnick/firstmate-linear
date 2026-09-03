@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
@@ -50,8 +50,9 @@ describe("SQLite capture cycle", () => {
       }] },
     } }));
     const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+    const fixtureLog = join(root, "fixture.log");
     const result = await captureCycle({
-      config, db, transport: new LinearTransport({ fixtureDir: fixtures }),
+      config, db, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog }),
       env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225720" },
     });
     expect(result.captured).toBe(1);
@@ -59,6 +60,8 @@ describe("SQLite capture cycle", () => {
     expect(db.jobs()[0]?.kind).toBe("linear.issue-state");
     expect(JSON.parse(db.jobs()[0]!.payload)).toMatchObject({ expected_state: "Approve Deliverable" });
     expect(db.latestSnapshot("ABC-1")?.state).toBe("Approve Deliverable");
+    const commentsRequest = JSON.parse(readFileSync(fixtureLog, "utf8").split("\n")[0]!.split("\t")[1]!);
+    expect(commentsRequest.query).toContain('updatedAt:{gte:"2025-12-31T22:02:00Z"}');
     db.close();
   });
 

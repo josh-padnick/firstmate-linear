@@ -100,6 +100,17 @@ describe("state database", () => {
     db.close();
   });
 
+  test("events captured after receipt issuance invalidate it regardless of source time", () => {
+    const db = database();
+    db.capture(event("event:read"));
+    const receipt = db.issueReceipt(["event:read"], "2026-01-01T00:00:02Z");
+    db.capture({ ...event("event:late"), created_at: "2025-01-01T00:00:00Z", captured_at: "2026-01-01T00:00:02Z" });
+    expect(() => db.actWithReceipt({ receiptId: receipt, issue: "ABC-1", captain: "captain", jobs: [], note: "done" })).toThrow("stale receipt");
+    expect(() => db.handleWithReceipt("event:read", receipt, "done")).toThrow("stale receipt");
+    expect(db.event("event:read")?.disposition).toBe("waiting-for-core");
+    db.close();
+  });
+
   test("report consumption follows insertion order when a late event has an old source timestamp", () => {
     const db = database();
     db.capture(event("event:first"));

@@ -43,20 +43,21 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
       findings.push({ code: "CAPTAIN_DRAG", issue, detail: `captain set ${snapshot.state}; no newer fleet signal permits repair` });
       continue;
     }
-    const links = new Map(db.taskLinks(issue).map((link) => [link.task, link.role]));
+    const links = new Map(db.taskLinks(issue, true).map((link) => [link.task, link.role]));
+    const latestIsPrimary = latest.task !== null && links.get(latest.task) === "primary";
     const taskSignals = relevant
       .map((item) => ({ item, signal: signal(item.verb) }))
-      .filter((row): row is { item: Observation; signal: TaskSignal } => row.signal !== null && row.item.task !== null)
-      .map((row) => ({ task: row.item.task!, role: links.get(row.item.task!) ?? "primary", signal: row.signal, key: row.item.key }));
+      .filter((row): row is { item: Observation; signal: TaskSignal } => row.signal !== null && row.item.task !== null && links.has(row.item.task))
+      .map((row) => ({ task: row.item.task!, role: links.get(row.item.task!)!, signal: row.signal, key: row.item.key }));
     const reduced = reduceTaskState(foldSignals(taskSignals));
     let target: string | null = null;
     if (latest.verb === "dispatch") {
       const building = db.latestSnapshots().filter((item) => item.state === team.statuses.building).length;
       target = building >= laneCap ? team.statuses.waiting : team.statuses.building;
     } else if (latest.verb === "dispatch-scout") target = team.statuses.plan_in_progress;
-    else if (latest.verb === "pr-green") target = team.statuses.approve_deliverable;
-    else if (latest.verb === "pr-merged") target = team.statuses.done;
-    else if (latest.verb === "pr-withdrawn" && snapshot.state === team.statuses.approve_deliverable) target = team.statuses.building;
+    else if (latest.verb === "pr-green" && latestIsPrimary) target = team.statuses.approve_deliverable;
+    else if (latest.verb === "pr-merged" && latestIsPrimary) target = team.statuses.done;
+    else if (latest.verb === "pr-withdrawn" && latestIsPrimary && snapshot.state === team.statuses.approve_deliverable) target = team.statuses.building;
     else if (latest.verb === "lane-cap") target = team.statuses.waiting;
     else if (reduced === "needs-decision") target = team.statuses.needs_decision;
     else if (reduced === "blocked" || reduced === "failed") target = team.statuses.needs_firstmate_decision;

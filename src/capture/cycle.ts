@@ -116,7 +116,7 @@ export async function captureCycle(options: {
     fixtureDir: env.FM_LINEAR_FIXTURE_DIR,
     fixtureLog: env.FM_LINEAR_FIXTURE_LOG,
   });
-  const comments = await fetchComments(transport, commentsCursor, { forceSince });
+  const comments = await fetchComments(transport, commentsCursor, { forceSince: forceSince ?? bootstrapCutoff });
   const self = comments.viewer || env.FM_LINEAR_SELF_NAME?.trim() || "firstmate";
   const seen = new DatabaseSeenStore(options.db);
   const allEvents: LedgerEvent[] = [];

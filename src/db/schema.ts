@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -109,6 +109,12 @@ CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY,
   event_ids TEXT NOT NULL,
   issued_at TEXT NOT NULL,
+  event_rowid INTEGER NOT NULL,
   consumed_at TEXT
 );
+`;
+
+export const MIGRATE_TO_V2_SQL = `
+ALTER TABLE receipts ADD COLUMN event_rowid INTEGER NOT NULL DEFAULT 0;
+UPDATE receipts SET event_rowid=(SELECT COALESCE(MAX(rowid),0) FROM events);
 `;

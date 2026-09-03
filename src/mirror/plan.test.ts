@@ -48,4 +48,28 @@ describe("mirror plan", () => {
     expect(stateJob?.job.payload).toMatchObject({ state: "Needs Decision" });
     db.close();
   });
+
+  test("support PR transitions do not drive issue state", () => {
+    const root = mkdtempSync("/private/tmp/fml-plan-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.linkTask({ task: "support", issue: "ABC-1", role: "support", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const green: Observation = { id: "support-green", source: "pr", task: "support", issue: "ABC-1", verb: "pr-green", key: "pr", note: null, observed_at: "2026-01-01T00:01:00Z" };
+    db.observe(green);
+    expect(planMirror(db, config, [green]).actions.filter((action) => action.job.kind === "linear.issue-state")).toHaveLength(0);
+    db.close();
+  });
+
+  test("signals from torn-down tasks no longer affect reduction", () => {
+    const root = mkdtempSync("/private/tmp/fml-plan-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.linkTask({ task: "closed", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: "2026-01-01T00:01:00Z" });
+    db.linkTask({ task: "replacement", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:02:00Z", torn_down_at: null });
+    const failed: Observation = { id: "closed-failed", source: "status", task: "closed", issue: "ABC-1", verb: "failed", key: "default", note: null, observed_at: "2026-01-01T00:01:00Z" };
+    const working: Observation = { ...failed, id: "replacement-working", task: "replacement", verb: "working", observed_at: "2026-01-01T00:03:00Z" };
+    db.observe(failed); db.observe(working);
+    expect(planMirror(db, config, [working]).actions.filter((action) => action.job.kind === "linear.issue-state")).toHaveLength(0);
+    db.close();
+  });
 });
