@@ -1,0 +1,38 @@
+version: 1
+
+captain:
+  display_name: CAPTAIN_NAME
+
+teams:
+  - key: TEAM
+    projects: []
+    managed: assignee:self
+    statuses:
+      backlog: Backlog
+      todo: ToDo
+      prioritized: Prioritized
+      waiting: Waiting
+      plan_in_progress: Plan In Progress
+      approve_plan: Approve Plan
+      building: Building
+      validating_code: Validating Code
+      approve_deliverable: Approve Deliverable
+      needs_decision: Needs Decision
+      needs_firstmate_decision: Needs Firstmate Decision
+      done: Done
+      canceled: Canceled
+      duplicate: Duplicate
+    # Keys are resolved model ids or family-major.minor values.
+    # Values must already exist in Linear's workspace-level Agent label group.
+    agent_labels:
+      unknown: "Agent: unknown"
+
+features:
+  relay: shadow
+  mirror: shadow
+  escalation: shadow
+
+templates:
+  reply: reply.md
+  report: report.md
+  review_walkthrough: review-walkthrough.html

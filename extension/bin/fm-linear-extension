@@ -1,0 +1,91 @@
+#!/usr/bin/env node
+import { createConnection } from "node:net";
+
+const verb = process.argv[2];
+let raw = "";
+for await (const chunk of process.stdin) raw += chunk;
+
+function output(value) {
+  process.stdout.write(JSON.stringify(value));
+  process.exit(0);
+}
+
+function fail(requestId, code, diagnostic, retryable = false) {
+  output({ schema: "firstmate.extension-response.v1", request_id: requestId, ok: false, result: null, error: { code, retryable, diagnostic: diagnostic.slice(0, 500) } });
+}
+
+let request;
+try { request = JSON.parse(raw); }
+catch { fail("sha256:" + "0".repeat(64), "invalid-request", "invalid JSON"); }
+
+if (verb === "handshake") {
+  if (request?.schema !== "firstmate.extension-handshake-request.v1" || request.extension_id !== "dev.firstmate.linear") {
+    fail(request?.request_id ?? "sha256:" + "0".repeat(64), "incompatible", "identity mismatch");
+  }
+  output({
+    schema: "firstmate.extension-handshake-response.v1",
+    request_id: request.request_id,
+    extension_id: request.extension_id,
+    extension_version: request.extension_version,
+    host_protocol: 1,
+    capability: "process-event-adapter",
+    capability_version: 1,
+    adapter_names: ["linear"],
+  });
+}
+
+if (verb !== "invoke" || request?.schema !== "firstmate.extension-request.v1") {
+  fail(request?.request_id ?? "sha256:" + "0".repeat(64), "invalid-request", "unsupported invocation");
+}
+
+const input = request.input ?? {};
+function coreContent(content) {
+  if (typeof content !== "string") return null;
+  try {
+    const parsed = JSON.parse(content);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch { return null; }
+}
+
+const captured = request.operation === "source.poll" ? null : coreContent(input.content);
+const socketPath = request.operation === "source.poll" ? input.config_ref : captured?.service_socket;
+if (typeof socketPath !== "string" || !socketPath.startsWith("/")) {
+  fail(request.request_id, "invalid-request", "service socket path is unavailable");
+}
+
+async function callService(body) {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ path: socketPath });
+    let response = "";
+    const timeout = setTimeout(() => { socket.destroy(); reject(new Error("service timeout")); }, 60_000);
+    socket.setEncoding("utf8");
+    socket.on("connect", () => socket.write(JSON.stringify(body) + "\n"));
+    socket.on("data", (chunk) => { response += chunk; if (response.length > 65_536) socket.destroy(new Error("response too large")); });
+    socket.on("end", () => { clearTimeout(timeout); try { resolve(JSON.parse(response)); } catch { reject(new Error("invalid service response")); } });
+    socket.on("error", (error) => { clearTimeout(timeout); reject(error); });
+  });
+}
+
+let serviceRequest;
+if (request.operation === "source.poll") {
+  serviceRequest = { op: "source.poll", request_id: request.request_id, sequence: 0 };
+} else if (["result.classify", "result.silent", "result.terminal"].includes(request.operation)) {
+  const eventId = typeof captured?.event_id === "string" ? captured.event_id : null;
+  if (!eventId) fail(request.request_id, "invalid-request", "result content lacks event_id");
+  serviceRequest = { op: request.operation, event_id: eventId, sequence: input.sequence };
+} else {
+  fail(request.request_id, "invalid-request", "unknown operation");
+}
+
+try {
+  const response = await callService(serviceRequest);
+  if (!response?.ok) fail(request.request_id, "unavailable", response?.error ?? "service failure", response?.retryable !== false);
+  if (request.operation === "source.poll" && response.result?.status === "result") {
+    const event = coreContent(response.result.output);
+    if (!event) fail(request.request_id, "internal", "service returned malformed event content", true);
+    response.result.output = JSON.stringify({ ...event, service_socket: socketPath });
+  }
+  output({ schema: "firstmate.extension-response.v1", request_id: request.request_id, ok: true, result: response.result, error: null });
+} catch (error) {
+  fail(request.request_id, "unavailable", error instanceof Error ? error.message : String(error), true);
+}

@@ -1,0 +1,15 @@
+{
+  "schema": "firstmate.extension-manifest.v1",
+  "id": "dev.firstmate.linear",
+  "version": "1.0.0",
+  "host_protocols": [1],
+  "entrypoint": "bin/fm-linear-extension",
+  "capabilities": [
+    {
+      "name": "process-event-adapter",
+      "versions": [1],
+      "adapter_names": ["linear"]
+    }
+  ],
+  "required_consents": []
+}
