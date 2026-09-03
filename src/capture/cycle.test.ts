@@ -114,10 +114,10 @@ describe("SQLite capture cycle", () => {
     await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify({ data: {
       issues: { pageInfo: { hasNextPage: false }, nodes: [{
         identifier: "ABC-1", title: "Ship", description: "", createdAt: "2025-12-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:02:00Z", state: { name: "Approve Plan" },
+        updatedAt: "2026-01-01T00:01:00.123Z", state: { name: "Approve Plan" },
         assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" }, labels: { nodes: [] },
         history: { pageInfo: { hasNextPage: false }, nodes: [{
-          id: "move-to-gate", createdAt: "2026-01-01T00:02:00Z", actor: { displayName: "Captain" },
+          id: "move-to-gate", createdAt: "2026-01-01T00:01:00.123Z", actor: { displayName: "Captain" },
           fromState: { name: "Building" }, toState: { name: "Approve Plan" },
         }] },
       }] },

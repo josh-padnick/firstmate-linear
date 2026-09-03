@@ -46,6 +46,9 @@ describe("installer", () => {
     const settings = join(home, ".claude", "settings.local.json");
     mkdirSync(join(home, ".claude"), { recursive: true });
     writeFileSync(settings, `${JSON.stringify({ permissions: { deny: ["Bash(linear-axi issue create:*)", "Bash(git push:*)"] }, outputStyle: "concise" })}\n`);
+    const existingReport = join(home, ".claude", "commands", "report.md");
+    mkdirSync(join(home, ".claude", "commands"), { recursive: true });
+    writeFileSync(existingReport, "User-owned report command\n");
     install({ harnesses: ["claude"], bind: false, env });
     const installRecord = join(home, "state", "linear", "install.json");
     const extensionRoot = join(root, "runtime", "extension", "prior");
@@ -59,7 +62,7 @@ describe("installer", () => {
     expect(existsSync(config)).toBe(true);
     expect(readFileSync(join(home, "data", "captain.md"), "utf8")).not.toContain("fm-linear:start");
     expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { deny: ["Bash(linear-axi issue create:*)", "Bash(git push:*)"] }, outputStyle: "concise" });
-    expect(existsSync(join(home, ".claude", "commands", "report.md"))).toBe(false);
+    expect(readFileSync(existingReport, "utf8")).toBe("User-owned report command\n");
     expect(existsSync(join(home, ".codex", "prompts", "report.md"))).toBe(false);
     expect(existsSync(extensionRoot)).toBe(false);
     expect(runInit([], env)).toBe(0);

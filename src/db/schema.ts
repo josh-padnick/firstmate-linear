@@ -116,5 +116,5 @@ CREATE TABLE IF NOT EXISTS receipts (
 
 export const MIGRATE_TO_V2_SQL = `
 ALTER TABLE receipts ADD COLUMN event_rowid INTEGER NOT NULL DEFAULT 0;
-UPDATE receipts SET event_rowid=(SELECT COALESCE(MAX(rowid),0) FROM events);
+UPDATE receipts SET consumed_at=COALESCE(consumed_at,issued_at);
 `;

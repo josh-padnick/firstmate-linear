@@ -15,7 +15,10 @@ export function planReviewDeadlines(home: string, db: StateDatabase, config: Wor
     const teamKey = snapshot.issue.slice(0, snapshot.issue.indexOf("-")).toUpperCase();
     const team = config.teams.find((item) => item.key === teamKey);
     if (!team || snapshot.state !== team.statuses.approve_deliverable) continue;
-    const latestPrState = db.observations(snapshot.issue).filter((item) => item.verb === "pr-green" || item.verb === "pr-withdrawn").at(-1);
+    const primaryTasks = new Set(db.taskLinks(snapshot.issue, true).filter((link) => link.role === "primary").map((link) => link.task));
+    const latestPrState = db.observations(snapshot.issue)
+      .filter((item) => item.source === "pr" && item.task !== null && primaryTasks.has(item.task) && ["pr-green", "pr-withdrawn", "pr-merged"].includes(item.verb))
+      .at(-1);
     if (latestPrState?.verb !== "pr-green") continue;
     const green = latestPrState;
     const path = join(home, "data", snapshot.issue.toLowerCase(), "review-walkthrough.html");

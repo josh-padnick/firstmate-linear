@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { StateDatabase } from "./database.ts";
 
 const roots: string[] = [];
@@ -109,6 +110,23 @@ describe("state database", () => {
     expect(() => db.handleWithReceipt("event:read", receipt, "done")).toThrow("stale receipt");
     expect(db.event("event:read")?.disposition).toBe("waiting-for-core");
     db.close();
+  });
+
+  test("v1 migration invalidates receipts without a trustworthy watermark", () => {
+    const db = database();
+    const path = db.path;
+    db.capture(event("event:read"));
+    const receipt = db.issueReceipt(["event:read"]);
+    db.capture({ ...event("event:newer"), created_at: "2025-01-01T00:00:00Z" });
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("ALTER TABLE receipts DROP COLUMN event_rowid; PRAGMA user_version = 1;");
+    legacy.close();
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.receipt(receipt)?.consumed_at).not.toBeNull();
+    expect(() => migrated.actWithReceipt({ receiptId: receipt, issue: "ABC-1", captain: "captain", jobs: [], note: "done" })).toThrow("already consumed");
+    expect(migrated.event("event:read")?.disposition).toBe("waiting-for-core");
+    migrated.close();
   });
 
   test("report consumption follows insertion order when a late event has an old source timestamp", () => {

@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { resolveHome } from "../env.ts";
 import { atomicWriteFile, ensurePrivateDir, lockAcquire, lockRelease, readText } from "../fsutil.ts";
 import { runtimePaths } from "../paths.ts";
 import { ASSETS } from "../assets.ts";
+import { sha256 } from "../hash.ts";
 
 const LABEL = "com.firstmate.linear";
 const CLAUDE_LINEAR_DENIES = ["Bash(linear-axi issue create:*)", "Bash(linear-axi issue update:*)", "Bash(linear-axi issue comment * --body:*)"] as const;
@@ -25,6 +26,12 @@ type ExtensionOwnership = {
   ownerToken: string | null;
 };
 
+type ManagedFileOwnership = {
+  path: string;
+  installedSha: string;
+  previous: { existed: boolean; contents?: string; mode?: number };
+};
+
 type InstallRecord = {
   schema: "fm-linear.install.v1";
   binary?: string;
@@ -33,6 +40,7 @@ type InstallRecord = {
   extension?: ExtensionOwnership | null;
   harnesses?: string[];
   accelerators?: string[];
+  ownedFiles?: ManagedFileOwnership[];
   claudeSettings?: ClaudeSettingsOwnership;
 };
 
@@ -133,13 +141,32 @@ function installExtension(root: string, env: NodeJS.ProcessEnv): ExtensionOwners
   return { packageRoot, bindOutput, registerOutput, bindingDigest, ownerToken: outputField(registerOutput, "owner-token") };
 }
 
-function installHarness(harness: string, home: string, priorClaudeSettings?: ClaudeSettingsOwnership): { files: string[]; claudeSettings?: ClaudeSettingsOwnership } {
-  const installed: string[] = [];
+function installManagedFiles(specs: Array<{ path: string; contents: string; mode: number }>, prior: ManagedFileOwnership[]): ManagedFileOwnership[] {
+  const ownership = specs.map((spec) => {
+    const existingOwnership = prior.find((item) => item.path === spec.path);
+    const current = readText(spec.path);
+    if (existingOwnership && current !== null && sha256(current) !== existingOwnership.installedSha) {
+      throw new Error(`managed harness file changed since installation: ${spec.path}`);
+    }
+    if (existingOwnership) return { ...existingOwnership, installedSha: sha256(spec.contents) };
+    return {
+      path: spec.path,
+      installedSha: sha256(spec.contents),
+      previous: current === null ? { existed: false } : { existed: true, contents: current, mode: statSync(spec.path).mode & 0o777 },
+    };
+  });
+  for (const spec of specs) atomicWriteFile(spec.path, spec.contents, spec.mode);
+  return ownership;
+}
+
+function installHarness(harness: string, home: string, priorFiles: ManagedFileOwnership[], priorClaudeSettings?: ClaudeSettingsOwnership): { ownedFiles: ManagedFileOwnership[]; claudeSettings?: ClaudeSettingsOwnership } {
   if (harness === "claude") {
     const command = join(home, ".claude", "commands", "report.md");
     const style = join(home, ".claude", "output-styles", "firstmate-linear.md");
-    atomicWriteFile(command, "Run `fm-linear report` and relay its current findings to the captain.\n", 0o600);
-    atomicWriteFile(style, ASSETS.outputStyle, 0o600);
+    const ownedFiles = installManagedFiles([
+      { path: command, contents: "Run `fm-linear report` and relay its current findings to the captain.\n", mode: 0o600 },
+      { path: style, contents: ASSETS.outputStyle, mode: 0o600 },
+    ], priorFiles);
     const settings = join(home, ".claude", "settings.local.json");
     let current: Record<string, any> = {};
     try { current = JSON.parse(readFileSync(settings, "utf8")); } catch { current = {}; }
@@ -153,16 +180,14 @@ function installHarness(harness: string, home: string, priorClaudeSettings?: Cla
     current.permissions = { ...(current.permissions ?? {}), deny: [...deny] };
     current.outputStyle = "firstmate-linear";
     atomicWriteFile(settings, `${JSON.stringify(current, null, 2)}\n`, 0o600);
-    installed.push(command, style);
-    return { files: installed, claudeSettings: ownership };
+    return { ownedFiles, claudeSettings: ownership };
   } else if (harness === "codex") {
     const prompt = join(home, ".codex", "prompts", "report.md");
-    atomicWriteFile(prompt, "Run `fm-linear report` and relay its current findings to the user.\n", 0o600);
-    installed.push(prompt);
+    return { ownedFiles: installManagedFiles([{ path: prompt, contents: "Run `fm-linear report` and relay its current findings to the user.\n", mode: 0o600 }], priorFiles) };
   } else if (harness !== "grok") {
     throw new Error(`unknown harness: ${harness}`);
   }
-  return { files: installed };
+  return { ownedFiles: [] };
 }
 
 export function install(options: { harnesses: string[]; bind: boolean; env?: NodeJS.ProcessEnv }): { binary: string; plist: string } {
@@ -188,11 +213,12 @@ export function install(options: { harnesses: string[]; bind: boolean; env?: Nod
     bindingDigest: installedExtension.bindingDigest ?? prior?.extension?.bindingDigest ?? null,
     ownerToken: installedExtension.ownerToken ?? prior?.extension?.ownerToken ?? null,
   } : prior?.extension ?? null;
-  const harnessResults = options.harnesses.map((harness) => installHarness(harness, home, prior?.claudeSettings));
-  const accelerators = [...new Set([...(prior?.accelerators ?? []), ...harnessResults.flatMap((result) => result.files)])];
+  const harnessResults = options.harnesses.map((harness) => installHarness(harness, home, prior?.ownedFiles ?? [], prior?.claudeSettings));
+  const ownedFiles = [...new Map([...(prior?.ownedFiles ?? []), ...harnessResults.flatMap((result) => result.ownedFiles)].map((item) => [item.path, item])).values()];
+  const accelerators = [...new Set([...(prior?.accelerators ?? []), ...ownedFiles.map((item) => item.path)])];
   const harnesses = [...new Set([...(prior?.harnesses ?? []), ...options.harnesses])];
   const claudeSettings = harnessResults.find((result) => result.claudeSettings)?.claudeSettings ?? prior?.claudeSettings;
-  atomicWriteFile(join(paths.root, "install.json"), `${JSON.stringify({ schema: "fm-linear.install.v1", binary, linearAxiGuard, plist, extension, harnesses, accelerators, claudeSettings }, null, 2)}\n`);
+  atomicWriteFile(join(paths.root, "install.json"), `${JSON.stringify({ schema: "fm-linear.install.v1", binary, linearAxiGuard, plist, extension, harnesses, accelerators, ownedFiles, claudeSettings }, null, 2)}\n`);
   if (!env.FM_LINEAR_SKIP_LAUNCHCTL) {
     spawnSync("launchctl", ["bootout", `gui/${uid()}/${LABEL}`], { encoding: "utf8" });
     const result = spawnSync("launchctl", ["bootstrap", `gui/${uid()}`, plist], { encoding: "utf8" });
@@ -206,7 +232,7 @@ export function uninstall(env: NodeJS.ProcessEnv = process.env): void {
   if (!env.FM_LINEAR_SKIP_LAUNCHCTL) spawnSync("launchctl", ["bootout", `gui/${uid()}/${LABEL}`], { encoding: "utf8" });
   const record = readText(join(paths.root, "install.json"));
   if (record) {
-    let parsed: { schema?: string; binary?: string; linearAxiGuard?: string; plist?: string; extension?: { packageRoot?: string; bindingDigest?: string | null; ownerToken?: string | null }; accelerators?: string[]; claudeSettings?: ClaudeSettingsOwnership } | null = null;
+    let parsed: { schema?: string; binary?: string; linearAxiGuard?: string; plist?: string; extension?: { packageRoot?: string; bindingDigest?: string | null; ownerToken?: string | null }; accelerators?: string[]; ownedFiles?: ManagedFileOwnership[]; claudeSettings?: ClaudeSettingsOwnership } | null = null;
     try { parsed = JSON.parse(record); } catch { parsed = null; }
     if (parsed?.schema === "fm-linear.install.v1") {
       const home = resolveHome(env);
@@ -221,7 +247,14 @@ export function uninstall(env: NodeJS.ProcessEnv = process.env): void {
         if (retire.status !== 0) throw new Error(`extension retirement failed: ${retire.stderr || retire.stdout}`);
       }
       if (parsed.plist) rmSync(parsed.plist, { force: true });
-      for (const file of parsed.accelerators ?? []) rmSync(file, { force: true });
+      const ownedPaths = new Set((parsed.ownedFiles ?? []).map((item) => item.path));
+      for (const file of parsed.accelerators ?? []) if (!ownedPaths.has(file)) rmSync(file, { force: true });
+      for (const file of parsed.ownedFiles ?? []) {
+        const current = readText(file.path);
+        if (current !== null && sha256(current) !== file.installedSha) continue;
+        if (file.previous.existed) atomicWriteFile(file.path, file.previous.contents ?? "", file.previous.mode ?? 0o600);
+        else rmSync(file.path, { force: true });
+      }
       if (parsed.binary) rmSync(parsed.binary, { force: true });
       if (parsed.linearAxiGuard) rmSync(parsed.linearAxiGuard, { force: true });
       if (parsed.extension?.packageRoot) rmSync(parsed.extension.packageRoot, { recursive: true, force: true });

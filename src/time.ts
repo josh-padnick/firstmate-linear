@@ -78,6 +78,18 @@ export function isoAtOrAfter(candidate: string, baseline: string): boolean {
   return left >= right;
 }
 
+export function compareIso(left: string, right: string): -1 | 0 | 1 | null {
+  const leftMatch = left.trim().match(ISO_RE);
+  const rightMatch = right.trim().match(ISO_RE);
+  const leftSeconds = parseIso(left);
+  const rightSeconds = parseIso(right);
+  if (!leftMatch || !rightMatch || leftSeconds === null || rightSeconds === null) return null;
+  const fraction = (match: RegExpMatchArray): bigint => BigInt((match[7] ?? "").slice(0, 9).padEnd(9, "0"));
+  const leftInstant = BigInt(leftSeconds) * 1_000_000_000n + fraction(leftMatch);
+  const rightInstant = BigInt(rightSeconds) * 1_000_000_000n + fraction(rightMatch);
+  return leftInstant < rightInstant ? -1 : leftInstant > rightInstant ? 1 : 0;
+}
+
 export function overlapTimestamp(
   timestamp: string,
   overlapSeconds: number = DEFAULT_OVERLAP_SECONDS,

@@ -3,7 +3,7 @@ import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase, type IssueSnapshot } from "../db/database.ts";
 import { loadKey, resolveHome } from "../env.ts";
 import { sha256 } from "../hash.ts";
-import { formatIso, nowEpoch, nowIso, overlapTimestamp, parseIso } from "../time.ts";
+import { compareIso, formatIso, nowEpoch, nowIso, overlapTimestamp, parseIso } from "../time.ts";
 import { LinearTransport } from "../transport.ts";
 import { decideRelay } from "../relay/decide.ts";
 import { deriveComments, deriveHistory, deriveIssueCreation, type SeenStore } from "./derive.ts";
@@ -33,8 +33,8 @@ function snapshotAtRevision(current: IssueSnapshot | null, event: LedgerEvent, h
   if (!current || event.event.type !== "comment") return current;
   let state = current.state;
   const later = history
-    .filter((item) => item.issue === event.event.issue && item.fromState?.name && item.toState?.name && item.createdAt > event.updated_at)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    .filter((item) => item.issue === event.event.issue && item.fromState?.name && item.toState?.name && compareIso(item.createdAt, event.updated_at) === 1)
+    .sort((a, b) => -(compareIso(a.createdAt, b.createdAt) ?? 0) || b.id.localeCompare(a.id));
   for (const transition of later) {
     if (transition.toState?.name !== state) throw new Error(`cannot reconstruct state for ${event.event.issue} at comment revision`);
     state = transition.fromState?.name ?? state;
