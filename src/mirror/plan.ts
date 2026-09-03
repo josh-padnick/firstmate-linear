@@ -66,7 +66,10 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
     let cause = latestPrimary ?? latest;
     let target: string | null = null;
     if (latestPrimary?.verb === "dispatch") {
-      const building = db.latestSnapshots().filter((item) => item.state === team.statuses.building).length;
+      const building = db.latestSnapshots().filter((item) => {
+        const snapshotTeam = item.issue.slice(0, item.issue.indexOf("-")).toUpperCase();
+        return snapshotTeam === team.key && item.state === team.statuses.building;
+      }).length;
       target = building >= laneCap ? team.statuses.waiting : team.statuses.building;
     } else if (latestPrimary?.verb === "dispatch-scout") target = team.statuses.plan_in_progress;
     else if (latestPrimary?.verb === "lane-cap") target = team.statuses.waiting;

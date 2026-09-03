@@ -139,4 +139,21 @@ describe("mirror plan", () => {
       db.close();
     }
   });
+
+  test("lane capacity counts only the dispatched issue team", () => {
+    const root = mkdtempSync("/private/tmp/fml-plan-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    const multiTeam = structuredClone(config);
+    multiTeam.teams.push({ key: "XYZ", projects: [], managed: "all", statuses: { ...statuses }, agent_labels: { unknown: "Agent: unknown" } });
+    db.snapshot({ issue: "ABC-1", state: "Prioritized", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    for (let index = 1; index <= 8; index += 1) {
+      db.snapshot({ issue: `XYZ-${index}`, state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    }
+    db.linkTask({ task: "primary", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const dispatch: Observation = { id: "dispatch", source: "summary", task: "primary", issue: "ABC-1", verb: "dispatch", key: "default", note: null, observed_at: "2026-01-01T00:01:00Z" };
+    db.observe(dispatch);
+    const state = planMirror(db, multiTeam, [dispatch]).actions.find((action) => action.job.kind === "linear.issue-state");
+    expect(state?.job.payload).toMatchObject({ state: "Building" });
+    db.close();
+  });
 });

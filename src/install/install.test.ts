@@ -187,4 +187,27 @@ describe("installer", () => {
     uninstall(env);
     expect(existsSync(accelerator)).toBe(false);
   });
+
+  test("a failed installation leaves a manifest that uninstall can recover", () => {
+    const root = mkdtempSync("/private/tmp/fml-install-"); roots.push(root);
+    const home = join(root, "home");
+    const runtime = join(root, "runtime");
+    const agents = join(root, "agents");
+    const env = {
+      FM_HOME: home,
+      FM_LINEAR_INSTALL_ROOT: runtime,
+      FM_LINEAR_LAUNCH_AGENTS_DIR: agents,
+      FM_LINEAR_SKIP_LAUNCHCTL: "1",
+      PATH: join(root, "empty-path"),
+    };
+    expect(() => install({ harnesses: [], bind: false, env })).toThrow("linear-axi is required");
+    const manifest = join(home, "state", "linear", "install.json");
+    const binary = join(runtime, "bin", "fm-linear");
+    expect(existsSync(manifest)).toBe(true);
+    expect(existsSync(binary)).toBe(true);
+    uninstall(env);
+    expect(existsSync(manifest)).toBe(false);
+    expect(existsSync(binary)).toBe(false);
+    expect(existsSync(join(agents, "com.firstmate.linear.plist"))).toBe(false);
+  });
 });

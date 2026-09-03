@@ -53,7 +53,7 @@ function commentEvent(
     handled_note: null,
     observed_at: observedAt,
     bootstrap,
-    dedupe_key: `comment:${comment.id}:${hash}`,
+    dedupe_key: `comment:${comment.id}:${comment.updatedAt}:${hash}`,
   };
 }
 

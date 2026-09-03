@@ -32,4 +32,20 @@ describe("capture derivation cutoffs", () => {
     }], seenStore(), "2026-01-01T00:01:00Z", null, "Firstmate");
     expect(comments[0]?.created_at).toBe("2026-01-01T00:00:00Z");
   });
+
+  test("a reverted comment body remains a distinct source revision", () => {
+    const seen = seenStore();
+    const revisions = [
+      { body: "approved", updatedAt: "2026-01-01T00:00:00Z" },
+      { body: "needs changes", updatedAt: "2026-01-01T00:01:00Z" },
+      { body: "approved", updatedAt: "2026-01-01T00:02:00Z" },
+    ];
+    const events = revisions.flatMap((revision) => deriveComments([{
+      id: "comment-reverted", createdAt: "2026-01-01T00:00:00Z", ...revision,
+      user: { displayName: "Captain" }, issue: { identifier: "ABC-1" },
+    }], seen, "2026-01-01T00:03:00Z", null, "Firstmate"));
+    expect(events).toHaveLength(3);
+    expect(events[0]?.dedupe_key).not.toBe(events[2]?.dedupe_key);
+    expect(events[2]?.event.body).toBe("approved");
+  });
 });
