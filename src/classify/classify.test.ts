@@ -32,13 +32,13 @@ describe("classification", () => {
     const result = classifyEvent(comment, config, { issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
     expect(result.token).toBe("approval");
     expect(result.disposition).toBe("waiting-for-core");
-    expect(result.jobs[0]?.payload).toMatchObject({ state: "Validating Code", expected_state: "Approve Deliverable" });
+    expect(result.jobs[0]?.payload).toMatchObject({ state: "Validating Code", expected_state: "Approve Deliverable", requires_managed: true });
   });
 
   test("conditional approval is feedback and returns the ball", () => {
     const result = classifyEvent({ ...comment, body: "Approved if you fix X" }, config, { issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
     expect(result.token).toBe("ball-returned");
-    expect(result.jobs[0]?.payload).toMatchObject({ state: "Building" });
+    expect(result.jobs[0]?.payload).toMatchObject({ state: "Building", requires_managed: true });
   });
 
   test("approved is not an approval verdict while waiting on a decision", () => {

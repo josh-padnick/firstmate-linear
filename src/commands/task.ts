@@ -1,4 +1,7 @@
+import { existsSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
+import { resolveHome, resolveStateDir } from "../env.ts";
 import { nowIso } from "../time.ts";
 import { optionValue } from "./args.ts";
 
@@ -14,14 +17,18 @@ export function runTask(args: string[], env: NodeJS.ProcessEnv = process.env): n
         process.stderr.write("Usage: fm-linear task link TASK ISSUE [--role primary|support] [--worktree path] [--harness name]\n");
         return 2;
       }
-      db.linkTask({ task, issue, role, worktree: optionValue(args, "--worktree"), harness: optionValue(args, "--harness"), spawned_at: optionValue(args, "--spawned-at") ?? nowIso(env), torn_down_at: null });
+      const statusPath = join(resolveStateDir(resolveHome(env), env), `${task}.status`);
+      const priorLifecycle = db.taskLinks().some((link) => link.task === task);
+      const statusStartOffset = priorLifecycle && existsSync(statusPath) ? statSync(statusPath).size : 0;
+      db.linkTask({ task, issue, role, worktree: optionValue(args, "--worktree"), harness: optionValue(args, "--harness"), spawned_at: optionValue(args, "--spawned-at") ?? nowIso(env), torn_down_at: null, status_start_offset: statusStartOffset });
       process.stdout.write(`fm-linear task: linked ${task} -> ${issue} (${role})\n`);
       return 0;
     }
     if (sub === "close") {
       const task = args[1];
       if (!task) return 2;
-      db.closeTask(task, nowIso(env));
+      const statusPath = join(resolveStateDir(resolveHome(env), env), `${task}.status`);
+      db.closeTask(task, nowIso(env), existsSync(statusPath) ? statSync(statusPath).size : 0);
       process.stdout.write(`fm-linear task: closed ${task}\n`);
       return 0;
     }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { runTask } from "../commands/task.ts";
 import { StateDatabase } from "../db/database.ts";
 import { parseStatusLine, scanFleet } from "./scan.ts";
 
@@ -129,6 +130,26 @@ describe("fleet scanner", () => {
     expect(scanFleet(home, db).observations.filter((item) => item.source === "status")).toHaveLength(0);
     db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:02:00Z", torn_down_at: null });
     expect(scanFleet(home, db).observations.filter((item) => item.source === "status")).toHaveLength(0);
+    db.close();
+  });
+
+  test("task relinking baselines status appended between service scans", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: first lifecycle\n");
+    const firstEnv = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1"], firstEnv)).toBe(0);
+    let db = StateDatabase.open(firstEnv);
+    scanFleet(home, db, firstEnv);
+    db.close();
+
+    expect(runTask(["close", "task"], { ...firstEnv, FM_LINEAR_NOW_EPOCH: "1767225660" })).toBe(0);
+    writeFileSync(path, "working: first lifecycle\ndone: closed lifecycle\n");
+    const secondEnv = { ...firstEnv, FM_LINEAR_NOW_EPOCH: "1767225720" };
+    expect(runTask(["link", "task", "ABC-1"], secondEnv)).toBe(0);
+    db = StateDatabase.open(secondEnv);
+
+    expect(scanFleet(home, db, secondEnv).observations.filter((item) => item.source === "status")).toHaveLength(0);
     db.close();
   });
 });

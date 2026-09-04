@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -82,7 +82,9 @@ CREATE TABLE IF NOT EXISTS task_links (
   worktree TEXT,
   harness TEXT,
   spawned_at TEXT NOT NULL,
-  torn_down_at TEXT
+  torn_down_at TEXT,
+  status_start_offset INTEGER,
+  status_end_offset INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS task_links_issue_idx ON task_links(issue, role, torn_down_at);
@@ -211,4 +213,9 @@ UPDATE observations SET task_lifecycle_id=(
 
 export const MIGRATE_TO_V8_SQL = `
 ALTER TABLE issue_snapshots ADD COLUMN managed INTEGER NOT NULL DEFAULT 1;
+`;
+
+export const MIGRATE_TO_V9_SQL = `
+ALTER TABLE task_links ADD COLUMN status_start_offset INTEGER;
+ALTER TABLE task_links ADD COLUMN status_end_offset INTEGER;
 `;

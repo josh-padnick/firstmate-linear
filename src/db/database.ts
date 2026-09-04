@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
 export type EventDisposition =
   | "captured"
@@ -105,9 +105,15 @@ export type TaskLink = {
   harness: string | null;
   spawned_at: string;
   torn_down_at: string | null;
+  status_start_offset: number | null;
+  status_end_offset: number | null;
 };
 
-export type NewTaskLink = Omit<TaskLink, "lifecycle_id"> & { lifecycle_id?: string };
+export type NewTaskLink = Omit<TaskLink, "lifecycle_id" | "status_start_offset" | "status_end_offset"> & {
+  lifecycle_id?: string;
+  status_start_offset?: number | null;
+  status_end_offset?: number | null;
+};
 
 export type Observation = {
   id: string;
@@ -184,6 +190,7 @@ export class StateDatabase {
         if (from > 0 && from < 6 && !tableHasColumn(db, "observations", "task_spawned_at")) db.exec(MIGRATE_TO_V6_SQL);
         if (from > 0 && from < 7 && !tableHasColumn(db, "task_links", "lifecycle_id")) db.exec(MIGRATE_TO_V7_SQL);
         if (from > 0 && from < 8 && !tableHasColumn(db, "issue_snapshots", "managed")) db.exec(MIGRATE_TO_V8_SQL);
+        if (from > 0 && from < 9 && !tableHasColumn(db, "task_links", "status_start_offset")) db.exec(MIGRATE_TO_V9_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -594,22 +601,23 @@ export class StateDatabase {
           if (compareIso(value.spawned_at, active.spawned_at) !== 1) {
             throw new Error(`task role change requires a later lifecycle start: ${value.task} ${value.issue}`);
           }
-          this.raw.query("UPDATE task_links SET torn_down_at=? WHERE task=? AND issue=? AND torn_down_at IS NULL")
-            .run(value.spawned_at, value.task, value.issue);
+          this.raw.query("UPDATE task_links SET torn_down_at=?,status_end_offset=? WHERE task=? AND issue=? AND torn_down_at IS NULL")
+            .run(value.spawned_at, value.status_start_offset ?? null, value.task, value.issue);
         }
       }
-      this.raw.query(`INSERT INTO task_links(lifecycle_id,task,issue,role,worktree,harness,spawned_at,torn_down_at)
-        VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(lifecycle_id) DO UPDATE SET
+      this.raw.query(`INSERT INTO task_links(lifecycle_id,task,issue,role,worktree,harness,spawned_at,torn_down_at,status_start_offset,status_end_offset)
+        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lifecycle_id) DO UPDATE SET
         task=excluded.task,issue=excluded.issue,role=excluded.role,worktree=excluded.worktree,
-        harness=excluded.harness,spawned_at=excluded.spawned_at,torn_down_at=excluded.torn_down_at`).run(
+        harness=excluded.harness,spawned_at=excluded.spawned_at,torn_down_at=excluded.torn_down_at,
+        status_start_offset=excluded.status_start_offset,status_end_offset=excluded.status_end_offset`).run(
           value.lifecycle_id ?? `link:${uuid()}`, value.task, value.issue, value.role, value.worktree, value.harness,
-          value.spawned_at, value.torn_down_at,
+          value.spawned_at, value.torn_down_at, value.status_start_offset ?? null, value.status_end_offset ?? null,
         );
     });
   }
 
-  closeTask(task: string, at = nowIso()): void {
-    this.raw.query("UPDATE task_links SET torn_down_at=? WHERE task=? AND torn_down_at IS NULL").run(at, task);
+  closeTask(task: string, at = nowIso(), statusEndOffset: number | null = null): void {
+    this.raw.query("UPDATE task_links SET torn_down_at=?,status_end_offset=? WHERE task=? AND torn_down_at IS NULL").run(at, statusEndOffset, task);
   }
 
   taskLinks(issue?: string, activeOnly = false): TaskLink[] {

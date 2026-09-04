@@ -106,6 +106,7 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
         const parsed = parseStatusLine(row.line);
         if (!parsed) continue;
         for (const link of links) {
+          if (link.status_start_offset !== null && row.offset < link.status_start_offset) continue;
           const observation: Observation = {
             id: `obs:${sha256(`${path}:${link.issue}:${link.lifecycle_id}:${stat.ino}:${row.offset}:${row.line}`)}`,
             source: "status", task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: parsed.verb,

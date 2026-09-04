@@ -74,6 +74,7 @@ function gateJob(event: ClassifiableEvent, target: string, expectedState: string
       cause_event: event.id,
       comment: reason,
       actor: "service",
+      requires_managed: true,
     },
   };
 }

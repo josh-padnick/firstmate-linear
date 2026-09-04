@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { classifyEvent } from "../classify/classify.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
 import { LinearTransport } from "../transport.ts";
@@ -33,16 +34,20 @@ describe("job worker", () => {
     db.close();
   });
 
-  test("a managed mutation is discarded after the issue leaves scope", async () => {
+  test("a retried gate mutation is discarded after the issue leaves scope", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const log = join(root, "calls.log");
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Someone Else", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: false, observed_at: "2026-01-01T00:00:00Z" });
-    db.enqueue({ key: "mirror:stale", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Done", requires_managed: true } }, "2026-01-01T00:00:00Z");
+    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    const classification = classifyEvent({ id: "event:approval", team: "ABC", issue: "ABC-1", type: "comment", author: "Captain", body: "approved", created_at: "2026-01-01T00:00:01Z" }, config, db.latestSnapshot("ABC-1"));
+    const job = db.enqueue(classification.jobs[0]!, "2026-01-01T00:00:01Z");
+    db.claimDueJobs(1, "2026-01-01T00:00:01Z");
+    db.retryJob(job.id, "temporary failure", "2026-01-01T00:00:02Z");
+    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Someone Else", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: false, observed_at: "2026-01-01T00:00:02Z" });
 
     const result = await processJobs({
       db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused"), fixtureLog: log }),
-      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" },
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225602" },
     });
 
     expect(result.done).toBe(1);
