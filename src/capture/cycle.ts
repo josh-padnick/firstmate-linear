@@ -3,6 +3,7 @@ import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase, type IssueSnapshot } from "../db/database.ts";
 import { loadKey, resolveHome } from "../env.ts";
 import { sha256 } from "../hash.ts";
+import { isManagedIssue } from "../managed.ts";
 import { compareIso, formatIso, nowEpoch, nowIso, overlapTimestamp, parseIso } from "../time.ts";
 import { LinearTransport } from "../transport.ts";
 import { decideRelay } from "../relay/decide.ts";
@@ -74,13 +75,6 @@ export function eventId(dedupeKey: string): string {
 
 function teamFromIssue(issue: string): string {
   return issue.includes("-") ? issue.slice(0, issue.indexOf("-")).toUpperCase() : "";
-}
-
-function managed(issue: LinearIssue, scope: "assignee:self" | "all", self: string, projects: string[]): boolean {
-  const inScope = scope === "all" || issue.assignee?.displayName === self;
-  if (!inScope || projects.length === 0) return inScope;
-  const allowed = new Set(projects.map((item) => item.toLowerCase()));
-  return allowed.has(issue.project?.name?.toLowerCase() ?? "") || allowed.has(issue.project?.slugId?.toLowerCase() ?? "");
 }
 
 function snapshot(issue: LinearIssue, agentLabels: Record<string, string>, observedAt: string, isManaged: boolean): IssueSnapshot {
@@ -156,7 +150,7 @@ export async function captureCycle(options: {
       team: team.key,
       forceSince: fullDue ? null : forceSince,
     });
-    const managedIssues = result.issues.filter((issue) => managed(issue, team.managed, self, team.projects));
+    const managedIssues = result.issues.filter((issue) => isManagedIssue(team, self, issue));
     const managedIds = new Set(managedIssues.map((issue) => issue.identifier));
     const managedHistory = result.history.filter((item) => managedIds.has(item.issue ?? ""));
     allHistory.push(...managedHistory);
@@ -176,13 +170,7 @@ export async function captureCycle(options: {
     const issue = comment.issue?.identifier ?? "";
     const team = options.config.teams.find((item) => item.key === teamFromIssue(issue));
     if (!team || !comment.issue) return false;
-    return managed({
-      identifier: issue,
-      createdAt: comment.createdAt,
-      updatedAt: comment.updatedAt,
-      assignee: comment.issue.assignee,
-      project: comment.issue.project,
-    }, team.managed, self, team.projects);
+    return isManagedIssue(team, self, comment.issue);
   });
   allEvents.push(...deriveComments(relevantComments, seen, observedAt, commentsEventCutoff, self, bootstrapCutoff !== null));
 

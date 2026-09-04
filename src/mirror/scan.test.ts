@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runTask } from "../commands/task.ts";
 import { StateDatabase } from "../db/database.ts";
@@ -221,6 +221,46 @@ describe("fleet scanner", () => {
     db = StateDatabase.open(env);
 
     expect(scanFleet(home, db, env).observations).toContainEqual(expect.objectContaining({ verb: "done", note: "before close" }));
+    db.close();
+  });
+
+  test("a reset incarnation stays stable after a role boundary", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: original\n");
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1", "--role", "support", "--spawned-at", "2026-01-01T00:00:00Z"], env)).toBe(0);
+    let db = StateDatabase.open(env);
+    scanFleet(home, db, env);
+    db.close();
+    writeFileSync(path, "done: before role change\n");
+    expect(runTask(["link", "task", "ABC-1", "--role", "primary", "--spawned-at", "2026-01-01T00:01:00Z"], env)).toBe(0);
+    appendFileSync(path, "working: after role change\n");
+    db = StateDatabase.open(env);
+
+    const lifecycle = db.taskLinks("ABC-1", true)[0]!.lifecycle_id;
+    const observations = scanFleet(home, db, env).observations.filter((item) => item.source === "status" && item.task_lifecycle_id === lifecycle);
+    expect(observations.map((item) => item.verb)).toEqual(["working"]);
+    expect(observations[0]?.note).toBe("after role change");
+    db.close();
+  });
+
+  test("a reset incarnation stays stable after a close boundary", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: original\n");
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
+    let db = StateDatabase.open(env);
+    scanFleet(home, db, env);
+    db.close();
+    writeFileSync(path, "done: before close\n");
+    expect(runTask(["close", "task"], env)).toBe(0);
+    appendFileSync(path, "done: after close\n");
+    db = StateDatabase.open(env);
+
+    const observations = scanFleet(home, db, env).observations.filter((item) => item.source === "status");
+    expect(observations.map((item) => item.note)).toEqual(["before close"]);
     db.close();
   });
 });

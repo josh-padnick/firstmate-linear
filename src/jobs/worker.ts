@@ -4,6 +4,7 @@ import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase, type Job } from "../db/database.ts";
 import { resolveHome } from "../env.ts";
 import { sha256 } from "../hash.ts";
+import { isManagedIssue } from "../managed.ts";
 import { nowEpoch, nowIso } from "../time.ts";
 import { LinearTransport, type TransportResult } from "../transport.ts";
 
@@ -238,13 +239,8 @@ export async function executeJob(job: Job, options: {
     const identifier = typeof issue?.identifier === "string" ? issue.identifier : job.target;
     const teamKey = identifier.slice(0, identifier.indexOf("-")).toUpperCase();
     const team = options.config.teams.find((item) => item.key === teamKey);
-    const assigned = team?.managed === "all" || (typeof resolved?.viewer?.displayName === "string"
-      && issue?.assignee?.displayName === resolved.viewer.displayName);
-    const allowedProjects = new Set(team?.projects.map((item) => item.toLowerCase()) ?? []);
-    const projectManaged = Boolean(team) && (!allowedProjects.size
-      || allowedProjects.has(issue?.project?.slugId?.toLowerCase() ?? "")
-      || allowedProjects.has(issue?.project?.name?.toLowerCase() ?? ""));
-    if (!issue || !assigned || !projectManaged) return {};
+    if (!team || !issue || typeof resolved?.viewer?.displayName !== "string"
+      || !isManagedIssue(team, resolved.viewer.displayName, issue)) return {};
   }
   switch (job.kind) {
     case "linear.issue-state": return updateIssueState(job, body, options.transport, options.config);

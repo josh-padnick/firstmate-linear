@@ -19,13 +19,15 @@ export function statusFileState(path: string, rawCursor: string | null): {
   physicalIdentity: string;
   incarnationIdentity: string;
   offset: number;
+  needsPersistence: boolean;
 } | null {
   const physicalIdentity = fileIncarnation(path);
   if (!physicalIdentity) return null;
   const content = readFileSync(path);
   let offset = 0;
   let incarnationIdentity = physicalIdentity;
-  if (!rawCursor) return { content, physicalIdentity, incarnationIdentity, offset };
+  let needsPersistence = false;
+  if (!rawCursor) return { content, physicalIdentity, incarnationIdentity, offset, needsPersistence };
   try {
     const cursor = JSON.parse(rawCursor) as { offset?: number; file_identity?: string; physical_identity?: string; prefix_sha?: string; identity?: string };
     const candidate = Number(cursor.offset ?? 0);
@@ -42,7 +44,17 @@ export function statusFileState(path: string, rawCursor: string | null): {
       incarnationIdentity = cursor.file_identity ?? physicalIdentity;
     } else if (modern && cursorPhysicalIdentity === physicalIdentity) {
       incarnationIdentity = `${physicalIdentity}:reset:${sha256(content)}`;
+      needsPersistence = true;
     }
   } catch {}
-  return { content, physicalIdentity, incarnationIdentity, offset };
+  return { content, physicalIdentity, incarnationIdentity, offset, needsPersistence };
+}
+
+export function statusCursorValue(state: NonNullable<ReturnType<typeof statusFileState>>, offset: number): string {
+  return JSON.stringify({
+    offset,
+    file_identity: state.incarnationIdentity,
+    physical_identity: state.physicalIdentity,
+    prefix_sha: sha256(state.content.subarray(0, offset)),
+  });
 }

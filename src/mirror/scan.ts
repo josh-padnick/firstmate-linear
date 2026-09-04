@@ -2,8 +2,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Observation, StateDatabase, TaskLink } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
-import { nowIso } from "../time.ts";
-import { sidecarGeneration, statusFileState } from "./generation.ts";
+import { compareIso, nowIso } from "../time.ts";
+import { sidecarGeneration, statusCursorValue, statusFileState } from "./generation.ts";
 
 export type ScanFinding = { code: string; task: string; detail: string };
 export type ScanResult = { observations: Observation[]; findings: ScanFinding[] };
@@ -30,7 +30,7 @@ export function parseStatusLine(line: string): { verb: string; key: string; note
 function readNewLines(db: StateDatabase, path: string, consumeToEnd = false): { rows: Array<{ line: string; offset: number }>; cursorName: string; cursorValue: string; incarnationIdentity: string } {
   const name = `status:${path}`;
   const state = statusFileState(path, db.cursor(name))!;
-  const { content, offset, physicalIdentity, incarnationIdentity } = state;
+  const { content, offset, incarnationIdentity } = state;
   const remaining = content.subarray(offset);
   const lastNewline = remaining.lastIndexOf(10);
   const completeLength = lastNewline < 0 ? 0 : lastNewline + 1;
@@ -42,7 +42,7 @@ function readNewLines(db: StateDatabase, path: string, consumeToEnd = false): { 
     consumed += Buffer.byteLength(line) + 1;
   }
   const nextOffset = consumeToEnd ? content.length : offset + completeLength;
-  return { rows, cursorName: name, cursorValue: JSON.stringify({ offset: nextOffset, file_identity: incarnationIdentity, physical_identity: physicalIdentity, prefix_sha: sha256(content.subarray(0, nextOffset)) }), incarnationIdentity };
+  return { rows, cursorName: name, cursorValue: statusCursorValue(state, nextOffset), incarnationIdentity };
 }
 
 function importLegacyLinks(home: string, db: StateDatabase): void {
@@ -116,8 +116,10 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
     try {
       const summary = JSON.parse(readFileSync(summaryPath, "utf8")) as { generated?: string; active_children?: Array<{ id?: string; state?: string }> };
       for (const child of summary.active_children ?? []) {
-        if (!child.id || !child.state) continue;
+        if (!child.id || !child.state || !summary.generated) continue;
         for (const link of db.taskLinks(undefined, true).filter((item) => item.task === child.id)) {
+          const belongs = compareIso(summary.generated, link.spawned_at);
+          if (belongs === null || belongs < 0) continue;
           const observation: Observation = { id: `obs:${sha256(`${summary.generated}:${child.id}:${link.issue}:${link.lifecycle_id}:${child.state}`)}`, source: "summary", task: child.id, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: child.state, key: "summary", note: null, observed_at: summary.generated ?? nowIso(env) };
           if (db.observe(observation)) observations.push(observation);
         }
