@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
 export type EventDisposition =
   | "captured"
@@ -154,6 +154,7 @@ export class StateDatabase {
         db.exec(SCHEMA_SQL);
         if (from === 1) db.exec(MIGRATE_TO_V2_SQL);
         if (from === 3) db.exec(MIGRATE_TO_V4_SQL);
+        if (from > 0 && from < 5) db.exec(MIGRATE_TO_V5_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -444,10 +445,12 @@ export class StateDatabase {
   }
 
   finishJob(id: string, nativeId: string | null = null, at = nowIso()): void {
-    this.raw.query("UPDATE jobs SET state='done',native_id=COALESCE(?,native_id),done_at=?,last_error=NULL WHERE id=?")
-      .run(nativeId, at, id);
-    if (nativeId) {
-      const pending = this.raw.query("SELECT id,issue,created_at,deadline_at FROM promises WHERE reply_job_id=? AND state='pending'").get(id) as {
+    this.transaction(() => {
+      this.raw.query("UPDATE jobs SET state='done',native_id=COALESCE(?,native_id),done_at=?,last_error=NULL WHERE id=?")
+        .run(nativeId, at, id);
+      if (!nativeId) return;
+      const pending = this.raw.query("SELECT rowid AS _rowid,id,issue,created_at,deadline_at FROM promises WHERE reply_job_id=? AND state='pending'").get(id) as {
+        _rowid: number;
         id: string;
         issue: string;
         created_at: string;
@@ -460,6 +463,13 @@ export class StateDatabase {
         if (stagedAt === null || stagedDeadline === null || deliveredAt === null || stagedDeadline <= stagedAt) {
           throw new Error(`invalid staged promise window: ${pending.id}`);
         }
+        const newer = this.raw.query(`SELECT id FROM promises WHERE issue=? AND rowid>?
+          AND state IN ('open','overdue','kept') ORDER BY rowid DESC LIMIT 1`).get(pending.issue, pending._rowid) as { id: string } | null;
+        if (newer) {
+          this.raw.query("UPDATE promises SET state='superseded',superseded_by=?,reply_comment_id=? WHERE id=? AND state='pending'")
+            .run(newer.id, nativeId, pending.id);
+          return;
+        }
         const deliveredDeadline = formatIso(deliveredAt + stagedDeadline - stagedAt);
         this.raw.query("UPDATE promises SET state='superseded',superseded_by=? WHERE issue=? AND state IN ('open','overdue') AND id<>?")
           .run(pending.id, pending.issue, pending.id);
@@ -468,7 +478,7 @@ export class StateDatabase {
       } else {
         this.raw.query("UPDATE promises SET reply_comment_id=? WHERE reply_job_id=?").run(nativeId, id);
       }
-    }
+    });
   }
 
   retryJob(id: string, error: string, nextAttemptAt: string, dead = false): void {
@@ -510,9 +520,9 @@ export class StateDatabase {
 
   linkTask(value: TaskLink): void {
     this.raw.query(`INSERT INTO task_links(task,issue,role,worktree,harness,spawned_at,torn_down_at)
-      VALUES(?,?,?,?,?,?,?) ON CONFLICT(task,issue) DO UPDATE SET
+      VALUES(?,?,?,?,?,?,?) ON CONFLICT(task,issue,spawned_at) DO UPDATE SET
       role=excluded.role,worktree=excluded.worktree,harness=excluded.harness,
-      spawned_at=excluded.spawned_at,torn_down_at=excluded.torn_down_at`).run(
+      torn_down_at=excluded.torn_down_at`).run(
         value.task, value.issue, value.role, value.worktree, value.harness,
         value.spawned_at, value.torn_down_at,
       );

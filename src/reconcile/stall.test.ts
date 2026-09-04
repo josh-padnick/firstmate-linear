@@ -97,6 +97,33 @@ describe("stall reconciliation", () => {
     db.close();
   });
 
+  test("a primary task observation survives a later task relink", () => {
+    const { root, db } = setup();
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
+    const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    db.observe({ id: "obs:green", source: "pr", task: "worker", issue: "ABC-1", verb: "pr-green", key: "pr", note: null, observed_at: "2026-01-01T12:20:00Z" });
+    db.closeTask("worker", "2026-01-01T12:25:00Z");
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T13:00:00Z", torn_down_at: null });
+
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T13:01:00Z") / 1000) });
+
+    expect(db.promise(promise.id)).toMatchObject({ state: "kept", observation_id: "obs:green" });
+    expect(db.taskLinks("ABC-1")).toHaveLength(2);
+    db.close();
+  });
+
+  test("a closed post-promise dispatch keeps a dispatch promise", () => {
+    const { root, db } = setup();
+    const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "dispatch", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:10:00Z", torn_down_at: null });
+    db.closeTask("worker", "2026-01-01T12:20:00Z");
+
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:31:00Z") / 1000) });
+
+    expect(db.promise(promise.id)?.state).toBe("kept");
+    db.close();
+  });
+
   test("a newer promise supersedes the earlier commitment", () => {
     const { root, db } = setup();
     const first = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "status:done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:first", created_at: "2026-01-01T12:00:00Z" });
@@ -160,6 +187,31 @@ describe("stall reconciliation", () => {
     db.close();
   });
 
+  test("closed primary progress prevents a heartbeat based on older board state", () => {
+    const { root, db } = setup();
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:10:00Z", torn_down_at: null });
+    db.observe({ id: "obs:working", source: "status", task: "worker", issue: "ABC-1", verb: "working", key: "default", note: null, observed_at: "2026-01-01T12:50:00Z" });
+    db.closeTask("worker", "2026-01-01T12:55:00Z");
+
+    expect(reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T13:00:00Z") / 1000) }).emitted).toBe(0);
+    db.close();
+  });
+
+  test("a delivered promise resolves an older open heartbeat", () => {
+    const { root, db } = setup();
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+    const first = reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:46:00Z") / 1000) });
+    expect(first.emitted).toBe(1);
+    const heartbeat = db.listEvents(["waiting-for-core"])[0]!;
+    db.createPromise({ issue: "ABC-1", source_event_id: "event:captain", expected_event: "pr-green", deadline_at: "2026-01-01T13:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T13:00:00Z" });
+
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T13:01:00Z") / 1000) });
+
+    expect(db.event(heartbeat.id)?.disposition).toBe("handled-by-service");
+    db.close();
+  });
+
   test("captain-owned statuses never emit progress heartbeats", () => {
     const { root, db } = setup();
     db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T09:00:00Z" });
@@ -188,6 +240,19 @@ describe("stall reconciliation", () => {
 
     expect(reconcileStalls(root, db, config, env).emitted).toBe(0);
     expect(db.promise(promise.id)?.stalled_event_id).toBe(stalledEventId);
+    db.close();
+  });
+
+  test("a duplicate stall capture restores missing promise linkage", () => {
+    const { root, db } = setup();
+    const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    const env = { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:31:00Z") / 1000) };
+    reconcileStalls(root, db, config, env);
+    const stalledEventId = db.promise(promise.id)?.stalled_event_id;
+    db.raw.query("UPDATE promises SET state='open',stalled_event_id=NULL WHERE id=?").run(promise.id);
+
+    expect(reconcileStalls(root, db, config, env).emitted).toBe(0);
+    expect(db.promise(promise.id)).toMatchObject({ state: "overdue", stalled_event_id: stalledEventId });
     db.close();
   });
 

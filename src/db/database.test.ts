@@ -224,6 +224,21 @@ describe("state database", () => {
     db.close();
   });
 
+  test("an older reply delivered late cannot supersede a newer commitment", () => {
+    const db = database();
+    const olderJob = db.enqueue({ key: "reply-older", kind: "linear.comment", target: "ABC-1", payload: {} }, "2026-01-01T12:00:00Z");
+    const older = db.stagePromise({ issue: "ABC-1", source_event_id: "event:older", expected_event: "pr-reported", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: olderJob.id, created_at: "2026-01-01T12:00:00Z" });
+    const newerJob = db.enqueue({ key: "reply-newer", kind: "linear.comment", target: "ABC-1", payload: {} }, "2026-01-01T12:05:00Z");
+    const newer = db.stagePromise({ issue: "ABC-1", source_event_id: "event:newer", expected_event: "pr-green", deadline_at: "2026-01-01T12:35:00Z", reply_job_id: newerJob.id, created_at: "2026-01-01T12:05:00Z" });
+    db.finishJob(newerJob.id, "comment:newer", "2026-01-01T12:06:00Z");
+
+    db.finishJob(olderJob.id, "comment:older", "2026-01-01T12:10:00Z");
+
+    expect(db.promise(newer.id)?.state).toBe("open");
+    expect(db.promise(older.id)).toMatchObject({ state: "superseded", superseded_by: newer.id, reply_comment_id: "comment:older" });
+    db.close();
+  });
+
   test("report consumption follows insertion order when a late event has an old source timestamp", () => {
     const db = database();
     db.capture(event("event:first"));

@@ -54,7 +54,7 @@ function importLegacyLinks(home: string, db: StateDatabase): void {
   for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
     if (!line.trim() || line.trim().startsWith("#")) continue;
     const [task, issue] = line.split("\t");
-    if (!task || !issue || db.taskLinks(issue).some((link) => link.task === task)) continue;
+    if (!task || !issue || db.taskLinks(issue, true).some((link) => link.task === task)) continue;
     const meta = fields(join(home, "state", `${task}.meta`));
     db.linkTask({ task, issue, role: "primary", worktree: meta.worktree || null, harness: meta.harness || null, spawned_at: nowIso(), torn_down_at: existsSync(join(home, "state", `${task}.meta`)) ? null : nowIso() });
   }

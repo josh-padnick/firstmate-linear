@@ -29,10 +29,6 @@ function later(left: Progress | null, right: Progress): Progress {
   return compared === 1 || compared === 0 ? right : left;
 }
 
-function activePrimaryTasks(db: StateDatabase, issue: string): Set<string> {
-  return new Set(db.taskLinks(issue, true).filter((link) => link.role === "primary").map((link) => link.task));
-}
-
 function wasPrimaryTaskAt(db: StateDatabase, issue: string, task: string, observedAt: string): boolean {
   return db.taskLinks(issue).some((link) => link.task === task
     && link.role === "primary"
@@ -72,17 +68,18 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
     return found ? { id: found.id, kind: "comment", at: found.observed_at, detail: "firstmate comment" } : null;
   }
   if (expected === "dispatch") {
-    const found = db.taskLinks(promise.issue, true).find((item) => item.role === "primary" && atOrAfter(item.spawned_at, promise.created_at));
+    const found = db.taskLinks(promise.issue).find((item) => item.role === "primary" && atOrAfter(item.spawned_at, promise.created_at));
     return found ? { id: `dispatch:${found.task}:${found.spawned_at}`, kind: "dispatch", at: found.spawned_at, detail: `dispatch ${found.task}` } : null;
   }
   return null;
 }
 
 export function lastProgress(db: StateDatabase, issue: string): Progress | null {
-  const primary = activePrimaryTasks(db, issue);
   let latest: Progress | null = null;
   for (const item of db.observations(issue)) {
-    const taskProgress = item.task && primary.has(item.task) && (item.source === "status" || item.source === "pr");
+    const taskProgress = item.task
+      && (item.source === "status" || item.source === "pr")
+      && wasPrimaryTaskAt(db, issue, item.task, item.observed_at);
     const serviceProgress = item.verb === "firstmate-comment" || item.verb === "relay";
     if (taskProgress || serviceProgress) latest = later(latest, { id: item.id, kind: item.source, at: item.observed_at, detail: `${item.verb}${item.note ? ` ${item.note}` : ""}` });
   }
@@ -93,7 +90,7 @@ export function lastProgress(db: StateDatabase, issue: string): Progress | null 
       latest = later(latest, { id: `snapshot:${issue}:${item.observed_at}`, kind: "board", at: item.observed_at, detail: item.state });
     }
   }
-  for (const link of db.taskLinks(issue, true).filter((item) => item.role === "primary")) {
+  for (const link of db.taskLinks(issue).filter((item) => item.role === "primary")) {
     latest = later(latest, { id: `dispatch:${link.task}:${link.spawned_at}`, kind: "dispatch", at: link.spawned_at, detail: link.task });
   }
   return latest;
@@ -159,15 +156,15 @@ function emitStall(db: StateDatabase, options: {
   deadlineAt?: string;
   progress: Progress | null;
   at: string;
-}): string | null {
+}): { id: string; captured: boolean } {
+  const id = `linear:${sha256(`stalled:${options.issue}:${options.reasonKey}`)}`;
   const prior = openStall(db, options.issue);
   if (prior) {
     let priorReason = "";
     try { priorReason = (JSON.parse(prior.raw_ref) as { reason_key?: string }).reason_key ?? ""; } catch { /* different reason */ }
-    if (priorReason === options.reasonKey) return null;
+    if (priorReason === options.reasonKey) return { id, captured: false };
     db.setDisposition(prior.id, "ignored", "superseded by a changed stall reason", options.at);
   }
-  const id = `linear:${sha256(`stalled:${options.issue}:${options.reasonKey}`)}`;
   const note = `${options.note} - run fm-linear inbox show ${id}`;
   const captured = db.capture({
     id,
@@ -190,7 +187,7 @@ function emitStall(db: StateDatabase, options: {
       required: options.required,
     }),
   });
-  return captured ? id : null;
+  return { id, captured };
 }
 
 export function reconcileStalls(home: string, db: StateDatabase, config: WorkflowConfig, env: NodeJS.ProcessEnv = process.env): StallResult {
@@ -205,6 +202,7 @@ export function reconcileStalls(home: string, db: StateDatabase, config: Workflo
   }
   for (const promise of db.promises(undefined, ["open", "overdue"])) {
     promisedIssues.add(promise.issue);
+    resolveOpenHeartbeat(db, promise.issue, "promise commitment established", at);
     const observed = matchingObservation(db, promise);
     if (observed) {
       db.keepPromise(promise.id, observed.id);
@@ -221,14 +219,13 @@ export function reconcileStalls(home: string, db: StateDatabase, config: Workflo
     const team = promise.issue.split("-")[0] ?? "SYSTEM";
     const last = progress ? `${clock(progress.at)}: ${progress.detail}` : "none";
     const note = `stalled ${promise.issue}: promised ${promise.expected_event} by ${clock(promise.deadline_at)}, not observed (last progress ${last})`;
-    const eventId = emitStall(db, {
+    const emission = emitStall(db, {
       team, issue: promise.issue, reasonKey: `promise:${promise.id}:${multiple}`, note,
       required: requiredFor(promise.expected_event), kind: "promise", expected: promise.expected_event,
       deadlineAt: promise.deadline_at, progress, at,
     });
-    if (eventId) emitted += 1;
-    const stalledEventId = eventId ?? promise.stalled_event_id;
-    if (stalledEventId) db.markPromiseOverdue(promise.id, stalledEventId);
+    if (emission.captured) emitted += 1;
+    db.markPromiseOverdue(promise.id, emission.id);
     overdue += 1;
   }
 
@@ -259,7 +256,7 @@ export function reconcileStalls(home: string, db: StateDatabase, config: Workflo
     if (emitStall(db, {
       team: team.key, issue: snapshot.issue, reasonKey: `heartbeat:${snapshot.state}:${progress?.id ?? snapshot.observed_at}:${multiple}`,
       note, required: requiredFor(null), kind: "heartbeat", progress, at,
-    })) emitted += 1;
+    }).captured) emitted += 1;
   }
   return { emitted, kept, overdue };
 }

@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS task_links (
   harness TEXT,
   spawned_at TEXT NOT NULL,
   torn_down_at TEXT,
-  PRIMARY KEY (task, issue)
+  PRIMARY KEY (task, issue, spawned_at)
 );
 
 CREATE INDEX IF NOT EXISTS task_links_issue_idx ON task_links(issue, role, torn_down_at);
@@ -156,4 +156,22 @@ CREATE TABLE promises (
 INSERT INTO promises SELECT * FROM promises_v3;
 DROP TABLE promises_v3;
 CREATE INDEX promises_issue_state_idx ON promises(issue,state,created_at);
+`;
+
+export const MIGRATE_TO_V5_SQL = `
+ALTER TABLE task_links RENAME TO task_links_v4;
+DROP INDEX task_links_issue_idx;
+CREATE TABLE task_links (
+  task TEXT NOT NULL,
+  issue TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('primary', 'support')),
+  worktree TEXT,
+  harness TEXT,
+  spawned_at TEXT NOT NULL,
+  torn_down_at TEXT,
+  PRIMARY KEY (task, issue, spawned_at)
+);
+INSERT INTO task_links SELECT * FROM task_links_v4;
+DROP TABLE task_links_v4;
+CREATE INDEX task_links_issue_idx ON task_links(issue, role, torn_down_at);
 `;
