@@ -119,18 +119,44 @@ export async function captureCycle(options: {
 }): Promise<CaptureCycleResult> {
   const env = options.env ?? process.env;
   const observedAt = nowIso(env);
-  const storedCommentsCursor = options.db.cursor("linear.comments");
-  const commentsCursor = storedCommentsCursor && parseIso(storedCommentsCursor) !== null ? storedCommentsCursor : null;
-  const bootstrapCutoff = commentsCursor ? null : formatIso(nowEpoch(env) - 7200);
+  const legacyCommentsCursor = options.db.cursor("linear.comments");
+  const validLegacyCommentsCursor = legacyCommentsCursor && parseIso(legacyCommentsCursor) !== null ? legacyCommentsCursor : null;
+  const bootstrapCutoff = validLegacyCommentsCursor ? null : formatIso(nowEpoch(env) - 7200);
   const forceSince = env.FM_LINEAR_FORCE_SINCE?.trim() || null;
-  const commentsEventCutoff = forceSince ?? (commentsCursor ? overlapTimestamp(commentsCursor) : bootstrapCutoff);
   const transport = options.transport ?? new LinearTransport({
     apiKey: loadKey(resolveHome(env), env),
     fixtureDir: env.FM_LINEAR_FIXTURE_DIR,
     fixtureLog: env.FM_LINEAR_FIXTURE_LOG,
   });
-  const comments = await fetchComments(transport, commentsCursor, { forceSince: forceSince ?? bootstrapCutoff });
-  const self = comments.viewer || env.FM_LINEAR_SELF_NAME?.trim() || "firstmate";
+  const commentsByTeam = new Map<string, Awaited<ReturnType<typeof fetchComments>>>();
+  const commentCutoffs = new Map<string, string | null>();
+  const completedCommentCursors = new Map<string, string | null>();
+  let viewer: string | null = null;
+  for (const team of options.config.teams) {
+    const cursorName = `linear.comments.${team.key}`;
+    const stored = options.db.cursor(cursorName) ?? validLegacyCommentsCursor;
+    const cursor = stored && parseIso(stored) !== null ? stored : null;
+    const resumeName = `linear.comments.page.${team.key}`;
+    let resume: { since: string | null; after: string } | null = null;
+    try {
+      const parsed = JSON.parse(options.db.cursor(resumeName) ?? "null") as unknown;
+      if (parsed && typeof parsed === "object" && typeof (parsed as any).after === "string") {
+        resume = { since: typeof (parsed as any).since === "string" ? (parsed as any).since : null, after: (parsed as any).after };
+      }
+    } catch {}
+    const since = resume?.since ?? forceSince ?? (cursor ? overlapTimestamp(cursor) : bootstrapCutoff);
+    const result = await fetchComments(transport, cursor, { team: team.key, forceSince: since, after: resume?.after });
+    commentsByTeam.set(team.key, result);
+    commentCutoffs.set(team.key, since);
+    viewer ??= result.viewer;
+    if (result.resumeAfter) {
+      options.db.setCursor(resumeName, JSON.stringify({ since, after: result.resumeAfter }), observedAt);
+    } else {
+      options.db.setCursor(resumeName, "", observedAt);
+      completedCommentCursors.set(team.key, maxIso(result.comments.map((comment) => comment.updatedAt)) ?? cursor);
+    }
+  }
+  const self = viewer || env.FM_LINEAR_SELF_NAME?.trim() || "firstmate";
   const seen = new DatabaseSeenStore(options.db);
   const allEvents: LedgerEvent[] = [];
   const allHistory: LinearHistory[] = [];
@@ -143,8 +169,8 @@ export async function captureCycle(options: {
     const lastFull = options.db.cursor(`linear.full.${team.key}`);
     const fullDue = !lastFull || nowEpoch(env) - (parseIso(lastFull) ?? 0) >= 900;
     const eventCutoff = forceSince ?? (cursor ? overlapTimestamp(cursor) : bootstrapCutoff);
-    const commentCutoff = minIso(comments.comments
-      .filter((comment) => teamFromIssue(comment.issue?.identifier ?? "") === team.key)
+    const teamComments = commentsByTeam.get(team.key)?.comments ?? [];
+    const commentCutoff = minIso(teamComments
       .map((comment) => comment.updatedAt));
     const historyCutoff = minIso([eventCutoff, commentCutoff]);
     const result = await fetchIssues(transport, fullDue ? null : cursor, historyCutoff, {
@@ -175,13 +201,10 @@ export async function captureCycle(options: {
     if (fullDue) options.db.setCursor(`linear.full.${team.key}`, observedAt, observedAt);
   }
 
-  const relevantComments = comments.comments.filter((comment) => {
-    const issue = comment.issue?.identifier ?? "";
-    const team = options.config.teams.find((item) => item.key === teamFromIssue(issue));
-    if (!team || !comment.issue) return false;
-    return isManagedIssue(team, self, comment.issue);
-  });
-  allEvents.push(...deriveComments(relevantComments, seen, observedAt, commentsEventCutoff, self, bootstrapCutoff !== null));
+  for (const team of options.config.teams) {
+    const relevantComments = (commentsByTeam.get(team.key)?.comments ?? []).filter((comment) => Boolean(comment.issue && isManagedIssue(team, self, comment.issue)));
+    allEvents.push(...deriveComments(relevantComments, seen, observedAt, commentCutoffs.get(team.key) ?? null, self, bootstrapCutoff !== null));
+  }
 
   let captured = 0;
   let ignored = 0;
@@ -231,9 +254,16 @@ export async function captureCycle(options: {
     }
   }
 
-  const commentsMax = maxIso(comments.comments.map((comment) => comment.updatedAt));
-  if (commentsMax) {
-    if (commentsCursor && compareIso(commentsMax, commentsCursor) === -1) throw new Error("comments cursor would move backwards");
+  const commentsMax = maxIso([...commentsByTeam.values()].flatMap((result) => result.comments.map((comment) => comment.updatedAt)));
+  for (const [teamKey, next] of completedCommentCursors) {
+    if (!next) continue;
+    const name = `linear.comments.${teamKey}`;
+    const previous = options.db.cursor(name) ?? validLegacyCommentsCursor;
+    if (previous && compareIso(next, previous) === -1) throw new Error(`${teamKey} comments cursor would move backwards`);
+    options.db.setCursor(name, next, observedAt);
+  }
+  if (commentsMax && completedCommentCursors.size === options.config.teams.length) {
+    if (validLegacyCommentsCursor && compareIso(commentsMax, validLegacyCommentsCursor) === -1) throw new Error("comments cursor would move backwards");
     options.db.setCursor("linear.comments", commentsMax, observedAt);
   }
   for (const team of options.config.teams) {

@@ -542,7 +542,7 @@ export class StateDatabase {
     });
   }
 
-  finishJob(id: string, nativeId: string | null = null, at = nowIso(), sourceWatermarks: PromiseSourceWatermarks | null = null): void {
+  finishJob(id: string, nativeId: string | null = null, at = nowIso(), sourceWatermarks: PromiseSourceWatermarks | null = null, deliveredAtOverride?: string): void {
     this.transaction(() => {
       this.raw.query("UPDATE jobs SET state='done',native_id=COALESCE(?,native_id),done_at=?,last_error=NULL WHERE id=?")
         .run(nativeId, at, id);
@@ -557,7 +557,7 @@ export class StateDatabase {
       if (pending) {
         const stagedAt = parseIso(pending.created_at);
         const stagedDeadline = parseIso(pending.deadline_at);
-        const deliveredAt = parseIso(at);
+        const deliveredAt = parseIso(deliveredAtOverride ?? at);
         if (stagedAt === null || stagedDeadline === null || deliveredAt === null || stagedDeadline <= stagedAt) {
           throw new Error(`invalid staged promise window: ${pending.id}`);
         }
@@ -572,7 +572,7 @@ export class StateDatabase {
         this.raw.query("UPDATE promises SET state='superseded',superseded_by=? WHERE issue=? AND state IN ('open','overdue') AND id<>?")
           .run(pending.id, pending.issue, pending.id);
         this.raw.query("UPDATE promises SET state='open',reply_comment_id=?,created_at=?,deadline_at=?,source_watermarks=COALESCE(source_watermarks,?) WHERE id=? AND state='pending'")
-          .run(nativeId, at, deliveredDeadline, sourceWatermarks ? JSON.stringify(sourceWatermarks) : null, pending.id);
+          .run(nativeId, deliveredAtOverride ?? at, deliveredDeadline, sourceWatermarks ? JSON.stringify(sourceWatermarks) : null, pending.id);
       } else {
         this.raw.query("UPDATE promises SET reply_comment_id=? WHERE reply_job_id=?").run(nativeId, id);
       }

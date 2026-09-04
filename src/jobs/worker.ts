@@ -4,6 +4,7 @@ import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase, type Job, type PromiseSourceWatermarks } from "../db/database.ts";
 import { resolveHome, resolveStateDir } from "../env.ts";
 import { sha256 } from "../hash.ts";
+import { identityMatches } from "../identity.ts";
 import { isManagedIssue } from "../managed.ts";
 import { statusCursorValue, statusFileState } from "../mirror/generation.ts";
 import { capturePrSourceWatermarks, type PrInspect } from "../mirror/pr.ts";
@@ -12,8 +13,8 @@ import { LinearTransport, type TransportResult } from "../transport.ts";
 
 const RESOLVE_STATE = `query($issue:String!){viewer{id displayName} issue(id:$issue){id state{id name} team{states{nodes{id name}} members{nodes{id displayName}}}}}`;
 const UPDATE_STATE = `mutation($issue:String!,$state:String!,$assignee:String){issueUpdate(id:$issue,input:{stateId:$state,assigneeId:$assignee}){success issue{id state{name} assignee{displayName}}}}`;
-const CREATE_COMMENT = `mutation($id:String!,$issue:String!,$body:String!){commentCreate(input:{id:$id,issueId:$issue,body:$body}){success comment{id}}}`;
-const VERIFY_COMMENT = `query($id:String!){comment(id:$id){id}}`;
+const CREATE_COMMENT = `mutation($id:String!,$issue:String!,$body:String!){commentCreate(input:{id:$id,issueId:$issue,body:$body}){success comment{id createdAt}}}`;
+const VERIFY_COMMENT = `query($id:String!){comment(id:$id){id createdAt}}`;
 const RESOLVE_ISSUE = `query($issue:String!){issue(id:$issue){id}}`;
 const RESOLVE_ATTACHMENTS = `query($issue:String!){issue(id:$issue){id attachments{nodes{id url}}}}`;
 const CREATE_ATTACHMENT = `mutation($issue:String!,$url:String!,$title:String!){attachmentCreate(input:{issueId:$issue,url:$url,title:$title}){success attachment{id url}}}`;
@@ -29,6 +30,7 @@ export type JobPayload = Record<string, unknown>;
 
 export type JobOutcome = {
   nativeId?: string | null;
+  deliveredAt?: string;
   followups?: Array<{ key: string; kind: string; target: string; payload: unknown }>;
   transitionedState?: string;
   skipped?: string;
@@ -80,7 +82,7 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
   const captainStates = new Set([team?.statuses.approve_plan, team?.statuses.approve_deliverable, team?.statuses.needs_decision]);
   let assigneeId: string | null = resolved.viewer?.id ?? null;
   if (captainStates.has(target)) {
-    const captain = resolved.issue.team?.members?.nodes?.find((item: any) => item.displayName === config.captain.display_name);
+    const captain = resolved.issue.team?.members?.nodes?.find((item: any) => identityMatches(item.displayName, config.captain.display_name));
     if (!captain?.id) throw new Error(`captain not found in ${teamKey}: ${config.captain.display_name}`);
     assigneeId = captain.id;
   } else if (!assigneeId) {
@@ -133,7 +135,7 @@ async function createComment(
   body: JobPayload,
   transport: LinearTransport,
   db?: StateDatabase,
-  captureDeliveryBoundary?: (phase: "request" | "confirmed") => void,
+  captureDeliveryBoundary?: (phase: "request" | "confirmed" | "recovered", deliveredAt?: string) => void,
 ): Promise<JobOutcome> {
   const stillWaiting = (): boolean => {
     if (typeof body.waiting_event_id !== "string") return true;
@@ -150,17 +152,22 @@ async function createComment(
   captureDeliveryBoundary?.("request");
   const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue: resolved.issue.id, body: text } });
   if (result.ok) {
-    if (!(result.value.data as any)?.commentCreate?.success) throw new Error(`comment creation was not successful: ${issue}`);
-    captureDeliveryBoundary?.("confirmed");
-    return { nativeId: id };
+    const created = (result.value.data as any)?.commentCreate;
+    if (!created?.success) throw new Error(`comment creation was not successful: ${issue}`);
+    const deliveredAt = typeof created.comment?.createdAt === "string" ? created.comment.createdAt : undefined;
+    captureDeliveryBoundary?.("confirmed", deliveredAt);
+    return { nativeId: id, deliveredAt };
   }
   if (result.error.classification.class !== "already-satisfied" && result.error.classification.class !== "retryable") {
     throw new Error(result.error.message);
   }
   const verify = await transport.call("job-comment-verify", { query: VERIFY_COMMENT, variables: { id } });
   if (verify.ok && (verify.value.data as any)?.comment?.id === id) {
-    captureDeliveryBoundary?.("confirmed");
-    return { nativeId: id };
+    const deliveredAt = typeof (verify.value.data as any).comment.createdAt === "string"
+      ? (verify.value.data as any).comment.createdAt
+      : undefined;
+    captureDeliveryBoundary?.("recovered", deliveredAt);
+    return { nativeId: id, deliveredAt };
   }
   throw new Error(result.error.message);
 }
@@ -194,9 +201,12 @@ async function createAttachment(job: Job, body: JobPayload, transport: LinearTra
   throw new Error(created.error.message);
 }
 
-function relay(job: Job, body: JobPayload, env: NodeJS.ProcessEnv): JobOutcome {
+function relay(job: Job, body: JobPayload, db: StateDatabase, env: NodeJS.ProcessEnv): JobOutcome {
   const task = requiredString(body.task, "task");
   const issue = requiredString(body.issue ?? job.target, "issue");
+  const lifecycle = requiredString(body.lifecycle_id, "lifecycle_id");
+  const active = db.taskLinks(issue, true).some((link) => link.lifecycle_id === lifecycle && link.task === task && link.role === "primary");
+  if (!active) return { skipped: "relay task lifecycle is no longer active" };
   const decisionKey = typeof body.key === "string" && body.key ? body.key : null;
   const message = `Captain replied on ${issue}. Read the authoritative thread with: linear-axi issue view ${issue}`;
   const home = resolveHome(env);
@@ -278,7 +288,7 @@ export async function executeJob(job: Job, options: {
   config: WorkflowConfig;
   transport: LinearTransport;
   env?: NodeJS.ProcessEnv;
-  captureCommentDeliveryBoundary?: (phase: "request" | "confirmed") => void;
+  captureCommentDeliveryBoundary?: (phase: "request" | "confirmed" | "recovered", deliveredAt?: string) => void;
 }): Promise<JobOutcome> {
   const body = payload(job);
   if (job.kind === "linear.comment" && typeof body.waiting_event_id === "string") {
@@ -302,7 +312,10 @@ export async function executeJob(job: Job, options: {
     case "linear.issue-state": return updateIssueState(job, body, options.transport, options.config);
     case "linear.comment": return createComment(job, body, options.transport, options.db, options.captureCommentDeliveryBoundary);
     case "linear.attachment": return createAttachment(job, body, options.transport);
-    case "relay": return relay(job, body, options.env ?? process.env);
+    case "relay": {
+      if (!options.db) throw new Error("relay requires the state database");
+      return relay(job, body, options.db, options.env ?? process.env);
+    }
     case "core.ack": {
       if (!options.db) throw new Error("core acknowledgement requires the state database");
       return acknowledgeCore(job, body, options.db, options.env ?? process.env);
@@ -326,23 +339,32 @@ function preparePromiseSourceBoundary(
   job: Job,
   env: NodeJS.ProcessEnv,
   inspectPr?: PrInspect,
-  confirmed = false,
+  phase: "request" | "confirmed" | "recovered" = "request",
+  deliveredAt?: string,
 ): void {
   const pending = db.promises(job.target, ["pending"]).find((item) => item.reply_job_id === job.id);
-  if (!pending || (!confirmed && pending.source_watermarks !== null)) return;
+  if (!pending || (phase === "request" && pending.source_watermarks !== null)) return;
   let requestBoundary: PromiseSourceWatermarks | undefined;
-  if (confirmed && pending.source_watermarks) {
+  if (phase !== "request" && pending.source_watermarks) {
     try { requestBoundary = JSON.parse(pending.source_watermarks) as PromiseSourceWatermarks; }
     catch { throw new Error(`invalid promise source boundary: ${pending.id}`); }
+  }
+  if (phase === "recovered" && requestBoundary) {
+    requestBoundary.__boundary__ = {
+      ...requestBoundary.__boundary__,
+      unambiguous_after: deliveredAt ?? requestBoundary.__boundary__?.unambiguous_after,
+    };
+    db.replacePendingPromiseSourceWatermarks(pending.id, requestBoundary);
+    return;
   }
   const prWatermarks = pending.expected_event.startsWith("pr-")
     ? capturePrSourceWatermarks(resolveHome(env), db, job.target, inspectPr)
     : {};
   db.transaction(() => {
     const current = db.promise(pending.id);
-    if (!current || current.state !== "pending" || (!confirmed && current.source_watermarks !== null)) return;
+    if (!current || current.state !== "pending" || (phase === "request" && current.source_watermarks !== null)) return;
     const watermarks = promiseSourceWatermarks(db, job.target, current.expected_event, env, prWatermarks, requestBoundary);
-    if (confirmed) db.replacePendingPromiseSourceWatermarks(current.id, watermarks);
+    if (phase === "confirmed") db.replacePendingPromiseSourceWatermarks(current.id, watermarks);
     else db.setPendingPromiseSourceWatermarks(current.id, watermarks);
   });
 }
@@ -367,21 +389,29 @@ export async function processJobs(options: {
         config: options.config,
         transport: options.transport,
         env,
-        captureCommentDeliveryBoundary: (phase) => preparePromiseSourceBoundary(options.db, job, env, options.inspectPr, phase === "confirmed"),
+        captureCommentDeliveryBoundary: (phase, deliveredAt) => preparePromiseSourceBoundary(options.db, job, env, options.inspectPr, phase, deliveredAt),
       });
       if (result.skipped) {
-        options.db.skipJob(job.id, result.skipped, nowIso(env));
+        const skippedAt = nowIso(env);
+        options.db.transaction(() => {
+          options.db.skipJob(job.id, result.skipped!, skippedAt);
+          if (job.kind === "relay") {
+            const eventId = requiredString(payload(job).event_id, "event_id");
+            options.db.setDisposition(eventId, "waiting-for-core", result.skipped!, skippedAt);
+          }
+        });
         done += 1;
         continue;
       }
       options.db.transaction(() => {
         for (const followup of result.followups ?? []) options.db.enqueue(followup, nowIso(env));
         const completedAt = nowIso(env);
+        const deliveredAt = result.deliveredAt ?? completedAt;
         if (job.kind === "linear.comment" && payload(job).actor === "core") {
           options.db.observe({
             id: `obs:${sha256(`firstmate-comment:${job.id}:${result.nativeId ?? "unknown"}`)}`,
             source: "summary", task: null, issue: job.target, verb: "firstmate-comment",
-            key: result.nativeId ?? job.id, note: null, observed_at: completedAt,
+            key: result.nativeId ?? job.id, note: null, observed_at: deliveredAt,
           });
         }
         if (job.kind === "relay") {
@@ -402,7 +432,7 @@ export async function processJobs(options: {
             note: null, observed_at: completedAt,
           });
         }
-        options.db.finishJob(job.id, result.nativeId ?? null, completedAt);
+        options.db.finishJob(job.id, result.nativeId ?? null, completedAt, null, result.deliveredAt);
       });
       done += 1;
     } catch (error) {

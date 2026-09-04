@@ -57,7 +57,14 @@ export function decideRelay(options: {
   }
   const job: NewJob = {
     key: `${event.id}:relay`, kind: "relay", target: event.issue,
-    payload: { event_id: event.id, issue: event.issue, task: task.task, key: keys[0] ?? null },
+    payload: {
+      event_id: event.id,
+      issue: event.issue,
+      task: task.task,
+      lifecycle_id: task.lifecycle_id,
+      key: keys[0] ?? null,
+      requires_managed: true,
+    },
   };
   if (config.features.relay === "on") {
     return { disposition: "classified", job, note: `relay queued for ${task.task}` };

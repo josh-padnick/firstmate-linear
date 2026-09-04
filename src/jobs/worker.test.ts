@@ -5,6 +5,7 @@ import { classifyEvent } from "../classify/classify.ts";
 import { runTask } from "../commands/task.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
+import { redactedIdentity } from "../identity.ts";
 import { LinearTransport, type GraphqlPayload, type TransportResult } from "../transport.ts";
 import { scanFleet } from "../mirror/scan.ts";
 import { scanPullRequests } from "../mirror/pr.ts";
@@ -162,6 +163,34 @@ describe("job worker", () => {
     scanFleet(root, db, env);
     reconcileStalls(root, db, config, env);
     expect(db.promise(promise.id)?.state).toBe("kept");
+    db.close();
+  });
+
+  test("promise recovery preserves progress captured after authoritative delivery", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures); mkdirSync(join(root, "state"));
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-fail-500.json"), "{}");
+    await Bun.write(join(fixtures, "03-verify-missing.json"), JSON.stringify({ data: { comment: null } }));
+    await Bun.write(join(fixtures, "04-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "05-fail-500.json"), "{}");
+    const expectedId = "25b190d9-5082-4a6d-abd7-d66c0a3c1d78";
+    await Bun.write(join(fixtures, "06-verify-delivered.json"), JSON.stringify({ data: { comment: { id: expectedId, createdAt: "2026-01-01T12:20:00Z" } } }));
+    const statusPath = join(root, "state", "worker.status");
+    writeFileSync(statusPath, "");
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
+    const job = db.enqueue({ key: "comment:crash-recovery", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "I will finish", actor: "core" } }, "2026-01-01T12:00:00Z");
+    const promise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:crash", expected_event: "status:done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: job.id, created_at: "2026-01-01T12:00:00Z" });
+    const transport = new LinearTransport({ fixtureDir: fixtures });
+
+    await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:20:00Z") / 1000) } });
+    appendFileSync(statusPath, "done: after accepted comment\n");
+    scanFleet(root, db, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:21:00Z") / 1000) });
+    await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) } });
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
+
+    expect(db.promise(promise.id)).toMatchObject({ state: "kept", created_at: "2026-01-01T12:20:00Z", reply_comment_id: expectedId });
     db.close();
   });
 
@@ -389,7 +418,9 @@ describe("job worker", () => {
     const script = join(bin, "fm-send.sh");
     writeFileSync(script, "#!/bin/sh\nexit 0\n"); chmodSync(script, 0o755);
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.capture({ ...eventRecord("event:relay"), disposition: "classified" }, [{ key: "event:relay:relay", kind: "relay", target: "ABC-1", payload: { event_id: "event:relay", issue: "ABC-1", task: "task-1", key: "choice" } }]);
+    db.linkTask({ task: "task-1", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const lifecycle = db.taskLinks("ABC-1", true)[0]!.lifecycle_id;
+    db.capture({ ...eventRecord("event:relay"), disposition: "classified" }, [{ key: "event:relay:relay", kind: "relay", target: "ABC-1", payload: { event_id: "event:relay", issue: "ABC-1", task: "task-1", lifecycle_id: lifecycle, key: "choice" } }]);
     const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env: { FM_HOME: root }, maxAttempts: 1 });
     expect(result.done).toBe(1);
     expect(db.event("event:relay")?.disposition).toBe("handled-by-service");
@@ -403,10 +434,45 @@ describe("job worker", () => {
     const script = join(bin, "fm-send.sh");
     writeFileSync(script, "#!/bin/sh\necho refused >&2\nexit 1\n"); chmodSync(script, 0o755);
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.capture({ ...eventRecord("event:relay-failed"), disposition: "classified" }, [{ key: "event:relay-failed:relay", kind: "relay", target: "ABC-1", payload: { event_id: "event:relay-failed", issue: "ABC-1", task: "task-1", key: "choice" } }]);
+    db.linkTask({ task: "task-1", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const lifecycle = db.taskLinks("ABC-1", true)[0]!.lifecycle_id;
+    db.capture({ ...eventRecord("event:relay-failed"), disposition: "classified" }, [{ key: "event:relay-failed:relay", kind: "relay", target: "ABC-1", payload: { event_id: "event:relay-failed", issue: "ABC-1", task: "task-1", lifecycle_id: lifecycle, key: "choice" } }]);
     const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env: { FM_HOME: root }, maxAttempts: 1 });
     expect(result.dead).toBe(1);
     expect(db.event("event:relay-failed")?.disposition).toBe("waiting-for-core");
+    db.close();
+  });
+
+  test("a relay refuses to cross into a replacement task lifecycle", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const bin = join(root, "bin"); mkdirSync(bin, { recursive: true });
+    const calls = join(root, "relay-calls");
+    const script = join(bin, "fm-send.sh");
+    writeFileSync(script, `#!/bin/sh\nprintf called >> "${calls}"\n`); chmodSync(script, 0o755);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.linkTask({ task: "task-1", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const originalLifecycle = db.taskLinks("ABC-1", true)[0]!.lifecycle_id;
+    db.capture({ ...eventRecord("event:stale-relay"), disposition: "classified" }, [{ key: "event:stale-relay:relay", kind: "relay", target: "ABC-1", payload: { event_id: "event:stale-relay", issue: "ABC-1", task: "task-1", lifecycle_id: originalLifecycle, key: null } }]);
+    db.closeTask("task-1", "2026-01-01T00:01:00Z");
+    db.linkTask({ task: "task-1", issue: "ABC-2", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:02:00Z", torn_down_at: null });
+
+    const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env: { FM_HOME: root } });
+
+    expect(result.done).toBe(1);
+    expect(existsSync(calls)).toBe(false);
+    expect(db.event("event:stale-relay")).toMatchObject({ disposition: "waiting-for-core", note: "relay task lifecycle is no longer active" });
+    db.close();
+  });
+
+  test("recorded captain identity resolves captain-owned state assignment", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { viewer: { id: "me" }, issue: { id: "issue-id", state: { name: "Building" }, team: { states: { nodes: [{ id: "decision", name: "Needs Decision" }] }, members: { nodes: [{ id: "captain-id", displayName: redactedIdentity("Captain") }] } } } } }));
+    await Bun.write(join(fixtures, "02-update.json"), JSON.stringify({ data: { issueUpdate: { success: true } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.enqueue({ key: "state:captain", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Needs Decision" } }, "2026-01-01T00:00:00Z");
+    expect((await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
+    expect(db.jobs()[0]?.state).toBe("done");
     db.close();
   });
 

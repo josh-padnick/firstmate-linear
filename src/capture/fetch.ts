@@ -4,8 +4,9 @@ import type { LinearComment, LinearHistory, LinearIssue } from "./types.ts";
 
 const DEFAULT_MAX_PAGES = 100;
 
-function commentsQuery(since: string | null): string {
-  const filter = since ? `,filter:{updatedAt:{gte:"${since}"}}` : "";
+function commentsQuery(team: string, since: string | null): string {
+  const updated = since ? `,updatedAt:{gte:"${since}"}` : "";
+  const filter = `,filter:{issue:{team:{key:{eq:"${team}"}}}${updated}}`;
   return `query($after:String){viewer{id displayName} comments(first:50,after:$after,orderBy:updatedAt${filter}){pageInfo{hasNextPage endCursor} nodes{id createdAt updatedAt body user{id displayName} issue{identifier assignee{id displayName} project{name slugId}} parent{id}}}}`;
 }
 
@@ -20,24 +21,26 @@ const HISTORY_QUERY =
 export type FetchCommentsResult = {
   comments: LinearComment[];
   viewer: string | null;
+  resumeAfter: string | null;
 };
 
 export async function fetchComments(
   transport: LinearTransport,
   cursor: string | null,
-  options: { forceSince?: string | null; maxPages?: number } = {},
+  options: { team?: string; forceSince?: string | null; maxPages?: number; after?: string | null } = {},
 ): Promise<FetchCommentsResult> {
+  if (!options.team) throw new Error("team key is required");
   const since = options.forceSince ?? (cursor ? overlapTimestamp(cursor) : null);
   if (cursor && !since && !options.forceSince) {
     throw new Error("invalid comments cursor");
   }
   const comments: LinearComment[] = [];
-  let after = "";
+  let after = options.after ?? "";
   let viewer: string | null = null;
   const maxPages = options.maxPages ?? Number(process.env.FM_LINEAR_MAX_PAGES ?? DEFAULT_MAX_PAGES);
   for (let page = 1; page <= maxPages; page += 1) {
     const result = await transport.call("comments", {
-      query: commentsQuery(since),
+      query: commentsQuery(options.team, since),
       variables: { after: after || null },
     });
     if (!result.ok) {
@@ -58,7 +61,7 @@ export async function fetchComments(
     }
     comments.push(...data.comments.nodes);
     if (!data.comments.pageInfo?.hasNextPage) {
-      return { comments, viewer };
+      return { comments, viewer, resumeAfter: null };
     }
     const endCursor = data.comments.pageInfo.endCursor;
     if (!endCursor) {
@@ -66,7 +69,7 @@ export async function fetchComments(
     }
     after = endCursor;
   }
-  throw new Error("comments pagination exceeded limit");
+  return { comments, viewer, resumeAfter: after };
 }
 
 export type FetchIssuesResult = {
@@ -176,6 +179,11 @@ export async function fetchIssues(
       for (const node of data.issue.history.nodes) {
         history.push({ ...node, issue: item.identifier });
       }
+      const crossedCutoff = Boolean(threshold && data.issue.history.nodes.some((node) => {
+        const compared = compareIso(node.createdAt, threshold);
+        return compared !== null && compared <= 0;
+      }));
+      if (crossedCutoff) break;
       if (!data.issue.history.pageInfo?.hasNextPage) {
         break;
       }

@@ -20,7 +20,7 @@ describe("relay decision", () => {
     db.observe({ id: "o1", source: "status", task: "task-1", issue: "ABC-1", verb: "needs-decision", key: "choice", note: null, observed_at: "2026-01-01T00:00:00Z" });
     const result = decideRelay({ event: { id: "e1", team: "ABC", issue: "ABC-1", type: "comment", author: "Captain", body: "A", created_at: "2026-01-01T00:01:00Z" }, db, config: base, home });
     expect(result.disposition).toBe("classified");
-    expect(result.job?.payload).toMatchObject({ task: "task-1", key: "choice" });
+    expect(result.job?.payload).toMatchObject({ task: "task-1", lifecycle_id: db.taskLinks("ABC-1", true)[0]!.lifecycle_id, key: "choice", requires_managed: true });
     db.close();
   });
 
