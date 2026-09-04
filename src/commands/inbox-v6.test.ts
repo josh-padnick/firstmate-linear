@@ -13,6 +13,14 @@ describe("inbox commands", () => {
     mkdirSync(join(home, "config"), { recursive: true });
     const fixtures = join(home, "fixtures"); mkdirSync(fixtures);
     writeFileSync(join(fixtures, "01-comments.json"), JSON.stringify({ data: { comments: { pageInfo: { hasNextPage: false }, nodes: [] } } }));
+    writeFileSync(join(fixtures, "02-issue.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" },
+      issue: {
+        identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:00:02Z",
+        state: { name: "Building" }, assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" },
+        project: null, labels: { nodes: [] }, history: { pageInfo: { hasNextPage: false }, nodes: [] },
+      },
+    } }));
     writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
     const db = StateDatabase.open({ FM_HOME: home });
     db.capture({ id: "event:stall", team: "ABC", issue: "ABC-1", type: "stalled", token: "stalled", author: "fm-linear", body_sha: null, created_at: "2026-01-01T00:00:00Z", captured_at: "2026-01-01T00:00:00Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
@@ -64,6 +72,41 @@ describe("inbox commands", () => {
     expect(after.receipt(receipt)?.consumed_at).toBeNull();
     expect(after.event("event:stall")?.disposition).toBe("waiting-for-core");
     expect(after.listEvents().some((event) => event.created_at === "2026-01-01T00:00:02Z")).toBe(true);
+    after.close();
+  });
+
+  test("handle rejects an empty sync after the issue leaves managed scope", () => {
+    const home = mkdtempSync("/private/tmp/fml-inbox-"); roots.push(home);
+    mkdirSync(join(home, "config"), { recursive: true });
+    const fixtures = join(home, "fixtures"); mkdirSync(fixtures);
+    writeFileSync(join(fixtures, "01-comments.json"), JSON.stringify({ data: { comments: {
+      pageInfo: { hasNextPage: false }, nodes: [],
+    } } }));
+    writeFileSync(join(fixtures, "02-issue.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" },
+      issue: {
+        identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:00:02Z",
+        state: { name: "Building" }, assignee: { displayName: "Someone Else" }, creator: { displayName: "Captain" },
+        project: null, labels: { nodes: [] }, history: { pageInfo: { hasNextPage: false }, nodes: [] },
+      },
+    } }));
+    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: assignee:self\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    const db = StateDatabase.open({ FM_HOME: home });
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    db.capture({ id: "event:stall", team: "ABC", issue: "ABC-1", type: "stalled", token: "stalled", author: "fm-linear", body_sha: null, created_at: "2026-01-01T00:00:00Z", captured_at: "2026-01-01T00:00:00Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
+    const receipt = db.issueReceipt(["event:stall"], "2026-01-01T00:01:00Z");
+    db.close();
+
+    const result = spawnSync(join(process.cwd(), "bin", "fm-linear"), ["inbox", "handle", "event:stall", "--receipt", receipt], {
+      env: { ...process.env, FM_HOME: home, FM_LINEAR_FIXTURE_DIR: fixtures }, encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("issue is no longer managed");
+    const after = StateDatabase.open({ FM_HOME: home });
+    expect(after.receipt(receipt)?.consumed_at).toBeNull();
+    expect(after.event("event:stall")?.disposition).toBe("waiting-for-core");
+    expect(after.latestSnapshot("ABC-1")?.managed).toBe(false);
     after.close();
   });
 

@@ -61,22 +61,30 @@ export async function synchronizeReceiptCaptainComments(options: {
     after = comments.pageInfo.endCursor;
     if (page === maxPages) throw new Error("receipt comments pagination exceeded limit");
   }
-  if (!discovered.length) return;
-
   const maxHistoryPages = Number(options.env.FM_LINEAR_MAX_HISTORY_PAGES ?? 100);
   const issueState = await fetchIssueSnapshot(transport, options.issue, { historyCutoff: since, maxPages: maxHistoryPages });
   if (!issueState) throw new Error(`issue not found during receipt synchronization: ${options.issue}`);
   const viewer = issueState.viewer || options.env.FM_LINEAR_SELF_NAME?.trim() || "firstmate";
   const managed = isManagedIssue(team, viewer, issueState.issue);
   const observedAt = nowIso(options.env);
+  if (!managed) {
+    options.db.snapshot(snapshotFromLinearIssue(
+      issueState.issue,
+      team.agent_labels,
+      observedAt,
+      false,
+      options.config.captain.display_name,
+    ));
+    throw new Error(`issue is no longer managed: ${options.issue}`);
+  }
+  if (!discovered.length) return;
   options.db.snapshot(snapshotFromLinearIssue(
     issueState.issue,
     team.agent_labels,
     observedAt,
-    managed,
+    true,
     options.config.captain.display_name,
   ));
-  if (!managed) throw new Error(`issue is no longer managed: ${options.issue}`);
 
   const localSeen = new Set<string>();
   const seen: SeenStore = {

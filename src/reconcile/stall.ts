@@ -152,7 +152,8 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
 
 export function lastProgress(db: StateDatabase, issue: string): Progress | null {
   let latest: Progress | null = null;
-  for (const item of db.observations(issue)) {
+  const observations = db.observations(issue);
+  for (const item of observations) {
     const taskProgress = item.task
       && (item.source === "status" || item.source === "pr")
       && wasPrimaryTaskAt(db, item);
@@ -162,9 +163,20 @@ export function lastProgress(db: StateDatabase, issue: string): Progress | null 
   const snapshots = db.snapshots(issue);
   for (let index = 0; index < snapshots.length; index += 1) {
     const item = snapshots[index]!;
-    if (index === 0 || snapshots[index - 1]!.state !== item.state) {
-      latest = later(latest, { id: `snapshot:${issue}:${item.observed_at}`, kind: "board", at: item.observed_at, detail: item.state });
+    const previous = index === 0 ? null : snapshots[index - 1]!;
+    if (previous?.state === item.state) continue;
+    let transition: Observation | null = null;
+    for (const observation of observations) {
+      if (observation.source !== "linear" || observation.verb !== "board-transition" || observation.key !== item.state) continue;
+      const beforeSnapshot = compareIso(observation.observed_at, item.observed_at);
+      const afterPrevious = previous ? compareIso(observation.observed_at, previous.observed_at) : 0;
+      if (beforeSnapshot === null || beforeSnapshot === 1 || afterPrevious === null || afterPrevious === -1) continue;
+      if (previous && observation.note && observation.note !== previous.state) continue;
+      transition = observation;
     }
+    latest = transition
+      ? later(latest, { id: transition.id, kind: "board", at: transition.observed_at, detail: item.state })
+      : later(latest, { id: `snapshot:${issue}:${item.observed_at}`, kind: "board", at: item.observed_at, detail: item.state });
   }
   for (const link of db.taskLinks(issue).filter((item) => item.role === "primary")) {
     latest = later(latest, { id: `dispatch:${link.task}:${link.spawned_at}`, kind: "dispatch", at: link.spawned_at, detail: link.task });

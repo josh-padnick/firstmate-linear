@@ -12,6 +12,14 @@ function setup(): { home: string; env: NodeJS.ProcessEnv; receipt: string } {
   const home = mkdtempSync("/private/tmp/fml-act-"); roots.push(home); mkdirSync(join(home, "config"));
   const fixtures = join(home, "fixtures"); mkdirSync(fixtures);
   writeFileSync(join(fixtures, "01-comments.json"), JSON.stringify({ data: { comments: { pageInfo: { hasNextPage: false }, nodes: [] } } }));
+  writeFileSync(join(fixtures, "02-issue.json"), JSON.stringify({ data: {
+    viewer: { displayName: "Firstmate" },
+    issue: {
+      identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:00:03Z",
+      state: { name: "Approve Deliverable" }, assignee: { displayName: "Captain" }, creator: { displayName: "Captain" },
+      project: null, labels: { nodes: [] }, history: { pageInfo: { hasNextPage: false }, nodes: [] },
+    },
+  } }));
   writeFileSync(join(home, "config", "linear-workflow.yaml"), `version: 1\ncaptain:\n  display_name: Captain\nteams:\n  - key: ABC\n    managed: all\n    projects: []\n    statuses:\n      approve_deliverable: Approve Deliverable\n      building: Building\n      validating_code: Validating Code\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n`);
   const env = { FM_HOME: home, FM_LINEAR_FIXTURE_DIR: fixtures };
   const db = StateDatabase.open(env);
