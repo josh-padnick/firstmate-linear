@@ -11,6 +11,8 @@ describe("inbox commands", () => {
   test("a service event receipt rejects newer captain input", () => {
     const home = mkdtempSync("/private/tmp/fml-inbox-"); roots.push(home);
     mkdirSync(join(home, "config"), { recursive: true });
+    const fixtures = join(home, "fixtures"); mkdirSync(fixtures);
+    writeFileSync(join(fixtures, "01-comments.json"), JSON.stringify({ data: { comments: { pageInfo: { hasNextPage: false }, nodes: [] } } }));
     writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
     const db = StateDatabase.open({ FM_HOME: home });
     db.capture({ id: "event:stall", team: "ABC", issue: "ABC-1", type: "stalled", token: "stalled", author: "fm-linear", body_sha: null, created_at: "2026-01-01T00:00:00Z", captured_at: "2026-01-01T00:00:00Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
@@ -19,11 +21,41 @@ describe("inbox commands", () => {
     db.close();
 
     const result = spawnSync(join(process.cwd(), "bin", "fm-linear"), ["inbox", "handle", "event:stall", "--receipt", receipt], {
-      env: { ...process.env, FM_HOME: home }, encoding: "utf8",
+      env: { ...process.env, FM_HOME: home, FM_LINEAR_FIXTURE_DIR: fixtures }, encoding: "utf8",
     });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("stale receipt");
     expect(result.stderr).toContain("fm-linear inbox show event:captain");
     expect(result.stderr).not.toContain("at StateDatabase");
+  });
+
+  test("handle synchronizes uncaptured captain input before committing", () => {
+    const home = mkdtempSync("/private/tmp/fml-inbox-"); roots.push(home);
+    mkdirSync(join(home, "config"), { recursive: true });
+    const fixtures = join(home, "fixtures"); mkdirSync(fixtures);
+    writeFileSync(join(fixtures, "01-comments.json"), JSON.stringify({ data: { comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [{
+        id: "linear-comment-new", createdAt: "2026-01-01T00:00:02Z", updatedAt: "2026-01-01T00:00:02Z",
+        body: "Wait for the revised direction", user: { displayName: "Captain" },
+        issue: { identifier: "ABC-1" }, parent: null,
+      }],
+    } } }));
+    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    const db = StateDatabase.open({ FM_HOME: home });
+    db.capture({ id: "event:stall", team: "ABC", issue: "ABC-1", type: "stalled", token: "stalled", author: "fm-linear", body_sha: null, created_at: "2026-01-01T00:00:00Z", captured_at: "2026-01-01T00:00:00Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
+    const receipt = db.issueReceipt(["event:stall"], "2026-01-01T00:01:00Z");
+    db.close();
+
+    const result = spawnSync(join(process.cwd(), "bin", "fm-linear"), ["inbox", "handle", "event:stall", "--receipt", receipt], {
+      env: { ...process.env, FM_HOME: home, FM_LINEAR_FIXTURE_DIR: fixtures }, encoding: "utf8",
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("stale receipt");
+    const after = StateDatabase.open({ FM_HOME: home });
+    expect(after.receipt(receipt)?.consumed_at).toBeNull();
+    expect(after.event("event:stall")?.disposition).toBe("waiting-for-core");
+    expect(after.listEvents().some((event) => event.created_at === "2026-01-01T00:00:02Z")).toBe(true);
+    after.close();
   });
 });

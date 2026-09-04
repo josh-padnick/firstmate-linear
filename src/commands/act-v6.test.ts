@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
+import { LinearTransport } from "../transport.ts";
 import { runActV6 } from "./act-v6.ts";
 
 const roots: string[] = [];
@@ -160,6 +161,39 @@ describe("v6 act read gate", async () => {
     expect(after.jobs()).toHaveLength(0);
     expect(after.receipt(receipt)?.consumed_at).toBeNull();
     expect(after.listEvents().some((event) => event.author === "Captain" && event.created_at === "2026-01-01T00:00:04Z")).toBe(true);
+    after.close();
+  });
+
+  test("receipt synchronization starts from authorized event chronology", async () => {
+    const { env, receipt } = setup();
+    const transport = new LinearTransport({
+      apiKey: "test",
+      fetchImpl: async (_input, init) => {
+        const payload = JSON.parse(String(init?.body)) as { query: string };
+        const since = /updatedAt:\{gte:"([^"]+)"/.exec(payload.query)?.[1] ?? "";
+        const nodes = since <= "2026-01-01T00:00:02Z" ? [{
+          id: "linear-comment-between-event-and-receipt",
+          createdAt: "2026-01-01T00:00:02Z",
+          updatedAt: "2026-01-01T00:00:02Z",
+          body: "Use the other approach",
+          user: { displayName: "Captain" },
+          issue: { identifier: "ABC-1" },
+          parent: null,
+        }] : [];
+        return new Response(JSON.stringify({ data: { comments: { pageInfo: { hasNextPage: false }, nodes } } }), { status: 200 });
+      },
+    });
+
+    expect(await runActV6(
+      ["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"],
+      env,
+      { transport },
+    )).toBe(1);
+
+    const after = StateDatabase.open(env);
+    expect(after.jobs()).toHaveLength(0);
+    expect(after.receipt(receipt)?.consumed_at).toBeNull();
+    expect(after.listEvents().some((event) => event.created_at === "2026-01-01T00:00:02Z")).toBe(true);
     after.close();
   });
 

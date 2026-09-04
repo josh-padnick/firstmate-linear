@@ -4,6 +4,8 @@ import { loadConfig } from "../config/load.ts";
 import { resolveHome } from "../env.ts";
 import { firstmateOwnedStatuses } from "../reconcile/stall.ts";
 import { buildIssueStatus, isCaptainStatusQuery } from "./status.ts";
+import type { LinearTransport } from "../transport.ts";
+import { synchronizeReceiptCaptainComments } from "./receipt-sync.ts";
 
 const PENDING = ["waiting-for-core"] as const;
 
@@ -36,7 +38,7 @@ export function renderEvent(event: DomainEvent, statusFacts: string | null = nul
   ].join("\n");
 }
 
-export function runInboxV6(args: string[], env: NodeJS.ProcessEnv = process.env): number {
+export async function runInboxV6(args: string[], env: NodeJS.ProcessEnv = process.env, dependencies: { transport?: LinearTransport } = {}): Promise<number> {
   const db = StateDatabase.open(env);
   try {
     const config = loadConfig(env);
@@ -92,6 +94,12 @@ export function runInboxV6(args: string[], env: NodeJS.ProcessEnv = process.env)
         return 1;
       }
       try {
+        const team = config.teams.find((item) => item.key === event.team);
+        if (!team) throw new Error(`unmanaged team: ${event.team}`);
+        await synchronizeReceiptCaptainComments({
+          db, receiptId, issue: event.issue, team, captain: config.captain.display_name, env,
+          transport: dependencies.transport,
+        });
         db.handleWithReceipt(event.id, receiptId, config.captain.display_name, note);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
