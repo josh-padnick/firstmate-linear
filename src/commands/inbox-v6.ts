@@ -17,6 +17,34 @@ function rawObject(event: DomainEvent): Record<string, unknown> | null {
   } catch { return null; }
 }
 
+function commentFields(event: DomainEvent): { commentId: string; rootId: string; body: string } | null {
+  if (event.type !== "comment") return null;
+  const raw = rawObject(event);
+  const commentId = typeof raw?.comment_id === "string" ? raw.comment_id : null;
+  if (!commentId) return null;
+  const parentId = typeof raw?.parent_id === "string" && raw.parent_id ? raw.parent_id : null;
+  return {
+    commentId,
+    rootId: parentId ?? commentId,
+    body: typeof raw?.body === "string" ? raw.body : "[full comment body unavailable]",
+  };
+}
+
+function threadContext(db: StateDatabase, event: DomainEvent): string {
+  const current = commentFields(event);
+  if (!current) return "";
+  const byComment = new Map<string, { event: DomainEvent; body: string }>();
+  for (const candidate of db.listEvents().filter((item) => item.issue === event.issue && item.id !== event.id)) {
+    const comment = commentFields(candidate);
+    if (comment?.rootId === current.rootId) byComment.set(comment.commentId, { event: candidate, body: comment.body });
+  }
+  const prior = [...byComment.values()].slice(-2);
+  const lines = [`thread root: ${current.rootId}`, "thread context (last two prior comments):"];
+  if (!prior.length) lines.push("- no prior captured comments");
+  else for (const item of prior) lines.push(`- ${item.event.author}: ${item.body}`);
+  return `${lines.join("\n")}\n`;
+}
+
 export function renderEvent(event: DomainEvent, statusFacts: string | null = null): string {
   let body = event.raw_ref;
   try { body = JSON.stringify(JSON.parse(event.raw_ref), null, 2); } catch { /* retain raw */ }
@@ -77,7 +105,7 @@ export async function runInboxV6(args: string[], env: NodeJS.ProcessEnv = proces
           ? buildIssueStatus(resolveHome(env), db, event.issue)
           : null;
         const evidence = event.token === "stalled" ? `\n${transcriptTail(db, event.issue, config.evidence.transcript_tail, env)}` : "";
-        process.stdout.write(`${renderEvent(event, statusFacts)}${evidence}\nreceipt: ${receipt}\n`);
+        process.stdout.write(`${threadContext(db, event)}${renderEvent(event, statusFacts)}${evidence}\nreceipt: ${receipt}\n`);
       }
       return 0;
     }

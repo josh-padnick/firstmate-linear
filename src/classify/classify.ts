@@ -24,6 +24,7 @@ export type ClassifiableEvent = {
   type: string;
   author: string;
   body?: string | null;
+  parent_id?: string | null;
   from_state?: WorkflowRole | null;
   to_state?: WorkflowRole | null;
   from_assignee?: string | null;
@@ -104,6 +105,7 @@ function acknowledgementJob(event: ClassifiableEvent, gateRole: GateRole, next: 
     payload: {
       issue: event.issue,
       body: `Approved at ${gateRole} -> ${next}.`,
+      actor: "service",
       requires_managed: true,
     },
   };

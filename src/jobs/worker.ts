@@ -15,7 +15,7 @@ import { isCaptainOwnedRole } from "../workflow/roles.ts";
 
 const RESOLVE_STATE = `query($issue:String!){viewer{id displayName} issue(id:$issue){id identifier assignee{displayName} project{name slugId} state{id name} team{states{nodes{id name}} members{nodes{id displayName}}}}}`;
 const UPDATE_STATE = `mutation($issue:String!,$state:String!,$assignee:String){issueUpdate(id:$issue,input:{stateId:$state,assigneeId:$assignee}){success issue{id state{name} assignee{displayName}}}}`;
-const CREATE_COMMENT = `mutation($id:String!,$issue:String!,$body:String!){commentCreate(input:{id:$id,issueId:$issue,body:$body}){success comment{id createdAt}}}`;
+const CREATE_COMMENT = `mutation($id:String!,$issue:String!,$body:String!,$parentId:String){commentCreate(input:{id:$id,issueId:$issue,body:$body,parentId:$parentId}){success comment{id createdAt}}}`;
 const VERIFY_COMMENT = `query($id:String!){comment(id:$id){id createdAt}}`;
 const RESOLVE_ISSUE = `query($issue:String!){viewer{displayName} issue(id:$issue){id identifier assignee{displayName} project{name slugId}}}`;
 const RESOLVE_ATTACHMENTS = `query($issue:String!){viewer{displayName} issue(id:$issue){id identifier assignee{displayName} project{name slugId} attachments{nodes{id url}}}}`;
@@ -33,6 +33,7 @@ export type JobPayload = Record<string, unknown>;
 export type JobOutcome = {
   nativeId?: string | null;
   deliveredAt?: string;
+  completionNote?: string;
   followups?: Array<{ key: string; kind: string; target: string; payload: unknown }>;
   transitionedRole?: WorkflowRole;
   skipped?: string;
@@ -87,7 +88,16 @@ async function updateIssueRole(job: Job, body: JobPayload, transport: LinearTran
     nativeId: resolved.issue.id,
     followups: note ? [{
       key: `${job.key}:comment`, kind: "linear.comment", target: issue,
-      payload: { issue, body: note, requires_managed: body.requires_managed === true || undefined },
+      payload: {
+        issue,
+        body: note,
+        actor: body.actor,
+        requires_managed: body.requires_managed === true || undefined,
+        decision_new_thread: body.decision_new_thread,
+        decision_key: body.decision_key,
+        decision_task: body.decision_task,
+        decision_lifecycle_id: body.decision_lifecycle_id,
+      },
     }] : undefined,
   });
   const currentRole = roleForState(team, resolved.issue.state?.name);
@@ -162,6 +172,34 @@ function promiseSourceWatermarks(
   return watermarks;
 }
 
+async function ensureActivityRoot(
+  issue: string,
+  issueId: string,
+  db: StateDatabase,
+  config: WorkflowConfig,
+  transport: LinearTransport,
+  replacedRoot?: string,
+): Promise<string> {
+  const current = db.latestSnapshot(issue)?.activity_root_id ?? null;
+  if (current && !replacedRoot) return current;
+  const id = nativeUuid(`activity-root:${issue}:${replacedRoot ?? "initial"}`);
+  const result = await transport.call("job-comment-activity-root", {
+    query: CREATE_COMMENT,
+    variables: { id, issue: issueId, body: config.comments.activity_root_body, parentId: null },
+  });
+  if (result.ok) {
+    const created = (result.value.data as any)?.commentCreate;
+    if (!created?.success) throw new Error(`activity root creation was not successful: ${issue}`);
+  } else if (result.error.classification.class === "already-satisfied" || result.error.classification.class === "retryable") {
+    const verify = await transport.call("job-comment-activity-root-verify", { query: VERIFY_COMMENT, variables: { id } });
+    if (!verify.ok || (verify.value.data as any)?.comment?.id !== id) throw new Error(result.error.message);
+  } else {
+    throw new Error(result.error.message);
+  }
+  db.setActivityRootId(issue, id);
+  return id;
+}
+
 async function createComment(
   job: Job,
   body: JobPayload,
@@ -178,19 +216,52 @@ async function createComment(
   if (!stillWaiting()) return { skipped: "waiting event is no longer open" };
   const issue = requiredString(body.issue ?? job.target, "issue");
   const text = requiredString(body.body, "body");
+  let parentId = typeof body.parent_id === "string" && body.parent_id ? body.parent_id : null;
   const id = nativeUuid(job.key);
   const resolved = value(await transport.call("job-resolve-comment-issue", { query: RESOLVE_ISSUE, variables: { issue } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
   if (!mutationRemainsManaged(body, resolved, config, issue)) return { skipped: "issue is outside managed scope" };
   if (!stillWaiting()) return { skipped: "waiting event is no longer open" };
+  const activityThread = config.comments.activity_thread && body.actor === "service" && body.decision_new_thread !== true;
+  if (activityThread) {
+    if (!db) throw new Error("service activity comment requires the state database");
+    parentId = await ensureActivityRoot(issue, resolved.issue.id, db, config, transport);
+  }
   captureDeliveryBoundary?.("request");
-  const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue: resolved.issue.id, body: text } });
+  const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue: resolved.issue.id, body: text, parentId } });
   if (result.ok) {
     const created = (result.value.data as any)?.commentCreate;
     if (!created?.success) throw new Error(`comment creation was not successful: ${issue}`);
     const deliveredAt = typeof created.comment?.createdAt === "string" ? created.comment.createdAt : undefined;
     captureDeliveryBoundary?.("confirmed", deliveredAt);
     return { nativeId: id, deliveredAt };
+  }
+  if (parentId && result.error.classification.class === "precondition-changed") {
+    if (activityThread) {
+      const replacementRoot = await ensureActivityRoot(issue, resolved.issue.id, db!, config, transport, parentId);
+      const retried = await transport.call("job-comment-activity-root-retry", {
+        query: CREATE_COMMENT,
+        variables: { id, issue: resolved.issue.id, body: text, parentId: replacementRoot },
+      });
+      if (!retried.ok) throw new Error(retried.error.message);
+      const created = (retried.value.data as any)?.commentCreate;
+      if (!created?.success) throw new Error(`comment creation was not successful after activity root replacement: ${issue}`);
+      const deliveredAt = typeof created.comment?.createdAt === "string" ? created.comment.createdAt : undefined;
+      captureDeliveryBoundary?.("confirmed", deliveredAt);
+      return { nativeId: id, deliveredAt, completionNote: `activity-root-replaced: ${result.error.message}` };
+    }
+    const downgraded = await transport.call("job-comment-parent-downgrade", {
+      query: CREATE_COMMENT,
+      variables: { id, issue: resolved.issue.id, body: text, parentId: null },
+    });
+    if (downgraded.ok) {
+      const created = (downgraded.value.data as any)?.commentCreate;
+      if (!created?.success) throw new Error(`comment creation was not successful after parent downgrade: ${issue}`);
+      const deliveredAt = typeof created.comment?.createdAt === "string" ? created.comment.createdAt : undefined;
+      captureDeliveryBoundary?.("confirmed", deliveredAt);
+      return { nativeId: id, deliveredAt, completionNote: `parent-downgraded: ${result.error.message}` };
+    }
+    throw new Error(downgraded.error.message);
   }
   if (result.error.classification.class !== "already-satisfied" && result.error.classification.class !== "retryable") {
     throw new Error(result.error.message);
@@ -498,6 +569,22 @@ export async function processJobs(options: {
             key: result.nativeId ?? job.id, note: null, observed_at: deliveredAt,
           });
         }
+        if (job.kind === "linear.comment" && result.nativeId) {
+          const commentPayload = payload(job);
+          if (typeof commentPayload.decision_key === "string" && typeof commentPayload.decision_task === "string") {
+            options.db.observe({
+              id: `obs:${sha256(`decision-comment:${job.id}:${result.nativeId}`)}`,
+              source: "summary",
+              task: commentPayload.decision_task,
+              task_lifecycle_id: typeof commentPayload.decision_lifecycle_id === "string" ? commentPayload.decision_lifecycle_id : null,
+              issue: job.target,
+              verb: "decision-comment",
+              key: commentPayload.decision_key,
+              note: result.nativeId,
+              observed_at: deliveredAt,
+            });
+          }
+        }
         if (job.kind === "relay") {
           const relayPayload = payload(job);
           const eventId = requiredString(relayPayload.event_id, "event_id");
@@ -534,7 +621,7 @@ export async function processJobs(options: {
             }, completedAt);
           }
         }
-        options.db.finishJob(job.id, result.nativeId ?? null, completedAt, null, result.deliveredAt);
+        options.db.finishJob(job.id, result.nativeId ?? null, completedAt, null, result.deliveredAt, result.completionNote);
       });
       done += 1;
     } catch (error) {

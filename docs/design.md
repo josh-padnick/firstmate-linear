@@ -49,7 +49,8 @@ Every other captain comment in a gate returns ownership to Firstmate and remains
 
 `inbox show` is the read gate.
 It prints the full captured event and creates a receipt for exact IDs.
-Text-bearing actions require the receipt, and a newer captain comment invalidates it before any job is committed.
+Text-bearing actions require the receipt, except for a direct reply with an explicit Linear parent comment ID.
+A newer captain comment invalidates a receipted action before any job is committed.
 
 A reply to one live mapped primary task can bypass the primary model when the relay preconditions prove the route.
 The relay uses Firstmate's durable steering inbox and `--resolve-key` when a keyed decision is open.

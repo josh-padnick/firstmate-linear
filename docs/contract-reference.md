@@ -36,6 +36,10 @@ Because deadlines target roles, a team can rename its Linear statuses without ch
 When enabled, `act reply`, `act comment`, and `act handoff-to-captain` require `--next EVENT --by DURATION` on Firstmate-owned issues, while `--next none` records no promise.
 The default closed vocabulary is `status:*`, `board:*`, `pr-reported`, `pr-green`, `pr-merged`, `comment`, `dispatch`, and `none`.
 
+`comments.activity_thread` defaults to `true` and groups service-authored comments under a lazily created per-issue root.
+`comments.activity_root_body` controls that root's body.
+`comments.decision_new_thread` defaults to `true` so each captain-facing decision question starts a directly addressable thread.
+
 Run `fm-linear contract lint` after every config change.
 Run `fm-linear contract apply-states --team KEY --role ROLE [--name STATUS]` to idempotently ensure one explicitly approved workflow status.
 Run `fm-linear contract apply-labels` to idempotently ensure the workspace `Agent` group only.

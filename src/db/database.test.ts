@@ -376,6 +376,42 @@ describe("state database", () => {
     migrated.close();
   });
 
+  test("v18 migration adds activity thread storage to issue snapshots", () => {
+    const db = database();
+    const path = db.path;
+    db.snapshot({
+      issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null,
+      last_actor: null, last_signal: null, observed_at: "2026-01-01T00:00:00Z",
+    });
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("ALTER TABLE issue_snapshots DROP COLUMN activity_root_id; PRAGMA user_version = 18;");
+    legacy.close();
+
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.latestSnapshot("ABC-1")).toMatchObject({ activity_root_id: null });
+    migrated.close();
+  });
+
+  test("new snapshots inherit the issue activity thread root", () => {
+    const db = database();
+    db.snapshot({
+      issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null,
+      last_actor: null, last_signal: null, observed_at: "2026-01-01T00:00:00Z",
+    });
+    db.setActivityRootId("ABC-1", "activity-root");
+    db.snapshot({
+      issue: "ABC-1", role: "review-gate", assignee: "Captain", labels: [], agent_label: null,
+      last_actor: "Firstmate", last_signal: "handoff", observed_at: "2026-01-01T00:01:00Z",
+    });
+
+    expect(db.latestSnapshot("ABC-1")).toMatchObject({
+      role: "review-gate",
+      activity_root_id: "activity-root",
+    });
+    db.close();
+  });
+
   test("running jobs are reclaimed only after their lease expires", () => {
     const db = database();
     db.enqueue({ key: "leased", kind: "linear.comment", target: "ABC-1", payload: {} }, "2026-01-01T00:00:00Z");

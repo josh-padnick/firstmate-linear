@@ -182,6 +182,7 @@ export function parseConfig(raw: unknown, path: string): WorkflowConfig {
   const steer = record(deadlinesRaw.steer ?? {}, path, ".deadlines.steer");
   const promiseDeadlines = record(deadlinesRaw.promises ?? {}, path, ".deadlines.promises");
   const promises = record(root.promises ?? {}, path, ".promises");
+  const comments = record(root.comments ?? {}, path, ".comments");
   const validation = record(root.validation ?? {}, path, ".validation");
   const merge = record(root.merge ?? {}, path, ".merge");
   const messages = record(root.messages ?? {}, path, ".messages");
@@ -238,6 +239,15 @@ export function parseConfig(raw: unknown, path: string): WorkflowConfig {
     promises: {
       required_on_firstmate_owned: boolean(promises.required_on_firstmate_owned, path, ".promises.required_on_firstmate_owned", true),
       vocabulary: promises.vocabulary == null ? [...DEFAULT_PROMISE_VOCABULARY] : strings(promises.vocabulary, path, ".promises.vocabulary"),
+    },
+    comments: {
+      activity_thread: boolean(comments.activity_thread, path, ".comments.activity_thread", true),
+      activity_root_body: string(
+        comments.activity_root_body ?? "Firstmate activity thread. Replies here are read like any other comment.",
+        path,
+        ".comments.activity_root_body",
+      ),
+      decision_new_thread: boolean(comments.decision_new_thread, path, ".comments.decision_new_thread", true),
     },
     messages: {
       idle_nudge: string(messages.idle_nudge ?? "You stopped without reporting. Append `done:`, `blocked:`, or `needs-decision:` to your status file, or continue the task.", path, ".messages.idle_nudge"),

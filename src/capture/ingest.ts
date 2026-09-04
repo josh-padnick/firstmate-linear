@@ -1,7 +1,7 @@
 import { classifyEvent, isPotentialGatePhrase, type ClassifiableEvent } from "../classify/classify.ts";
 import { roleForState } from "../config/load.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
-import { StateDatabase, type IssueSnapshot } from "../db/database.ts";
+import { StateDatabase, type IssueSnapshot, type NewIssueSnapshot } from "../db/database.ts";
 import { resolveHome } from "../env.ts";
 import { sha256 } from "../hash.ts";
 import { identityMatches } from "../identity.ts";
@@ -26,6 +26,7 @@ function toClassifiable(event: LedgerEvent, config: WorkflowConfig): Classifiabl
     type: event.event.type,
     author: event.event.author,
     body: event.event.body,
+    parent_id: event.event.parent_id,
     from_state: team ? roleForState(team, event.event.from_state) : null,
     to_state: team ? roleForState(team, event.event.to_state) : null,
     from_assignee: event.event.from_assignee,
@@ -56,7 +57,7 @@ function snapshotAtRevision(current: IssueSnapshot | null, event: LedgerEvent, h
   return { snapshot: { ...current, role }, ambiguous: false };
 }
 
-export function snapshotFromLinearIssue(issue: LinearIssue, team: WorkflowConfig["teams"][number], observedAt: string, managed: boolean, captain: string): IssueSnapshot {
+export function snapshotFromLinearIssue(issue: LinearIssue, team: WorkflowConfig["teams"][number], observedAt: string, managed: boolean, captain: string): NewIssueSnapshot {
   const labels = (issue.labels?.nodes ?? []).map((item) => item.name ?? "").filter(Boolean);
   const knownLabels = new Set(Object.values(team.agent_labels));
   const role = roleForState(team, issue.state?.name);

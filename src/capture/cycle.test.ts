@@ -14,6 +14,42 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 const config = testWorkflowConfig({ managed: "assignee:self", features: { relay: "shadow", mirror: "shadow", escalation: "shadow" } });
 
 describe("SQLite capture cycle", () => {
+  test("a captain reply inside the activity thread follows the normal receipt lifecycle", async () => {
+    const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" }, comments: { pageInfo: { hasNextPage: false }, nodes: [{
+        id: "captain-reply", createdAt: "2026-01-01T00:01:00Z", updatedAt: "2026-01-01T00:01:00Z",
+        body: "Continue with the next stage", user: { displayName: "Captain" },
+        issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null },
+        parent: { id: "activity-root" },
+      }] },
+    } }));
+    await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify({ data: { issues: {
+      pageInfo: { hasNextPage: false }, nodes: [{
+        identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:01:00Z",
+        state: { name: "Building" }, assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" }, labels: { nodes: [] },
+        history: { pageInfo: { hasNextPage: false }, nodes: [] },
+      }],
+    } } }));
+    const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+
+    expect((await captureCycle({
+      config,
+      db,
+      transport: new LinearTransport({ fixtureDir: fixtures }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225720" },
+    })).captured).toBe(1);
+
+    const captured = db.listEvents()[0]!;
+    expect(captured).toMatchObject({ token: "comment", disposition: "waiting-for-core" });
+    expect(JSON.parse(captured.raw_ref)).toMatchObject({ parent_id: "activity-root" });
+    const receipt = db.issueReceipt([captured.id]);
+    db.handleWithReceipt(captured.id, receipt, "Captain", "handled");
+    expect(db.event(captured.id)?.disposition).toBe("handled-by-core");
+    db.close();
+  });
+
   test("a failed cycle does not commit its resumed comment checkpoint", async () => {
     const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);

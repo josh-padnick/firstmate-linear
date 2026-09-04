@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS issue_snapshots (
   last_actor TEXT,
   last_signal TEXT,
   managed INTEGER NOT NULL DEFAULT 1,
+  activity_root_id TEXT,
   observed_at TEXT NOT NULL,
   PRIMARY KEY (issue, observed_at)
 );
@@ -423,4 +424,8 @@ WHERE issue IS NOT NULL AND 1=(
     AND spawned_at<=steers.sent_at
     AND (torn_down_at IS NULL OR torn_down_at>=steers.sent_at)
 );
+`;
+
+export const MIGRATE_TO_V19_SQL = `
+ALTER TABLE issue_snapshots ADD COLUMN activity_root_id TEXT;
 `;

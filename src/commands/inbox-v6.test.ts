@@ -1,13 +1,42 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
+import { runInboxV6 } from "./inbox-v6.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("inbox commands", () => {
+  test("show prints the thread root and two prior comments before the event", async () => {
+    const home = mkdtempSync("/private/tmp/fml-inbox-"); roots.push(home);
+    mkdirSync(join(home, "config"), { recursive: true });
+    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\n    roles: { building: Building, done: Done, canceled: Canceled }\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    const db = StateDatabase.open({ FM_HOME: home });
+    const add = (id: string, author: string, commentId: string, parentId: string | null, body: string, createdAt: string, disposition: "handled-by-service" | "waiting-for-core") => db.capture({
+      id, team: "ABC", issue: "ABC-1", type: "comment", token: "comment", author, body_sha: null,
+      created_at: createdAt, captured_at: createdAt, disposition, note: null,
+      raw_ref: JSON.stringify({ comment_id: commentId, parent_id: parentId, body }),
+    });
+    add("event:root", "Captain", "thread-root", null, "Original question", "2026-01-01T00:00:00Z", "handled-by-service");
+    add("event:reply", "Firstmate", "firstmate-reply", "thread-root", "Earlier answer", "2026-01-01T00:01:00Z", "handled-by-service");
+    add("event:reply-two", "Captain", "captain-reply", "thread-root", "One more detail", "2026-01-01T00:02:00Z", "handled-by-service");
+    add("event:current", "Captain", "captain-followup", "thread-root", "Please continue", "2026-01-01T00:03:00Z", "waiting-for-core");
+    db.close();
+    const stdout = spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    expect(await runInboxV6(["show", "event:current"], { FM_HOME: home })).toBe(0);
+
+    const output = stdout.mock.calls.map(([value]) => String(value)).join("");
+    stdout.mockRestore();
+    expect(output).toContain("thread root: thread-root");
+    expect(output).not.toContain("Captain: Original question");
+    expect(output).toContain("Firstmate: Earlier answer");
+    expect(output).toContain("Captain: One more detail");
+    expect(output.indexOf("thread root:")).toBeLessThan(output.indexOf("event:current comment ABC-1"));
+  });
+
   test("a service event receipt rejects newer captain input", () => {
     const home = mkdtempSync("/private/tmp/fml-inbox-"); roots.push(home);
     mkdirSync(join(home, "config"), { recursive: true });

@@ -15,8 +15,16 @@ describe("contract commands", () => {
     expect(existsSync(join(bad, "config"))).toBe(false);
     const home = mkdtempSync("/private/tmp/fml-init-"); roots.push(home);
     expect(runInit(["--captain", "Josh: Admin", "--team", "ABC"], { FM_HOME: home })).toBe(0);
-    const parsed = Bun.YAML.parse(readFileSync(join(home, "config", "linear-workflow.yaml"), "utf8")) as { captain: { display_name: string } };
+    const parsed = Bun.YAML.parse(readFileSync(join(home, "config", "linear-workflow.yaml"), "utf8")) as {
+      captain: { display_name: string };
+      comments: { activity_thread: boolean; activity_root_body: string; decision_new_thread: boolean };
+    };
     expect(parsed.captain.display_name).toBe("Josh: Admin");
+    expect(parsed.comments).toEqual({
+      activity_thread: true,
+      activity_root_body: "Firstmate activity thread. Replies here are read like any other comment.",
+      decision_new_thread: true,
+    });
   });
 
   test("init rejects malformed or incomplete discovered role maps before writing", () => {
@@ -34,6 +42,15 @@ describe("contract commands", () => {
     writeFileSync(join(home, "config", "reply.md"), "{{body}} {{unsupported}}\n");
     rmSync(join(home, "config", "report.md"));
     writeFileSync(join(home, "config", "review-walkthrough.html"), "<section id=\"outcome\">{{issue}} {{title}}</section>\n");
+    expect(runContract(["lint"], { FM_HOME: home })).toBe(1);
+  });
+
+  test("contract lint rejects malformed comment-threading config", () => {
+    const home = mkdtempSync("/private/tmp/fml-contract-"); roots.push(home);
+    expect(runInit(["--captain", "Captain", "--team", "ABC"], { FM_HOME: home })).toBe(0);
+    const path = join(home, "config", "linear-workflow.yaml");
+    writeFileSync(path, readFileSync(path, "utf8").replace("activity_thread: true", "activity_thread: enabled"));
+
     expect(runContract(["lint"], { FM_HOME: home })).toBe(1);
   });
 

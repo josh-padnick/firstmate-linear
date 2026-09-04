@@ -41,10 +41,37 @@ describe("mirror plan", () => {
     db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
     db.linkTask({ task: "a", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
     const working: Observation = { id: "z-first", source: "status", task: "a", issue: "ABC-1", verb: "working", key: "default", note: null, observed_at: "2026-01-01T00:01:00Z" };
-    const decision: Observation = { ...working, id: "a-second", verb: "needs-decision" };
+    const decision: Observation = { ...working, id: "a-second", verb: "needs-decision", key: "color", note: "Pick red or blue" };
     db.observe(working); db.observe(decision);
     const stateJob = planMirror(db, config, [working, decision]).actions.find((action) => action.job.kind === "linear.issue-role");
-    expect(stateJob?.job.payload).toMatchObject({ role: "decision-captain" });
+    expect(stateJob?.job.payload).toMatchObject({
+      role: "decision-captain",
+      comment: "Pick red or blue",
+      actor: "service",
+      decision_new_thread: true,
+      decision_key: "color",
+      decision_task: "a",
+    });
+    db.close();
+  });
+
+  test("later progress does not hide the unresolved decision question", () => {
+    const root = mkdtempSync("/private/tmp/fml-plan-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.linkTask({ task: "a", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const decision: Observation = { id: "decision", source: "status", task: "a", issue: "ABC-1", verb: "needs-decision", key: "color", note: "Pick red or blue", observed_at: "2026-01-01T00:01:00Z" };
+    const working: Observation = { ...decision, id: "working", verb: "working", key: "default", note: "Continuing elsewhere", observed_at: "2026-01-01T00:02:00Z" };
+    db.observe(decision); db.observe(working);
+
+    const stateJob = planMirror(db, config, [decision, working]).actions.find((action) => action.job.kind === "linear.issue-role");
+
+    expect(stateJob).toMatchObject({ cause: "decision" });
+    expect(stateJob?.job.payload).toMatchObject({
+      role: "decision-captain",
+      comment: "Pick red or blue",
+      decision_key: "color",
+    });
     db.close();
   });
 

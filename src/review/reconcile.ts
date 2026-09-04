@@ -49,7 +49,7 @@ export function planReviewDeadlines(home: string, db: StateDatabase, config: Wor
       key: `${ready.id}:walkthrough:${rung}`,
       kind: "linear.comment",
       target: snapshot.issue,
-      payload: { issue: snapshot.issue, body: `${prefix}The review walkthrough is still incomplete after ${rung}. ${errors.join("; ")}.`, requires_managed: true },
+      payload: { issue: snapshot.issue, body: `${prefix}The review walkthrough is still incomplete after ${rung}. ${errors.join("; ")}.`, actor: "service", requires_managed: true },
     });
   }
   return { jobs, findings };

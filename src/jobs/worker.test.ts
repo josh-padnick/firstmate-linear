@@ -179,6 +179,211 @@ describe("job worker", () => {
     db.close();
   });
 
+  test("a comment job sends its thread root to Linear", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const log = join(root, "calls.log");
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.enqueue({
+      key: "comment:threaded", kind: "linear.comment", target: "ABC-1",
+      payload: { issue: "ABC-1", body: "Threaded reply", parent_id: "thread-root", actor: "core" },
+    }, "2026-01-01T00:00:00Z");
+
+    expect((await processJobs({
+      db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" },
+    })).done).toBe(1);
+
+    const create = readFileSync(log, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line.split("\t")[1]!))
+      .find((call) => call.variables?.body === "Threaded reply");
+    expect(create?.variables.parentId).toBe("thread-root");
+    db.close();
+  });
+
+  test("a rejected parent retries once as a top-level comment with the same identity and body", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const log = join(root, "calls.log");
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-parent-rejected.json"), JSON.stringify({
+      errors: [{ message: "Entity not found: Parent comment", extensions: { code: "ENTITY_NOT_FOUND" } }],
+    }));
+    await Bun.write(join(fixtures, "03-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.enqueue({
+      key: "comment:downgrade", kind: "linear.comment", target: "ABC-1",
+      payload: { issue: "ABC-1", body: "Do not lose this body", parent_id: "deleted-parent", actor: "core" },
+    }, "2026-01-01T00:00:00Z");
+
+    expect((await processJobs({
+      db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" },
+    })).done).toBe(1);
+
+    const creates = readFileSync(log, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line.split("\t")[1]!))
+      .filter((call) => call.variables?.body === "Do not lose this body");
+    expect(creates).toHaveLength(2);
+    expect(creates.map((call) => call.variables.parentId)).toEqual(["deleted-parent", null]);
+    expect(new Set(creates.map((call) => call.variables.id)).size).toBe(1);
+    expect(db.jobs()[0]).toMatchObject({ state: "done", last_error: expect.stringContaining("parent-downgraded") });
+    db.close();
+  });
+
+  test("service comments share one lazily created activity thread", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const log = join(root, "calls.log");
+    for (const [index, response] of [
+      { data: { issue: { id: "issue-id" } } },
+      { data: { commentCreate: { success: true, comment: { id: "__COMMENT_ID__" } } } },
+      { data: { commentCreate: { success: true, comment: { id: "first" } } } },
+      { data: { issue: { id: "issue-id" } } },
+      { data: { commentCreate: { success: true, comment: { id: "second" } } } },
+      { data: { issue: { id: "issue-id" } } },
+      { data: { commentCreate: { success: true, comment: { id: "third" } } } },
+      { data: { issue: { id: "issue-id" } } },
+      { data: { commentCreate: { success: true, comment: { id: "fourth" } } } },
+    ].entries()) await Bun.write(join(fixtures, `${String(index + 1).padStart(2, "0")}.json`), JSON.stringify(response));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({
+      issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null,
+      last_actor: null, last_signal: null, observed_at: "2026-01-01T00:00:00Z",
+    });
+    for (const [index, body] of ["Gate passed", "Plan stage complete", "Build stage complete", "Merge-gate notice"].entries()) {
+      db.enqueue({
+        key: `service:${index}`, kind: "linear.comment", target: "ABC-1",
+        payload: { issue: "ABC-1", body, actor: "service" },
+      }, `2026-01-01T00:00:0${index}Z`);
+    }
+
+    expect((await processJobs({
+      db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225610" },
+    })).done).toBe(4);
+
+    const creates = readFileSync(log, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line.split("\t")[1]!))
+      .filter((call) => call.variables?.body);
+    const activityRoot = creates.find((call) => call.variables.body === config.comments.activity_root_body)!;
+    expect(creates.filter((call) => call.variables.parentId === null)).toHaveLength(1);
+    expect(creates.filter((call) => call.variables.parentId === activityRoot.variables.id)).toHaveLength(4);
+    expect(db.latestSnapshot("ABC-1")?.activity_root_id).toBe(activityRoot.variables.id);
+    db.close();
+  });
+
+  test("service comments remain top-level when activity threading is disabled", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const log = join(root, "calls.log");
+    for (const index of [1, 3, 5]) {
+      await Bun.write(join(fixtures, `${String(index).padStart(2, "0")}-resolve.json`), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+      await Bun.write(join(fixtures, `${String(index + 1).padStart(2, "0")}-comment.json`), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: `comment-${index}` } } } }));
+    }
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    for (const [index, body] of ["One", "Two", "Three"].entries()) {
+      db.enqueue({ key: `top:${index}`, kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body, actor: "service" } }, `2026-01-01T00:00:0${index}Z`);
+    }
+
+    expect((await processJobs({
+      db, config: { ...config, comments: { ...config.comments, activity_thread: false } },
+      transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225610" },
+    })).done).toBe(3);
+
+    const creates = readFileSync(log, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line.split("\t")[1]!))
+      .filter((call) => call.variables?.body);
+    expect(creates.map((call) => call.variables.parentId)).toEqual([null, null, null]);
+    db.close();
+  });
+
+  test("a deleted activity root is replaced once and the service reply stays threaded", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const log = join(root, "calls.log");
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-parent-rejected.json"), JSON.stringify({
+      errors: [{ message: "Entity not found: Parent comment", extensions: { code: "ENTITY_NOT_FOUND" } }],
+    }));
+    await Bun.write(join(fixtures, "03-root.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "__COMMENT_ID__" } } } }));
+    await Bun.write(join(fixtures, "04-reply.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "reply" } } } }));
+    await Bun.write(join(fixtures, "05-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "06-reply.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "following-reply" } } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({
+      issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null,
+      last_actor: null, last_signal: null, activity_root_id: "deleted-root", observed_at: "2026-01-01T00:00:00Z",
+    });
+    db.enqueue({
+      key: "service:replace-root", kind: "linear.comment", target: "ABC-1",
+      payload: { issue: "ABC-1", body: "Service update", actor: "service" },
+    }, "2026-01-01T00:00:00Z");
+    db.enqueue({
+      key: "service:following-reply", kind: "linear.comment", target: "ABC-1",
+      payload: { issue: "ABC-1", body: "Following update", actor: "service" },
+    }, "2026-01-01T00:00:00Z");
+
+    expect((await processJobs({
+      db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" },
+    })).done).toBe(2);
+
+    const creates = readFileSync(log, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line.split("\t")[1]!))
+      .filter((call) => call.variables?.body);
+    const rootCreate = creates.find((call) => call.variables.body === config.comments.activity_root_body)!;
+    const replies = creates.filter((call) => call.variables.body === "Service update");
+    expect(replies.map((call) => call.variables.parentId)).toEqual(["deleted-root", rootCreate.variables.id]);
+    expect(creates.find((call) => call.variables.body === "Following update")?.variables.parentId).toBe(rootCreate.variables.id);
+    expect(creates.filter((call) => call.variables.body === config.comments.activity_root_body)).toHaveLength(1);
+    expect(db.latestSnapshot("ABC-1")?.activity_root_id).toBe(rootCreate.variables.id);
+    db.close();
+  });
+
+  test("a decision question starts a top-level thread and records its mapping", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const log = join(root, "calls.log");
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "question-comment" } } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({
+      issue: "ABC-1", role: "decision-captain", assignee: "Captain", labels: [], agent_label: null,
+      last_actor: null, last_signal: null, observed_at: "2026-01-01T00:00:00Z",
+    });
+    db.linkTask({
+      lifecycle_id: "link:worker", task: "worker", issue: "ABC-1", role: "primary",
+      worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null,
+    });
+    db.enqueue({
+      key: "decision:question", kind: "linear.comment", target: "ABC-1",
+      payload: {
+        issue: "ABC-1", body: "Pick red or blue", actor: "service", decision_new_thread: true,
+        decision_key: "color", decision_task: "worker", decision_lifecycle_id: "link:worker",
+      },
+    }, "2026-01-01T00:00:00Z");
+
+    expect((await processJobs({
+      db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" },
+    })).done).toBe(1);
+
+    const create = readFileSync(log, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line.split("\t")[1]!))
+      .find((call) => call.variables?.body === "Pick red or blue");
+    expect(create?.variables.parentId).toBeNull();
+    expect(db.latestSnapshot("ABC-1")?.activity_root_id).toBeNull();
+    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({
+      source: "summary", task: "worker", task_lifecycle_id: "link:worker",
+      verb: "decision-comment", key: "color", note: create?.variables.id,
+    }));
+    db.close();
+  });
+
   test("promise activation rejects status produced before reply delivery", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures); mkdirSync(join(root, "state"));

@@ -59,6 +59,11 @@ promises:
   required_on_firstmate_owned: true
   vocabulary: ["status:*", "board:*", pr-reported, pr-green, pr-merged, verdict, comment, dispatch, none]
 
+comments:
+  activity_thread: true
+  activity_root_body: "Firstmate activity thread. Replies here are read like any other comment."
+  decision_new_thread: true
+
 messages:
   idle_nudge: "You stopped without reporting. Append `done:`, `blocked:`, or `needs-decision:` to your status file, or continue the task."
   status_queries: [status, "status?", "current status", "update?"]

@@ -77,7 +77,9 @@ export async function synchronizeReceiptCaptainComments(options: {
   );
   options.db.snapshot(snapshot);
   if (!managed) throw new Error(`issue is no longer managed: ${options.issue}`);
-  if (!discovered.length) return snapshot;
+  const current = options.db.latestSnapshot(options.issue);
+  if (!current) throw new Error(`issue snapshot was not stored: ${options.issue}`);
+  if (!discovered.length) return current;
 
   const localSeen = new Set<string>();
   const seen: SeenStore = {
@@ -88,5 +90,5 @@ export async function synchronizeReceiptCaptainComments(options: {
   for (const event of events) {
     captureCanonicalEvent({ config: options.config, db: options.db, env: options.env, event, history: issueState.history });
   }
-  return snapshot;
+  return current;
 }

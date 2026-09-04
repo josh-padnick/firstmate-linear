@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { loadConfig } from "../config/load.ts";
-import { StateDatabase } from "../db/database.ts";
+import { StateDatabase, type DomainEvent } from "../db/database.ts";
 import { nowIso } from "../time.ts";
 
 function template(path: string, values: Record<string, string>): string {
@@ -8,6 +8,41 @@ function template(path: string, values: Record<string, string>): string {
   try { text = readFileSync(path, "utf8"); }
   catch { text = "# Firstmate Linear report\n\n{{summary}}\n\n{{events}}\n\n{{drift}}\n"; }
   return text.replace(/\{\{([a-z_]+)\}\}/g, (_, key: string) => values[key] ?? "");
+}
+
+function commentThreadRoot(event: DomainEvent): string | null {
+  if (event.type !== "comment") return null;
+  try {
+    const raw = JSON.parse(event.raw_ref) as { comment_id?: unknown; parent_id?: unknown };
+    if (typeof raw.parent_id === "string" && raw.parent_id) return raw.parent_id;
+    return typeof raw.comment_id === "string" && raw.comment_id ? raw.comment_id : null;
+  } catch { return null; }
+}
+
+function renderEventGroups(events: DomainEvent[]): string {
+  if (!events.length) return "No new Linear events.";
+  const rows: Array<{ kind: "event"; event: DomainEvent } | { kind: "thread"; issue: string; root: string; events: DomainEvent[] }> = [];
+  const threads = new Map<string, Extract<(typeof rows)[number], { kind: "thread" }>>();
+  for (const event of events) {
+    const root = commentThreadRoot(event);
+    if (!root) {
+      rows.push({ kind: "event", event });
+      continue;
+    }
+    const key = `${event.issue}\0${root}`;
+    let thread = threads.get(key);
+    if (!thread) {
+      thread = { kind: "thread", issue: event.issue, root, events: [] };
+      threads.set(key, thread);
+      rows.push(thread);
+    }
+    thread.events.push(event);
+  }
+  return rows.map((row) => {
+    if (row.kind === "event") return `- ${row.event.created_at} ${row.event.issue} ${row.event.token}: ${row.event.note ?? row.event.disposition}`;
+    const latest = row.events.at(-1)!;
+    return `- ${row.issue} thread ${row.root}: ${row.events.length} comment${row.events.length === 1 ? "" : "s"}; latest ${latest.created_at} ${latest.author}`;
+  }).join("\n");
 }
 
 export function runReport(_args: string[], env: NodeJS.ProcessEnv = process.env): number {
@@ -38,7 +73,7 @@ export function runReport(_args: string[], env: NodeJS.ProcessEnv = process.env)
         : resumed ? "The service resumed after a polling gap and reconciled immediately."
           : "No resume gap or watchdog restart was recorded in this window.",
     ].join("\n");
-    const eventLines = events.length ? events.map((event) => `- ${event.created_at} ${event.issue} ${event.token}: ${event.note ?? event.disposition}`).join("\n") : "No new Linear events.";
+    const eventLines = renderEventGroups(events);
     const driftLines = jobs.length
       ? jobs.map((job) => `- ${job.target} ${job.kind} ${job.state}: ${job.last_error ?? "pending retry"}`).join("\n")
       : observations.some((item) => item.verb.startsWith("finding-"))
