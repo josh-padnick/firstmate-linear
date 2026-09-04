@@ -18,9 +18,9 @@ const VERIFY_COMMENT = `query($id:String!){comment(id:$id){id createdAt}}`;
 const RESOLVE_ISSUE = `query($issue:String!){issue(id:$issue){id}}`;
 const RESOLVE_ATTACHMENTS = `query($issue:String!){issue(id:$issue){id attachments{nodes{id url}}}}`;
 const CREATE_ATTACHMENT = `mutation($issue:String!,$url:String!,$title:String!){attachmentCreate(input:{issueId:$issue,url:$url,title:$title}){success attachment{id url}}}`;
-const RESOLVE_TEAM_STATES = `query($team:String!){team(id:$team){id states{nodes{id name type}}}}`;
+const RESOLVE_TEAM_STATES = `query($team:String!){teams(first:2,filter:{key:{eq:$team}}){pageInfo{hasNextPage} nodes{id key states{nodes{id name type}}}}}`;
 const CREATE_WORKFLOW_STATE = `mutation($team:String!,$name:String!,$type:String!,$color:String!){workflowStateCreate(input:{teamId:$team,name:$name,type:$type,color:$color}){success workflowState{id name}}}`;
-const RESOLVE_LABELS = `query($issue:String!){issue(id:$issue){id labels{nodes{id name}} team{labels{nodes{id name}}}}}`;
+const RESOLVE_LABELS = `query($issue:String!,$label:String!){issue(id:$issue){id labels{nodes{id name}}} issueLabels(first:50,filter:{name:{eq:$label}}){pageInfo{hasNextPage} nodes{id name team{id}}}}`;
 const UPDATE_LABELS = `mutation($issue:String!,$added:[String!],$removed:[String!]){issueUpdate(id:$issue,input:{addedLabelIds:$added,removedLabelIds:$removed}){success issue{id labels{nodes{name}}}}}`;
 const RESOLVE_LABEL_GROUP = `query($name:String!){issueLabels(first:50,filter:{name:{eq:$name}}){nodes{id name isGroup team{id}}}}`;
 const CREATE_LABEL_GROUP = `mutation($name:String!){issueLabelCreate(input:{name:$name,isGroup:true,color:"#6B7280"}){success issueLabel{id name isGroup}}}`;
@@ -239,8 +239,11 @@ async function ensureWorkflowState(job: Job, body: JobPayload, transport: Linear
   const name = requiredString(body.name, "name");
   const statusKey = requiredString(body.status_key, "status_key");
   const resolved = value(await transport.call("job-team-states", { query: RESOLVE_TEAM_STATES, variables: { team } }));
-  if (!resolved?.team?.id) throw new Error(`team not found: ${team}`);
-  const existing = resolved.team.states?.nodes?.find((item: any) => item.name === name);
+  const matches = (resolved?.teams?.nodes ?? []).filter((item: any) => item.key === team);
+  if (resolved?.teams?.pageInfo?.hasNextPage || matches.length > 1) throw new Error(`multiple Linear teams found for key: ${team}`);
+  const authoritativeTeam = matches[0];
+  if (!authoritativeTeam?.id) throw new Error(`team not found: ${team}`);
+  const existing = authoritativeTeam.states?.nodes?.find((item: any) => item.name === name);
   if (existing?.id) return { nativeId: existing.id };
   const type = statusKey === "backlog" ? "backlog"
     : ["done"].includes(statusKey) ? "completed"
@@ -248,7 +251,7 @@ async function ensureWorkflowState(job: Job, body: JobPayload, transport: Linear
     : ["building", "validating_code", "plan_in_progress"].includes(statusKey) ? "started"
     : "unstarted";
   const colors: Record<string, string> = { backlog: "#6B7280", unstarted: "#9CA3AF", started: "#3B82F6", completed: "#10B981", canceled: "#EF4444" };
-  const created = value(await transport.call("job-create-state", { query: CREATE_WORKFLOW_STATE, variables: { team: resolved.team.id, name, type, color: colors[type] } }));
+  const created = value(await transport.call("job-create-state", { query: CREATE_WORKFLOW_STATE, variables: { team: authoritativeTeam.id, name, type, color: colors[type] } }));
   if (!created?.workflowStateCreate?.success) throw new Error(`workflow state creation was not successful: ${name}`);
   return { nativeId: created.workflowStateCreate.workflowState?.id ?? name };
 }
@@ -257,10 +260,13 @@ async function setAgentLabel(job: Job, body: JobPayload, transport: LinearTransp
   const issue = requiredString(body.issue ?? job.target, "issue");
   const label = requiredString(body.label, "label");
   const known = Array.isArray(body.known_labels) ? body.known_labels.filter((item): item is string => typeof item === "string") : [];
-  const resolved = value(await transport.call("job-resolve-labels", { query: RESOLVE_LABELS, variables: { issue } }));
+  const resolved = value(await transport.call("job-resolve-labels", { query: RESOLVE_LABELS, variables: { issue, label } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
-  const available = resolved.issue.team?.labels?.nodes?.find((item: any) => item.name === label);
-  if (!available?.id) throw new Error(`configured Agent label does not exist: ${label}`);
+  if (resolved?.issueLabels?.pageInfo?.hasNextPage) throw new Error(`workspace Agent label lookup exceeded limit: ${label}`);
+  const matches = (resolved?.issueLabels?.nodes ?? []).filter((item: any) => item.name === label && !item.team);
+  if (matches.length > 1) throw new Error(`multiple workspace Agent labels named: ${label}`);
+  const available = matches[0];
+  if (!available?.id) throw new Error(`configured workspace Agent label does not exist: ${label}`);
   const current = resolved.issue.labels?.nodes ?? [];
   const remove = current.filter((item: any) => known.includes(item.name) && item.name !== label).map((item: any) => item.id);
   const add = current.some((item: any) => item.name === label) ? [] : [available.id];

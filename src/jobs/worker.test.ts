@@ -480,6 +480,72 @@ describe("job worker", () => {
     db.close();
   });
 
+  test("resolves a configured team key before creating workflow state", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const log = join(root, "calls.log");
+    await Bun.write(join(fixtures, "01-team.json"), JSON.stringify({ data: { teams: { nodes: [{ id: "team-uuid", key: "ABC", states: { nodes: [] } }] } } }));
+    await Bun.write(join(fixtures, "02-state.json"), JSON.stringify({ data: { workflowStateCreate: { success: true, workflowState: { id: "state-id", name: "Building" } } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.enqueue({ key: "state:building", kind: "linear.workflow-state", target: "ABC", payload: { team: "ABC", status_key: "building", name: "Building" } }, "2026-01-01T00:00:00Z");
+
+    const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
+
+    expect(result.done).toBe(1);
+    const calls = readFileSync(log, "utf8").trim().split("\n").map((line) => ({ operation: line.split("\t")[0], payload: JSON.parse(line.split("\t")[1]!) }));
+    expect(calls.find((call) => call.operation === "job-create-state")?.payload.variables.team).toBe("team-uuid");
+    db.close();
+  });
+
+  test("resolves Agent labels from the workspace collection", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const log = join(root, "calls.log");
+    await Bun.write(join(fixtures, "01-managed.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null } } }));
+    await Bun.write(join(fixtures, "02-labels.json"), JSON.stringify({ data: {
+      issue: { id: "issue-id", labels: { nodes: [{ id: "old-label", name: "Agent: Old" }] } },
+      issueLabels: { nodes: [
+        { id: "workspace-label", name: "Agent: Codex", team: null },
+        { id: "team-label", name: "Agent: Codex", team: { id: "team-uuid" } },
+      ] },
+    } }));
+    await Bun.write(join(fixtures, "03-update.json"), JSON.stringify({ data: { issueUpdate: { success: true } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: ["Agent: Old"], agent_label: "Agent: Old", last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    db.enqueue({ key: "label:codex", kind: "linear.agent-label", target: "ABC-1", payload: { issue: "ABC-1", label: "Agent: Codex", known_labels: ["Agent: Old", "Agent: Codex"], requires_managed: true } }, "2026-01-01T00:00:00Z");
+
+    const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
+
+    expect(result.done).toBe(1);
+    const calls = readFileSync(log, "utf8").trim().split("\n").map((line) => ({ operation: line.split("\t")[0], payload: JSON.parse(line.split("\t")[1]!) }));
+    expect(calls.find((call) => call.operation === "job-update-labels")?.payload.variables).toMatchObject({
+      issue: "issue-id", added: ["workspace-label"], removed: ["old-label"],
+    });
+    db.close();
+  });
+
+  test("rejects ambiguous workspace Agent label matches", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-managed.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null } } }));
+    await Bun.write(join(fixtures, "02-labels.json"), JSON.stringify({ data: {
+      issue: { id: "issue-id", labels: { nodes: [] } },
+      issueLabels: { pageInfo: { hasNextPage: false }, nodes: [
+        { id: "workspace-one", name: "Agent: Codex", team: null },
+        { id: "workspace-two", name: "Agent: Codex", team: null },
+      ] },
+    } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    db.enqueue({ key: "label:ambiguous", kind: "linear.agent-label", target: "ABC-1", payload: { issue: "ABC-1", label: "Agent: Codex", known_labels: ["Agent: Codex"], requires_managed: true } }, "2026-01-01T00:00:00Z");
+
+    const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" }, maxAttempts: 1 });
+
+    expect(result.dead).toBe(1);
+    expect(db.jobs()[0]?.last_error).toBe("multiple workspace Agent labels named: Agent: Codex");
+    db.close();
+  });
+
   test("apply-labels creates only the workspace Agent group", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
