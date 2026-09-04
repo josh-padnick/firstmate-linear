@@ -96,7 +96,13 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
 
 function promiseSourceWatermarks(db: StateDatabase, issue: string, expectedEvent: string, env: NodeJS.ProcessEnv, initial: PromiseSourceWatermarks): PromiseSourceWatermarks {
   const state = resolveStateDir(resolveHome(env), env);
-  const watermarks: PromiseSourceWatermarks = { ...initial };
+  const watermarks: PromiseSourceWatermarks = {
+    ...initial,
+    __boundary__: {
+      observation_rowid: db.observationRowid(issue),
+      primary_lifecycle_ids: db.taskLinks(issue).filter((item) => item.role === "primary").map((item) => item.lifecycle_id),
+    },
+  };
   if (expectedEvent.startsWith("status:")) {
     for (const link of db.taskLinks(issue, true).filter((item) => item.role === "primary")) {
       const path = join(state, `${link.task}.status`);
@@ -260,6 +266,12 @@ export async function executeJob(job: Job, options: {
   prepareCommentDelivery?: () => void;
 }): Promise<JobOutcome> {
   const body = payload(job);
+  if (job.kind === "linear.comment" && typeof body.waiting_event_id === "string") {
+    if (!options.db) throw new Error("guarded comment requires the state database");
+    if (options.db.event(body.waiting_event_id)?.disposition !== "waiting-for-core") {
+      return { skipped: "waiting event is no longer open" };
+    }
+  }
   if (body.requires_managed === true) {
     if (!options.db) throw new Error("managed issue guard requires the state database");
     if (options.db.latestSnapshot(job.target)?.managed !== true) return { skipped: "issue is outside managed scope" };

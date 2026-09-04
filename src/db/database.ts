@@ -68,6 +68,8 @@ export type PromiseState = "pending" | "open" | "kept" | "overdue" | "superseded
 export type PromiseSourceWatermarks = Record<string, {
   status?: { identity: string | null; offset: number };
   pr?: { reported: string | null; state: string | null; stateKnown: boolean };
+  observation_rowid?: number;
+  primary_lifecycle_ids?: string[];
 }>;
 
 export type PromiseRecord = {
@@ -510,11 +512,16 @@ export class StateDatabase {
 
   rebindWaitingEventJobs(fromEventId: string, toEventId: string): void {
     const rows = this.raw.query("SELECT id,payload FROM jobs WHERE state IN ('pending','retry','running')").all() as Array<{ id: string; payload: string }>;
+    const priorNote = this.event(fromEventId)?.note;
+    const currentNote = this.event(toEventId)?.note;
     for (const row of rows) {
       let payload: Record<string, unknown>;
       try { payload = JSON.parse(row.payload) as Record<string, unknown>; } catch { continue; }
       if (payload.waiting_event_id !== fromEventId) continue;
-      this.raw.query("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify({ ...payload, waiting_event_id: toEventId }), row.id);
+      const body = typeof payload.body === "string"
+        ? (priorNote && currentNote ? payload.body.replace(priorNote, currentNote) : payload.body).replaceAll(fromEventId, toEventId)
+        : payload.body;
+      this.raw.query("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify({ ...payload, body, waiting_event_id: toEventId }), row.id);
     }
   }
 
@@ -710,6 +717,11 @@ export class StateDatabase {
   observationsAfterRowid(rowid: number): Array<{ rowid: number; observation: Observation }> {
     const rows = this.raw.query("SELECT rowid AS _rowid,* FROM observations WHERE rowid>? ORDER BY rowid").all(rowid) as Array<Observation & { _rowid: number }>;
     return rows.map(({ _rowid, ...observation }) => ({ rowid: _rowid, observation }));
+  }
+
+  observationRowid(issue: string): number {
+    const row = this.raw.query("SELECT COALESCE(MAX(rowid),0) AS rowid FROM observations WHERE issue=?").get(issue) as { rowid: number };
+    return row.rowid;
   }
 
   consumerCursor(name: string): string | null {

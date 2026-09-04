@@ -65,11 +65,7 @@ export function capturePrSourceWatermarks(home: string, db: StateDatabase, issue
       continue;
     }
     const reported = prReportedIdentity(generation, values.pr);
-    try {
-      watermarks[link.lifecycle_id] = { pr: { reported, state: prSourceIdentity(generation, values.pr, inspect(values.pr)), stateKnown: true } };
-    } catch {
-      watermarks[link.lifecycle_id] = { pr: { reported, state: null, stateKnown: false } };
-    }
+    watermarks[link.lifecycle_id] = { pr: { reported, state: prSourceIdentity(generation, values.pr, inspect(values.pr)), stateKnown: true } };
   }
   return watermarks;
 }
@@ -105,40 +101,51 @@ function recordPrState(db: StateDatabase, observation: Observation, link: TaskLi
 export function scanPullRequests(home: string, db: StateDatabase, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): { observations: Observation[]; findings: Array<{ code: string; issue: string; detail: string }> } {
   const observations: Observation[] = [];
   const findings: Array<{ code: string; issue: string; detail: string }> = [];
-  for (const link of db.taskLinks(undefined, true)) {
+  const activeTasks = new Set(db.taskLinks(undefined, true).map((link) => link.task));
+  for (const link of db.taskLinks()) {
     const path = join(home, "state", `${link.task}.meta`);
     if (!existsSync(path)) continue;
     const generation = sidecarGeneration(path, "spawn_gen");
     if (generation && generation === link.blocked_meta_generation) continue;
+    if (link.torn_down_at && (activeTasks.has(link.task) || !generation || generation !== link.meta_generation)) continue;
+    const closeCursor = link.torn_down_at ? `pr-close:${link.lifecycle_id}` : null;
+    if (closeCursor && db.cursor(closeCursor) === generation) continue;
     const values = meta(path);
     const url = values.pr;
     const expectedHead = values.pr_head;
     if (!url) continue;
     try {
       const snapshot = inspect(url);
+      const observedAt = link.torn_down_at ?? nowIso(env);
       const sourceIdentity = prSourceIdentity(generation, url, snapshot);
       const reportedIdentity = prReportedIdentity(generation, url);
       const base = expectedBase(link, values);
       const lifecycle = `${link.task}:${link.issue}:${link.lifecycle_id}`;
+      const sealCloseBoundary = (): void => {
+        if (closeCursor && generation) db.setCursor(closeCursor, generation, observedAt);
+      };
       record(db, {
         id: `obs:${sha256(`${lifecycle}:${url}:reported`)}`, source: "pr", task: link.task,
-        task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-reported", key: "pr", note: url, source_identity: reportedIdentity, observed_at: nowIso(env),
+        task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-reported", key: "pr", note: url, source_identity: reportedIdentity, observed_at: observedAt,
       }, observations);
       if (snapshot.state === "MERGED" && base && snapshot.baseRefName === base) {
         record(db, {
           id: `obs:${sha256(`${lifecycle}:${url}:${snapshot.headRefOid}:merged:${snapshot.baseRefName}`)}`, source: "pr", task: link.task,
-          task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-merged", key: "pr", note: url, source_identity: sourceIdentity, observed_at: nowIso(env),
+          task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-merged", key: "pr", note: url, source_identity: sourceIdentity, observed_at: observedAt,
         }, observations);
+        sealCloseBoundary();
         continue;
       }
       if (snapshot.state === "MERGED" && !base) {
-        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base unverified`, source_identity: sourceIdentity, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-unverified`, observations);
+        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base unverified`, source_identity: sourceIdentity, observed_at: observedAt }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-unverified`, observations);
         findings.push({ code: "PR_BASE_UNKNOWN", issue: link.issue, detail: `cannot verify expected base for ${url}` });
+        sealCloseBoundary();
         continue;
       }
       if (snapshot.state === "MERGED" && snapshot.baseRefName !== base) {
-        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base=${snapshot.baseRefName} expected=${base}`, source_identity: sourceIdentity, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-mismatch:${snapshot.baseRefName}`, observations);
+        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base=${snapshot.baseRefName} expected=${base}`, source_identity: sourceIdentity, observed_at: observedAt }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-mismatch:${snapshot.baseRefName}`, observations);
         findings.push({ code: "PR_BASE_MISMATCH", issue: link.issue, detail: `${url} merged into ${snapshot.baseRefName}, expected ${base}` });
+        sealCloseBoundary();
         continue;
       }
       const green = snapshot.state === "OPEN" && Boolean(expectedHead) && snapshot.headRefOid === expectedHead
@@ -148,8 +155,9 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
         id: "", source: "pr", task: link.task,
         task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: green ? "pr-green" : "pr-withdrawn", key: "pr",
         note: green ? `${url} head=${snapshot.headRefOid}` : `${url} current=${snapshot.headRefOid} expected=${expectedHead ?? "missing"}`,
-        source_identity: sourceIdentity, observed_at: nowIso(env),
+        source_identity: sourceIdentity, observed_at: observedAt,
       }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:${green ? "green" : "not-green"}`, observations);
+      sealCloseBoundary();
     } catch (error) {
       findings.push({ code: "PR_INSPECTION_FAILED", issue: link.issue, detail: error instanceof Error ? error.message : String(error) });
     }

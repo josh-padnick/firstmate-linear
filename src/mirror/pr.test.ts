@@ -73,6 +73,21 @@ describe("PR signals", () => {
     db.close();
   });
 
+  test("a closed lifecycle retains PR evidence through its close boundary", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    writeFileSync(join(home, "state", "task.meta"), "spawn_gen=g1\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:00:00Z") / 1000) };
+    expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
+    expect(runTask(["close", "task"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:10:00Z") / 1000) })).toBe(0);
+    const db = StateDatabase.open(env);
+
+    const result = scanPullRequests(home, db, () => ({ state: "OPEN", headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] }), { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:11:00Z") / 1000) });
+
+    expect(result.observations).toContainEqual(expect.objectContaining({ verb: "pr-green", observed_at: "2026-01-01T00:10:00Z" }));
+    expect(scanPullRequests(home, db, () => ({ state: "MERGED", headRefOid: "abc123", baseRefName: "main", requiredChecks: [] }), { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:12:00Z") / 1000) }).observations).toHaveLength(0);
+    db.close();
+  });
+
   test("a relinked task waits for a new metadata producer generation", () => {
     const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
     const metaPath = join(home, "state", "task.meta");

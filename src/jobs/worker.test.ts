@@ -160,6 +160,73 @@ describe("job worker", () => {
     db.close();
   });
 
+  test("promise source identities disambiguate same-second board and dispatch progress", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    for (const index of [1, 3]) {
+      await Bun.write(join(fixtures, `${index.toString().padStart(2, "0")}-resolve.json`), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+      await Bun.write(join(fixtures, `${(index + 1).toString().padStart(2, "0")}-comment.json`), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
+    }
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    const deliveredAt = "2026-01-01T12:20:00Z";
+    const env = { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse(deliveredAt) / 1000) };
+    db.linkTask({ task: "before", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: deliveredAt, torn_down_at: null });
+    db.observe({ id: "obs:done-before", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Done", note: null, observed_at: deliveredAt });
+
+    const dispatchJob = db.enqueue({ key: "comment:dispatch-identity", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "I will dispatch", actor: "core" } }, "2026-01-01T12:00:00Z");
+    const dispatchPromise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:dispatch", expected_event: "dispatch", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: dispatchJob.id, created_at: "2026-01-01T12:00:00Z" });
+    await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env });
+    reconcileStalls(root, db, config, env);
+    expect(db.promise(dispatchPromise.id)?.state).toBe("open");
+    db.linkTask({ task: "after", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: deliveredAt, torn_down_at: null });
+    reconcileStalls(root, db, config, env);
+    expect(db.promise(dispatchPromise.id)?.state).toBe("kept");
+
+    const boardJob = db.enqueue({ key: "comment:board-identity", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "I will finish", actor: "core" } }, deliveredAt);
+    const boardPromise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:board", expected_event: "board:Done", deadline_at: "2026-01-01T12:50:00Z", reply_job_id: boardJob.id, created_at: deliveredAt });
+    await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env });
+    reconcileStalls(root, db, config, env);
+    expect(db.promise(boardPromise.id)?.state).toBe("open");
+    db.observe({ id: "obs:done-after", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Done", note: null, observed_at: deliveredAt });
+    reconcileStalls(root, db, config, env);
+    expect(db.promise(boardPromise.id)?.state).toBe("kept");
+
+    const commentJob = db.enqueue({ key: "comment:comment-identity", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "I will comment again", actor: "core" } }, deliveredAt);
+    const commentPromise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:comment", expected_event: "comment", deadline_at: "2026-01-01T12:50:00Z", reply_job_id: commentJob.id, created_at: deliveredAt });
+    await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env });
+    reconcileStalls(root, db, config, env);
+    expect(db.promise(commentPromise.id)?.state).toBe("open");
+    db.enqueue({ key: "comment:after-promise", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "Follow-up", actor: "core" } }, deliveredAt);
+    await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env });
+    reconcileStalls(root, db, config, env);
+    expect(db.promise(commentPromise.id)?.state).toBe("kept");
+    db.close();
+  });
+
+  test("a missing PR boundary retries before sending the promise reply", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures); mkdirSync(join(root, "state"));
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    writeFileSync(join(root, "state", "worker.meta"), "spawn_gen=g1\npr=https://github.com/acme/repo/pull/1\npr_head=head1\npr_base=main\n");
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
+    const job = db.enqueue({ key: "comment:missing-pr-boundary", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "I will keep it green", actor: "core" } }, "2026-01-01T12:00:00Z");
+    const promise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: job.id, created_at: "2026-01-01T12:00:00Z" });
+
+    const result = await processJobs({
+      db,
+      config,
+      transport: new LinearTransport({ fixtureDir: fixtures }),
+      inspectPr: () => { throw new Error("PR unavailable"); },
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:20:00Z") / 1000) },
+    });
+
+    expect(result.retried).toBe(1);
+    expect(db.jobs()[0]).toMatchObject({ state: "retry", native_id: null });
+    expect(db.promise(promise.id)).toMatchObject({ state: "pending", source_watermarks: null });
+    db.close();
+  });
+
   test("promise activation rejects an unchanged pre-delivery PR state", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures); mkdirSync(join(root, "state"));

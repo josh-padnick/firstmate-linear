@@ -317,6 +317,7 @@ describe("stall reconciliation", () => {
     expect(plan).toHaveLength(1);
     expect(plan[0]?.job.key).toContain(":escalation:mention");
     expect(JSON.stringify(plan[0]?.job.payload)).toContain("Captain");
+    expect(plan[0]?.job.payload).toMatchObject({ requires_managed: true });
     db.enqueue(plan[0]!.job, "2026-01-01T13:02:00Z");
     expect(planEscalations(db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T14:02:00Z") / 1000) })).toHaveLength(0);
     db.close();
@@ -333,9 +334,14 @@ describe("stall reconciliation", () => {
 
     expect(plan).toHaveLength(1);
     db.enqueue(plan[0]!.job, "2026-01-01T13:02:00Z");
+    const previous = db.listEvents(["waiting-for-core"]).find((event) => event.token === "stalled")!;
     reconcileStalls(root, db, config, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T13:31:00Z") / 1000) });
     const current = db.listEvents(["waiting-for-core"]).find((event) => event.token === "stalled")!;
-    expect(JSON.parse(db.jobs().find((job) => job.key.includes(":escalation:"))!.payload).waiting_event_id).toBe(current.id);
+    const payload = JSON.parse(db.jobs().find((job) => job.key.includes(":escalation:"))!.payload);
+    expect(payload.waiting_event_id).toBe(current.id);
+    expect(payload.body).toContain(current.note!);
+    expect(payload.body).toContain(current.id);
+    expect(payload.body).not.toContain(previous.id);
     expect(planEscalations(db, config, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T14:02:00Z") / 1000) })).toHaveLength(0);
     db.close();
   });

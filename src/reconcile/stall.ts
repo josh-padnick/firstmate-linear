@@ -104,11 +104,17 @@ function matchingPrObservation(db: StateDatabase, promise: PromiseRecord, observ
 
 function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progress | null {
   const expected = promise.expected_event;
-  const watermarkBacked = promise.source_watermarks !== null
-    && (expected.startsWith("status:") || ["pr-reported", "pr-green", "pr-merged"].includes(expected));
-  const observations = watermarkBacked
-    ? db.observations(promise.issue).filter((item) => atOrAfter(item.observed_at, promise.created_at))
-    : db.observations(promise.issue, promise.created_at);
+  const watermarks = sourceWatermarks(promise);
+  const boundary = watermarks?.__boundary__;
+  const observations = watermarks === null
+    ? []
+    : boundary
+      ? db.observationsAfterRowid(boundary.observation_rowid ?? 0)
+        .map((item) => item.observation)
+        .filter((item) => item.issue === promise.issue && atOrAfter(item.observed_at, promise.created_at))
+      : promise.source_watermarks !== null
+        ? db.observations(promise.issue).filter((item) => atOrAfter(item.observed_at, promise.created_at))
+        : db.observations(promise.issue, promise.created_at);
   if (expected.startsWith("status:")) {
     const verb = expected.slice("status:".length);
     const found = observations.find((item) => item.source === "status"
@@ -132,7 +138,9 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
     return found ? { id: found.id, kind: "comment", at: found.observed_at, detail: "firstmate comment" } : null;
   }
   if (expected === "dispatch") {
-    const found = db.taskLinks(promise.issue).find((item) => item.role === "primary" && atOrAfter(item.spawned_at, promise.created_at));
+    const priorLifecycles = boundary?.primary_lifecycle_ids;
+    const found = db.taskLinks(promise.issue).find((item) => item.role === "primary"
+      && (priorLifecycles ? !priorLifecycles.includes(item.lifecycle_id) : atOrAfter(item.spawned_at, promise.created_at)));
     return found ? { id: `dispatch:${found.task}:${found.spawned_at}`, kind: "dispatch", at: found.spawned_at, detail: `dispatch ${found.task}` } : null;
   }
   return null;
