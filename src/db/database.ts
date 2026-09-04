@@ -134,6 +134,8 @@ function backupBeforeMigration(path: string, backupDir: string, version: number)
 export class StateDatabase {
   readonly raw: Database;
   readonly path: string;
+  private transactionDepth = 0;
+  private savepointSequence = 0;
 
   constructor(path: string, backupDir: string) {
     ensurePrivateDir(path.slice(0, path.lastIndexOf("/")));
@@ -177,7 +179,24 @@ export class StateDatabase {
   }
 
   transaction<T>(fn: () => T): T {
+    if (this.transactionDepth > 0) {
+      const savepoint = `nested_${this.savepointSequence += 1}`;
+      this.raw.exec(`SAVEPOINT ${savepoint}`);
+      this.transactionDepth += 1;
+      try {
+        const value = fn();
+        this.raw.exec(`RELEASE SAVEPOINT ${savepoint}`);
+        return value;
+      } catch (error) {
+        this.raw.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        this.raw.exec(`RELEASE SAVEPOINT ${savepoint}`);
+        throw error;
+      } finally {
+        this.transactionDepth -= 1;
+      }
+    }
     this.raw.exec("BEGIN IMMEDIATE");
+    this.transactionDepth = 1;
     try {
       const value = fn();
       this.raw.exec("COMMIT");
@@ -185,6 +204,8 @@ export class StateDatabase {
     } catch (error) {
       this.raw.exec("ROLLBACK");
       throw error;
+    } finally {
+      this.transactionDepth = 0;
     }
   }
 

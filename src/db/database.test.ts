@@ -34,6 +34,21 @@ function event(id: string, disposition: "waiting-for-core" | "handled-by-service
 }
 
 describe("state database", () => {
+  test("nested transactions preserve outer work and isolate inner rollback", () => {
+    const db = database();
+    db.transaction(() => {
+      db.capture(event("event:outer"));
+      try {
+        db.transaction(() => {
+          db.capture(event("event:inner"));
+          throw new Error("rollback inner work");
+        });
+      } catch {}
+    });
+    expect(db.listEvents().map((item) => item.id)).toEqual(["event:outer"]);
+    db.close();
+  });
+
   test("capture and its deterministic jobs commit together", () => {
     const db = database();
     expect(db.capture(event("event:1"), [{ key: "event:1:relay", kind: "relay", target: "ABC-1", payload: { event: "event:1" } }])).toBe(true);
