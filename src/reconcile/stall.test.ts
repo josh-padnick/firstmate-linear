@@ -83,6 +83,20 @@ describe("stall reconciliation", () => {
     db.close();
   });
 
+  test("an observation from a primary task remains valid after the task closes", () => {
+    const { root, db } = setup();
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
+    const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    db.observe({ id: "obs:green", source: "pr", task: "worker", issue: "ABC-1", verb: "pr-green", key: "pr", note: null, observed_at: "2026-01-01T12:20:00Z" });
+    db.closeTask("worker", "2026-01-01T12:25:00Z");
+
+    const result = reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:31:00Z") / 1000) });
+
+    expect(result).toMatchObject({ emitted: 0, kept: 1 });
+    expect(db.promise(promise.id)).toMatchObject({ state: "kept", observation_id: "obs:green" });
+    db.close();
+  });
+
   test("a newer promise supersedes the earlier commitment", () => {
     const { root, db } = setup();
     const first = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "status:done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:first", created_at: "2026-01-01T12:00:00Z" });
@@ -161,6 +175,19 @@ describe("stall reconciliation", () => {
     expect(reconcileStalls(root, db, config, at31).emitted).toBe(0);
     expect(reconcileStalls(root, db, config, { ...at31, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T13:01:00Z") / 1000) }).emitted).toBe(1);
     expect(db.listEvents(["waiting-for-core"]).filter((event) => event.token === "stalled")).toHaveLength(1);
+    db.close();
+  });
+
+  test("a handled stall duplicate is not counted as emitted", () => {
+    const { root, db } = setup();
+    const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    const env = { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:31:00Z") / 1000) };
+    expect(reconcileStalls(root, db, config, env).emitted).toBe(1);
+    const stalledEventId = db.promise(promise.id)?.stalled_event_id;
+    db.setDisposition(stalledEventId!, "handled-by-service", "handled", "2026-01-01T12:32:00Z");
+
+    expect(reconcileStalls(root, db, config, env).emitted).toBe(0);
+    expect(db.promise(promise.id)?.stalled_event_id).toBe(stalledEventId);
     db.close();
   });
 

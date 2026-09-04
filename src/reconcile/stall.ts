@@ -33,13 +33,22 @@ function activePrimaryTasks(db: StateDatabase, issue: string): Set<string> {
   return new Set(db.taskLinks(issue, true).filter((link) => link.role === "primary").map((link) => link.task));
 }
 
+function wasPrimaryTaskAt(db: StateDatabase, issue: string, task: string, observedAt: string): boolean {
+  return db.taskLinks(issue).some((link) => link.task === task
+    && link.role === "primary"
+    && atOrAfter(observedAt, link.spawned_at)
+    && (!link.torn_down_at || atOrAfter(link.torn_down_at, observedAt)));
+}
+
 function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progress | null {
-  const primary = activePrimaryTasks(db, promise.issue);
   const observations = db.observations(promise.issue, promise.created_at);
   const expected = promise.expected_event;
   if (expected.startsWith("status:")) {
     const verb = expected.slice("status:".length);
-    const found = observations.find((item) => item.source === "status" && item.verb === verb && item.task && primary.has(item.task));
+    const found = observations.find((item) => item.source === "status"
+      && item.verb === verb
+      && item.task
+      && wasPrimaryTaskAt(db, promise.issue, item.task, item.observed_at));
     return found ? { id: found.id, kind: "status", at: found.observed_at, detail: `status ${verb}` } : null;
   }
   if (expected.startsWith("board:")) {
@@ -52,7 +61,10 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
     return found ? { id: `snapshot:${promise.issue}:${found.observed_at}`, kind: "board", at: found.observed_at, detail: `board ${state}` } : null;
   }
   if (["pr-reported", "pr-green", "pr-merged"].includes(expected)) {
-    const found = observations.find((item) => item.source === "pr" && item.verb === expected && item.task && primary.has(item.task));
+    const found = observations.find((item) => item.source === "pr"
+      && item.verb === expected
+      && item.task
+      && wasPrimaryTaskAt(db, promise.issue, item.task, item.observed_at));
     return found ? { id: found.id, kind: "pr", at: found.observed_at, detail: expected } : null;
   }
   if (expected === "comment") {
@@ -157,7 +169,7 @@ function emitStall(db: StateDatabase, options: {
   }
   const id = `linear:${sha256(`stalled:${options.issue}:${options.reasonKey}`)}`;
   const note = `${options.note} - run fm-linear inbox show ${id}`;
-  db.capture({
+  const captured = db.capture({
     id,
     team: options.team,
     issue: options.issue,
@@ -178,7 +190,7 @@ function emitStall(db: StateDatabase, options: {
       required: options.required,
     }),
   });
-  return id;
+  return captured ? id : null;
 }
 
 export function reconcileStalls(home: string, db: StateDatabase, config: WorkflowConfig, env: NodeJS.ProcessEnv = process.env): StallResult {
