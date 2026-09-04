@@ -12,6 +12,7 @@ export function planReviewDeadlines(home: string, db: StateDatabase, config: Wor
   const findings: ReviewFinding[] = [];
   const now = nowEpoch(env);
   for (const snapshot of db.latestSnapshots()) {
+    if (!snapshot.managed) continue;
     const teamKey = snapshot.issue.slice(0, snapshot.issue.indexOf("-")).toUpperCase();
     const team = config.teams.find((item) => item.key === teamKey);
     if (!team || snapshot.state !== team.statuses.approve_deliverable) continue;
@@ -48,7 +49,7 @@ export function planReviewDeadlines(home: string, db: StateDatabase, config: Wor
       key: `${ready.id}:walkthrough:${rung}`,
       kind: "linear.comment",
       target: snapshot.issue,
-      payload: { issue: snapshot.issue, body: `${prefix}The review walkthrough is still incomplete after ${rung}. ${errors.join("; ")}.` },
+      payload: { issue: snapshot.issue, body: `${prefix}The review walkthrough is still incomplete after ${rung}. ${errors.join("; ")}.`, requires_managed: true },
     });
   }
   return { jobs, findings };

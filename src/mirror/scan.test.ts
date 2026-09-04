@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
 import { parseStatusLine, scanFleet } from "./scan.ts";
@@ -96,6 +96,39 @@ describe("fleet scanner", () => {
 
     const observations = scanFleet(home, db).observations;
     expect(observations).toContainEqual(expect.objectContaining({ verb: "needs-decision", note: "choose a direction" }));
+    db.close();
+  });
+
+  test("legacy status cursors resume from their validated offset", () => {
+    for (const format of ["offset", "identity"] as const) {
+      const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+      const path = join(home, "state", "task.status");
+      writeFileSync(path, "done: old lifecycle\nworking: current\n");
+      const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+      db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+      const stat = statSync(path);
+      const legacy = format === "offset" ? { offset: 20 } : { offset: 20, identity: `${stat.dev}:${stat.ino}:${stat.birthtimeMs}:old-lifecycle` };
+      db.setCursor(`status:${path}`, JSON.stringify(legacy));
+
+      const observations = scanFleet(home, db).observations.filter((item) => item.source === "status");
+      expect(observations.map((item) => item.verb)).toEqual(["working"]);
+      db.close();
+    }
+  });
+
+  test("status appended while unlinked is not attributed after relinking", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: first lifecycle\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    scanFleet(home, db);
+    db.closeTask("task", "2026-01-01T00:01:00Z");
+    writeFileSync(path, "working: first lifecycle\ndone: closed lifecycle\n");
+
+    expect(scanFleet(home, db).observations.filter((item) => item.source === "status")).toHaveLength(0);
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:02:00Z", torn_down_at: null });
+    expect(scanFleet(home, db).observations.filter((item) => item.source === "status")).toHaveLength(0);
     db.close();
   });
 });

@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS issue_snapshots (
   agent_label TEXT,
   last_actor TEXT,
   last_signal TEXT,
+  managed INTEGER NOT NULL DEFAULT 1,
   observed_at TEXT NOT NULL,
   PRIMARY KEY (issue, observed_at)
 );
@@ -206,4 +207,8 @@ UPDATE observations SET task_lifecycle_id=(
     AND task_links.issue=observations.issue
     AND task_links.spawned_at=observations.task_spawned_at
 ) WHERE task_spawned_at IS NOT NULL;
+`;
+
+export const MIGRATE_TO_V8_SQL = `
+ALTER TABLE issue_snapshots ADD COLUMN managed INTEGER NOT NULL DEFAULT 1;
 `;

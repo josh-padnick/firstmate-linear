@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
@@ -30,6 +30,24 @@ describe("job worker", () => {
     expect(db.jobs().map((job) => [job.kind, job.state])).toEqual([["linear.issue-state", "done"], ["linear.comment", "pending"]]);
     expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
     expect(db.jobs().map((job) => job.state)).toEqual(["done", "done"]);
+    db.close();
+  });
+
+  test("a managed mutation is discarded after the issue leaves scope", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const log = join(root, "calls.log");
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Someone Else", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: false, observed_at: "2026-01-01T00:00:00Z" });
+    db.enqueue({ key: "mirror:stale", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Done", requires_managed: true } }, "2026-01-01T00:00:00Z");
+
+    const result = await processJobs({
+      db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused"), fixtureLog: log }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" },
+    });
+
+    expect(result.done).toBe(1);
+    expect(db.jobs()[0]?.state).toBe("done");
+    expect(existsSync(log)).toBe(false);
     db.close();
   });
 

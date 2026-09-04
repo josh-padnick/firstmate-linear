@@ -206,6 +206,11 @@ export function reconcileStalls(home: string, db: StateDatabase, config: Workflo
     resolveStall(db, promise.stalled_event_id, "promise superseded by a newer commitment", at);
   }
   for (const promise of db.promises(undefined, ["open", "overdue"])) {
+    if (db.latestSnapshot(promise.issue)?.managed === false) {
+      resolveStall(db, promise.stalled_event_id, "issue is no longer managed", at);
+      db.cancelPromise(promise.id);
+      continue;
+    }
     promisedIssues.add(promise.issue);
     resolveOpenHeartbeat(db, promise.issue, "promise commitment established", at);
     const observed = matchingObservation(db, promise);
@@ -237,6 +242,10 @@ export function reconcileStalls(home: string, db: StateDatabase, config: Workflo
 
   const progressDeadlines = config.deadlines?.progress ?? DEFAULT_PROGRESS_DEADLINES;
   for (const snapshot of db.latestSnapshots()) {
+    if (!snapshot.managed) {
+      resolveOpenHeartbeat(db, snapshot.issue, "issue is no longer managed", at);
+      continue;
+    }
     if (promisedIssues.has(snapshot.issue)) continue;
     const team = config.teams.find((item) => item.key === snapshot.issue.split("-")[0]);
     if (!team || !firstmateOwnedStatuses(team).has(snapshot.state)) {

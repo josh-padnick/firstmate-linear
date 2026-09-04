@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
 import { LinearTransport } from "../transport.ts";
+import { planMirror } from "../mirror/plan.ts";
 import { captureCycle } from "./cycle.ts";
 
 const roots: string[] = [];
@@ -224,6 +225,35 @@ describe("SQLite capture cycle", () => {
     expect(result.commentsMax).toBe("2026-01-01T00:00:00.123Z");
     expect(db.cursor("linear.comments")).toBe("2026-01-01T00:00:00.123Z");
     expect(db.cursor("linear.issues.ABC")).toBe("2026-01-01T00:00:00.123Z");
+    db.close();
+  });
+
+  test("leaving managed scope suppresses later fleet-driven state repair", async () => {
+    const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" }, comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+    } }));
+    await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify({ data: { issues: {
+      pageInfo: { hasNextPage: false }, nodes: [{
+        identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:02:00Z",
+        state: { name: "Building" }, assignee: { displayName: "Someone Else" }, creator: { displayName: "Captain" }, labels: { nodes: [] },
+        history: { pageInfo: { hasNextPage: false }, nodes: [] },
+      }],
+    } } }));
+    const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:30Z", torn_down_at: null });
+    const done = { id: "obs:scope-exit", source: "status" as const, task: "task", issue: "ABC-1", verb: "done", key: "default", note: null, observed_at: "2026-01-01T00:01:00Z" };
+    db.observe(done);
+
+    await captureCycle({
+      config, db, transport: new LinearTransport({ fixtureDir: fixtures }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225780" },
+    });
+
+    expect(db.latestSnapshot("ABC-1")).toMatchObject({ assignee: "Someone Else", managed: false });
+    expect(planMirror(db, config, [done]).actions).toHaveLength(0);
     db.close();
   });
 });

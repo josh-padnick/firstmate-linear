@@ -83,7 +83,7 @@ function managed(issue: LinearIssue, scope: "assignee:self" | "all", self: strin
   return allowed.has(issue.project?.name?.toLowerCase() ?? "") || allowed.has(issue.project?.slugId?.toLowerCase() ?? "");
 }
 
-function snapshot(issue: LinearIssue, agentLabels: Record<string, string>, observedAt: string): IssueSnapshot {
+function snapshot(issue: LinearIssue, agentLabels: Record<string, string>, observedAt: string, isManaged: boolean): IssueSnapshot {
   const labels = (issue.labels?.nodes ?? []).map((item) => item.name ?? "").filter(Boolean);
   const knownLabels = new Set(Object.values(agentLabels));
   const history = [...(issue.history?.nodes ?? [])].sort((a, b) => -(compareIso(a.createdAt, b.createdAt) ?? 0) || b.id.localeCompare(a.id));
@@ -95,6 +95,7 @@ function snapshot(issue: LinearIssue, agentLabels: Record<string, string>, obser
     agent_label: labels.find((label) => knownLabels.has(label)) ?? null,
     last_actor: history[0]?.actor?.displayName ?? null,
     last_signal: null,
+    managed: isManaged,
     observed_at: observedAt,
   };
 }
@@ -159,7 +160,12 @@ export async function captureCycle(options: {
     const managedIds = new Set(managedIssues.map((issue) => issue.identifier));
     const managedHistory = result.history.filter((item) => managedIds.has(item.issue ?? ""));
     allHistory.push(...managedHistory);
-    for (const issue of managedIssues) options.db.snapshot(snapshot(issue, team.agent_labels, observedAt));
+    for (const issue of result.issues) {
+      const isManaged = managedIds.has(issue.identifier);
+      if (isManaged || options.db.latestSnapshot(issue.identifier)) {
+        options.db.snapshot(snapshot(issue, team.agent_labels, observedAt, isManaged));
+      }
+    }
     allEvents.push(...deriveHistory(managedHistory, seen, observedAt, eventCutoff, self, bootstrapCutoff !== null));
     allEvents.push(...deriveIssueCreation(managedIssues, seen, observedAt, eventCutoff, self, bootstrapCutoff !== null));
     issueMax[team.key] = maxIso(result.issues.map((issue) => issue.updatedAt));

@@ -26,32 +26,35 @@ export function parseStatusLine(line: string): { verb: string; key: string; note
   return { verb: match[1], key: match[2] ?? nested?.[1] ?? "default", note: nested?.[2] ?? note };
 }
 
-function readNewLines(db: StateDatabase, path: string, fileIdentity: string): { rows: Array<{ line: string; offset: number }>; cursorName: string; cursorValue: string } | null {
+function readNewLines(db: StateDatabase, path: string, fileIdentity: string, consumeToEnd = false): { rows: Array<{ line: string; offset: number }>; cursorName: string; cursorValue: string } {
   const name = `status:${path}`;
   const raw = db.cursor(name);
   const content = readFileSync(path);
   let offset = 0;
   if (raw) {
     try {
-      const cursor = JSON.parse(raw) as { offset?: number; file_identity?: string; prefix_sha?: string };
+      const cursor = JSON.parse(raw) as { offset?: number; file_identity?: string; prefix_sha?: string; identity?: string };
       const candidate = Number(cursor.offset ?? 0);
-      if (cursor.file_identity === fileIdentity
-        && candidate >= 0
-        && candidate <= content.length
-        && cursor.prefix_sha === sha256(content.subarray(0, candidate))) offset = candidate;
+      const validOffset = Number.isInteger(candidate) && candidate >= 0 && candidate <= content.length;
+      const modern = typeof cursor.file_identity === "string" || typeof cursor.prefix_sha === "string";
+      const legacyIdentityMatches = typeof cursor.identity !== "string"
+        || cursor.identity === fileIdentity
+        || cursor.identity.startsWith(`${fileIdentity}:`);
+      if (validOffset && ((!modern && legacyIdentityMatches) || (cursor.file_identity === fileIdentity
+        && cursor.prefix_sha === sha256(content.subarray(0, candidate))))) offset = candidate;
     } catch { offset = 0; }
   }
   const remaining = content.subarray(offset);
   const lastNewline = remaining.lastIndexOf(10);
-  if (lastNewline < 0) return null;
-  const complete = remaining.subarray(0, lastNewline + 1).toString("utf8");
+  const completeLength = lastNewline < 0 ? 0 : lastNewline + 1;
+  const complete = remaining.subarray(0, completeLength).toString("utf8");
   const rows: Array<{ line: string; offset: number }> = [];
   let consumed = 0;
   for (const line of complete.split("\n").slice(0, -1)) {
     rows.push({ line, offset: offset + consumed });
     consumed += Buffer.byteLength(line) + 1;
   }
-  const nextOffset = offset + lastNewline + 1;
+  const nextOffset = consumeToEnd ? content.length : offset + completeLength;
   return { rows, cursorName: name, cursorValue: JSON.stringify({ offset: nextOffset, file_identity: fileIdentity, prefix_sha: sha256(content.subarray(0, nextOffset)) }) };
 }
 
@@ -93,12 +96,10 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
   for (const name of names.filter((item) => item.endsWith(".status"))) {
     const task = basename(name, ".status");
     const links = db.taskLinks(undefined, true).filter((link) => link.task === task);
-    if (!links.length) continue;
     const path = join(state, name);
     const stat = statSync(path);
     const fileIdentity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
-    const batch = readNewLines(db, path, fileIdentity);
-    if (!batch) continue;
+    const batch = readNewLines(db, path, fileIdentity, links.length === 0);
     const inserted: Observation[] = [];
     db.transaction(() => {
       for (const row of batch.rows) {

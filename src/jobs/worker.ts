@@ -226,6 +226,10 @@ export async function executeJob(job: Job, options: {
   env?: NodeJS.ProcessEnv;
 }): Promise<JobOutcome> {
   const body = payload(job);
+  if (body.requires_managed === true) {
+    if (!options.db) throw new Error("managed issue guard requires the state database");
+    if (options.db.latestSnapshot(job.target)?.managed !== true) return {};
+  }
   switch (job.kind) {
     case "linear.issue-state": return updateIssueState(job, body, options.transport, options.config);
     case "linear.comment": return createComment(job, body, options.transport, options.db);

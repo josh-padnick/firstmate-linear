@@ -37,6 +37,7 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
       findings.push({ code: "MISSING_SNAPSHOT", issue, detail: "cannot mirror without a current managed issue snapshot" });
       continue;
     }
+    if (!snapshot.managed) continue;
     const activeLinks = db.taskLinks(issue, true);
     const relevant = db.observations(issue)
       .filter((item) => item.task === null || activeLinks.some((link) => observationBelongsToTaskLink(item, link)));
@@ -74,7 +75,7 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
     else if (latestPrimary?.verb === "dispatch") {
       const building = db.latestSnapshots().filter((item) => {
         const snapshotTeam = item.issue.slice(0, item.issue.indexOf("-")).toUpperCase();
-        return snapshotTeam === team.key && item.state === team.statuses.building;
+        return item.managed && snapshotTeam === team.key && item.state === team.statuses.building;
       }).length;
       target = building >= laneCap ? team.statuses.waiting : team.statuses.building;
     } else if (latestPrimary?.verb === "dispatch-scout") target = team.statuses.plan_in_progress;
@@ -90,7 +91,7 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
 
     for (const observation of currentNewObservations.filter((item) => item.verb === "pr-reported")) {
       const url = observation.note?.match(/https:\/\/\S+/)?.[0];
-      if (url) actions.push({ issue, cause: observation.id, description: `attach ${url}`, job: { key: `${observation.id}:attachment`, kind: "linear.attachment", target: issue, payload: { issue, url, title: "Pull request" } } });
+      if (url) actions.push({ issue, cause: observation.id, description: `attach ${url}`, job: { key: `${observation.id}:attachment`, kind: "linear.attachment", target: issue, payload: { issue, url, title: "Pull request", requires_managed: true } } });
     }
     const newModels = currentNewObservations.filter((item) => item.verb === "model-resolved" && item.task !== null && primary.has(item.task));
     const labelCauses = newModels.length > 0
@@ -102,10 +103,10 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
       const model = modelFrom(modelObservation);
       const label = team.agent_labels[model] ?? team.agent_labels.unknown;
       if (!team.agent_labels[model]) findings.push({ code: "UNKNOWN_MODEL", issue, detail: `unmapped model ${model}; using unknown` });
-      if (label) actions.push({ issue, cause: labelCause.id, description: `set agent label ${label}`, job: { key: `${labelCause.id}:agent-label:${label}`, kind: "linear.agent-label", target: issue, payload: { issue, label, known_labels: Object.values(team.agent_labels) } } });
+      if (label) actions.push({ issue, cause: labelCause.id, description: `set agent label ${label}`, job: { key: `${labelCause.id}:agent-label:${label}`, kind: "linear.agent-label", target: issue, payload: { issue, label, known_labels: Object.values(team.agent_labels), requires_managed: true } } });
     }
     if (target && target !== snapshot.state) {
-      actions.push({ issue, cause: cause.id, description: `${snapshot.state} -> ${target}`, job: { key: `${cause.id}:state:${target}`, kind: "linear.issue-state", target: issue, payload: { issue, state: target, expected_state: snapshot.state, cause_observation: cause.id, actor: "service", comment: cause.verb === "pr-green" ? "Required checks passed for the current PR head. Walkthrough: pending." : undefined } } });
+      actions.push({ issue, cause: cause.id, description: `${snapshot.state} -> ${target}`, job: { key: `${cause.id}:state:${target}`, kind: "linear.issue-state", target: issue, payload: { issue, state: target, expected_state: snapshot.state, cause_observation: cause.id, actor: "service", requires_managed: true, comment: cause.verb === "pr-green" ? "Required checks passed for the current PR head. Walkthrough: pending." : undefined } } });
     }
   }
   return { actions, findings };

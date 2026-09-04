@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
 export type EventDisposition =
   | "captured"
@@ -90,8 +90,11 @@ export type IssueSnapshot = {
   agent_label: string | null;
   last_actor: string | null;
   last_signal: string | null;
+  managed: boolean;
   observed_at: string;
 };
+
+export type NewIssueSnapshot = Omit<IssueSnapshot, "managed"> & { managed?: boolean };
 
 export type TaskLink = {
   lifecycle_id: string;
@@ -180,6 +183,7 @@ export class StateDatabase {
         if (from > 0 && from < 5 && !tableHasColumn(db, "task_links", "lifecycle_id")) db.exec(MIGRATE_TO_V5_SQL);
         if (from > 0 && from < 6 && !tableHasColumn(db, "observations", "task_spawned_at")) db.exec(MIGRATE_TO_V6_SQL);
         if (from > 0 && from < 7 && !tableHasColumn(db, "task_links", "lifecycle_id")) db.exec(MIGRATE_TO_V7_SQL);
+        if (from > 0 && from < 8 && !tableHasColumn(db, "issue_snapshots", "managed")) db.exec(MIGRATE_TO_V8_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -546,30 +550,32 @@ export class StateDatabase {
     return this.raw.query(`SELECT * FROM jobs WHERE state IN (${states.map(() => "?").join(",")}) ORDER BY created_at`).all(...states) as Job[];
   }
 
-  snapshot(value: IssueSnapshot): void {
-    this.raw.query(`INSERT OR IGNORE INTO issue_snapshots(
-      issue,state,assignee,labels,agent_label,last_actor,last_signal,observed_at
-    ) VALUES(?,?,?,?,?,?,?,?)`).run(
+  snapshot(value: NewIssueSnapshot): void {
+    this.raw.query(`INSERT INTO issue_snapshots(
+      issue,state,assignee,labels,agent_label,last_actor,last_signal,managed,observed_at
+    ) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(issue,observed_at) DO UPDATE SET
+      state=excluded.state,assignee=excluded.assignee,labels=excluded.labels,agent_label=excluded.agent_label,
+      last_actor=excluded.last_actor,last_signal=excluded.last_signal,managed=excluded.managed`).run(
       value.issue, value.state, value.assignee, JSON.stringify(value.labels), value.agent_label,
-      value.last_actor, value.last_signal, value.observed_at,
+      value.last_actor, value.last_signal, value.managed === false ? 0 : 1, value.observed_at,
     );
   }
 
   latestSnapshot(issue: string): IssueSnapshot | null {
-    const row = this.raw.query("SELECT * FROM issue_snapshots WHERE issue=? ORDER BY observed_at DESC LIMIT 1").get(issue) as (Omit<IssueSnapshot, "labels"> & { labels: string }) | null;
-    return row ? { ...row, labels: JSON.parse(row.labels) as string[] } : null;
+    const row = this.raw.query("SELECT * FROM issue_snapshots WHERE issue=? ORDER BY observed_at DESC LIMIT 1").get(issue) as (Omit<IssueSnapshot, "labels" | "managed"> & { labels: string; managed: number }) | null;
+    return row ? { ...row, labels: JSON.parse(row.labels) as string[], managed: row.managed === 1 } : null;
   }
 
   latestSnapshots(): IssueSnapshot[] {
     const rows = this.raw.query(`SELECT s.* FROM issue_snapshots s JOIN (
       SELECT issue,MAX(observed_at) observed_at FROM issue_snapshots GROUP BY issue
-    ) latest ON latest.issue=s.issue AND latest.observed_at=s.observed_at ORDER BY s.issue`).all() as Array<Omit<IssueSnapshot, "labels"> & { labels: string }>;
-    return rows.map((row) => ({ ...row, labels: JSON.parse(row.labels) as string[] }));
+    ) latest ON latest.issue=s.issue AND latest.observed_at=s.observed_at ORDER BY s.issue`).all() as Array<Omit<IssueSnapshot, "labels" | "managed"> & { labels: string; managed: number }>;
+    return rows.map((row) => ({ ...row, labels: JSON.parse(row.labels) as string[], managed: row.managed === 1 }));
   }
 
   snapshots(issue: string): IssueSnapshot[] {
-    const rows = this.raw.query("SELECT * FROM issue_snapshots WHERE issue=? ORDER BY rowid").all(issue) as Array<Omit<IssueSnapshot, "labels"> & { labels: string }>;
-    return rows.map((row) => ({ ...row, labels: JSON.parse(row.labels) as string[] }));
+    const rows = this.raw.query("SELECT * FROM issue_snapshots WHERE issue=? ORDER BY rowid").all(issue) as Array<Omit<IssueSnapshot, "labels" | "managed"> & { labels: string; managed: number }>;
+    return rows.map((row) => ({ ...row, labels: JSON.parse(row.labels) as string[], managed: row.managed === 1 }));
   }
 
   linkTask(value: NewTaskLink): void {
@@ -713,5 +719,10 @@ export class StateDatabase {
   markPromiseOverdue(id: string, stalledEventId: string): void {
     this.raw.query("UPDATE promises SET state='overdue',stalled_event_id=? WHERE id=? AND state IN ('open','overdue')")
       .run(stalledEventId, id);
+  }
+
+  cancelPromise(id: string): void {
+    this.raw.query("UPDATE promises SET state='superseded',superseded_by=NULL WHERE id=? AND state IN ('pending','open','overdue')")
+      .run(id);
   }
 }
