@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_PROGRESS_DEADLINES, type TeamConfig, type WorkflowConfig } from "../config/schema.ts";
-import { type DomainEvent, type Observation, observationBelongsToTaskLink, type PromiseRecord, type StateDatabase } from "../db/database.ts";
+import { type DomainEvent, type Observation, observationBelongsToTaskLink, type PromiseRecord, type StateDatabase, type TaskLink } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
+import { sidecarGeneration } from "../mirror/generation.ts";
 import { compareIso, formatIso, nowEpoch, nowIso, parseIso } from "../time.ts";
 
 export type Progress = { id: string; kind: string; at: string; detail: string };
@@ -94,10 +95,12 @@ export function lastProgress(db: StateDatabase, issue: string): Progress | null 
   return latest;
 }
 
-function taskBusyState(home: string, task: string): "busy" | "not-busy" {
-  const path = join(home, "state", `${task}.busy-state`);
+function taskBusyState(home: string, link: TaskLink): "busy" | "not-busy" {
+  const path = join(home, "state", `${link.task}.busy-state`);
   if (!existsSync(path)) return "not-busy";
   try {
+    const generation = sidecarGeneration(path, "gen");
+    if (generation && generation === link.blocked_busy_generation) return "not-busy";
     const text = readFileSync(path, "utf8");
     const match = /^v1 gen=\S+ seq=\d+ state=(busy|idle) source=\S+ event=\S+ ts=\d+\n?$/.exec(text);
     return match?.[1] === "busy" ? "busy" : "not-busy";
@@ -106,7 +109,7 @@ function taskBusyState(home: string, task: string): "busy" | "not-busy" {
 
 function busy(home: string, db: StateDatabase, issue: string): boolean {
   for (const link of db.taskLinks(issue, true).filter((item) => item.role === "primary")) {
-    if (taskBusyState(home, link.task) === "busy") return true;
+    if (taskBusyState(home, link) === "busy") return true;
   }
   return false;
 }
@@ -282,7 +285,7 @@ export function issueStatus(home: string, db: StateDatabase, issue: string): str
   const progress = lastProgress(db, issue);
   const promises = db.promises(issue, ["open", "overdue"]);
   const tasks = db.taskLinks(issue, true).map((link) => {
-    return `${link.task} (${link.role}, ${taskBusyState(home, link.task)})`;
+    return `${link.task} (${link.role}, ${taskBusyState(home, link)})`;
   });
   return [
     `issue ${issue}`,

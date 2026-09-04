@@ -93,6 +93,7 @@ export function runActV6(args: string[], env: NodeJS.ProcessEnv = process.env): 
     if (verb === "status" && !explicitStatus) throw new Error("status requires --status");
     db = StateDatabase.open(env);
     const snapshot = db.latestSnapshot(issue);
+    if (snapshot?.managed === false) throw new Error(`issue is no longer managed: ${issue}`);
     const firstmateOwned = new Set([
       team.statuses.plan_in_progress, team.statuses.building, team.statuses.validating_code,
       team.statuses.waiting, team.statuses.needs_firstmate_decision,
@@ -121,10 +122,10 @@ export function runActV6(args: string[], env: NodeJS.ProcessEnv = process.env): 
     const keyBase = `${receipt}:${verb}:${issue}`;
     const jobs: NewJob[] = [];
     if (text) {
-      jobs.push({ key: `${keyBase}:comment:${sha256(rendered)}`, kind: "linear.comment", target: issue, payload: { issue, body: rendered, actor: "core" } });
+      jobs.push({ key: `${keyBase}:comment:${sha256(rendered)}`, kind: "linear.comment", target: issue, payload: { issue, body: rendered, actor: "core", requires_managed: true } });
     }
     if (target) {
-      jobs.push({ key: `${keyBase}:state:${target}`, kind: "linear.issue-state", target: issue, payload: { issue, state: target, expected_state: snapshot?.state ?? null, actor: "core" } });
+      jobs.push({ key: `${keyBase}:state:${target}`, kind: "linear.issue-state", target: issue, payload: { issue, state: target, expected_state: snapshot?.state ?? null, actor: "core", requires_managed: true } });
     }
     let handled: string[] = [];
     const createdAt = nowIso(env);

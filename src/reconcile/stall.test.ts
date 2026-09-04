@@ -200,6 +200,17 @@ describe("stall reconciliation", () => {
     db.close();
   });
 
+  test("a relinked task ignores the prior busy producer generation", () => {
+    const { root, db } = setup();
+    mkdirSync(join(root, "state"));
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null, blocked_busy_generation: "gen:g1.1.1" });
+    writeFileSync(join(root, "state", "worker.busy-state"), "v1 gen=g1.1.1 seq=1 state=busy source=test event=turn ts=1\n");
+
+    expect(reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:46:00Z") / 1000) }).emitted).toBe(1);
+    db.close();
+  });
+
   test("closed primary progress prevents a heartbeat based on older board state", () => {
     const { root, db } = setup();
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });

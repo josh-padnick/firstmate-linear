@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
 export type EventDisposition =
   | "captured"
@@ -107,12 +107,24 @@ export type TaskLink = {
   torn_down_at: string | null;
   status_start_offset: number | null;
   status_end_offset: number | null;
+  status_start_identity: string | null;
+  status_end_identity: string | null;
+  meta_generation: string | null;
+  busy_generation: string | null;
+  blocked_meta_generation: string | null;
+  blocked_busy_generation: string | null;
 };
 
-export type NewTaskLink = Omit<TaskLink, "lifecycle_id" | "status_start_offset" | "status_end_offset"> & {
+export type NewTaskLink = Omit<TaskLink, "lifecycle_id" | "status_start_offset" | "status_end_offset" | "status_start_identity" | "status_end_identity" | "meta_generation" | "busy_generation" | "blocked_meta_generation" | "blocked_busy_generation"> & {
   lifecycle_id?: string;
   status_start_offset?: number | null;
   status_end_offset?: number | null;
+  status_start_identity?: string | null;
+  status_end_identity?: string | null;
+  meta_generation?: string | null;
+  busy_generation?: string | null;
+  blocked_meta_generation?: string | null;
+  blocked_busy_generation?: string | null;
 };
 
 export type Observation = {
@@ -130,7 +142,7 @@ export type Observation = {
 
 export function observationBelongsToTaskLink(observation: Observation, link: TaskLink): boolean {
   if (observation.issue !== link.issue || observation.task !== link.task) return false;
-  if (observation.task_lifecycle_id && observation.task_lifecycle_id !== link.lifecycle_id) return false;
+  if (observation.task_lifecycle_id) return observation.task_lifecycle_id === link.lifecycle_id;
   if (observation.task_spawned_at && observation.task_spawned_at !== link.spawned_at) return false;
   const afterSpawn = compareIso(observation.observed_at, link.spawned_at);
   if (afterSpawn === null || afterSpawn < 0) return false;
@@ -191,6 +203,7 @@ export class StateDatabase {
         if (from > 0 && from < 7 && !tableHasColumn(db, "task_links", "lifecycle_id")) db.exec(MIGRATE_TO_V7_SQL);
         if (from > 0 && from < 8 && !tableHasColumn(db, "issue_snapshots", "managed")) db.exec(MIGRATE_TO_V8_SQL);
         if (from > 0 && from < 9 && !tableHasColumn(db, "task_links", "status_start_offset")) db.exec(MIGRATE_TO_V9_SQL);
+        if (from > 0 && from < 10 && !tableHasColumn(db, "task_links", "status_start_identity")) db.exec(MIGRATE_TO_V10_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -601,23 +614,29 @@ export class StateDatabase {
           if (compareIso(value.spawned_at, active.spawned_at) !== 1) {
             throw new Error(`task role change requires a later lifecycle start: ${value.task} ${value.issue}`);
           }
-          this.raw.query("UPDATE task_links SET torn_down_at=?,status_end_offset=? WHERE task=? AND issue=? AND torn_down_at IS NULL")
-            .run(value.spawned_at, value.status_start_offset ?? null, value.task, value.issue);
+          this.raw.query("UPDATE task_links SET torn_down_at=?,status_end_offset=?,status_end_identity=?,meta_generation=?,busy_generation=? WHERE task=? AND issue=? AND torn_down_at IS NULL")
+            .run(value.spawned_at, value.status_start_offset ?? null, value.status_start_identity ?? null, value.meta_generation ?? null, value.busy_generation ?? null, value.task, value.issue);
         }
       }
-      this.raw.query(`INSERT INTO task_links(lifecycle_id,task,issue,role,worktree,harness,spawned_at,torn_down_at,status_start_offset,status_end_offset)
-        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lifecycle_id) DO UPDATE SET
+      this.raw.query(`INSERT INTO task_links(lifecycle_id,task,issue,role,worktree,harness,spawned_at,torn_down_at,status_start_offset,status_end_offset,status_start_identity,status_end_identity,meta_generation,busy_generation,blocked_meta_generation,blocked_busy_generation)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lifecycle_id) DO UPDATE SET
         task=excluded.task,issue=excluded.issue,role=excluded.role,worktree=excluded.worktree,
         harness=excluded.harness,spawned_at=excluded.spawned_at,torn_down_at=excluded.torn_down_at,
-        status_start_offset=excluded.status_start_offset,status_end_offset=excluded.status_end_offset`).run(
+        status_start_offset=excluded.status_start_offset,status_end_offset=excluded.status_end_offset,
+        status_start_identity=excluded.status_start_identity,status_end_identity=excluded.status_end_identity,
+        meta_generation=excluded.meta_generation,busy_generation=excluded.busy_generation,
+        blocked_meta_generation=excluded.blocked_meta_generation,blocked_busy_generation=excluded.blocked_busy_generation`).run(
           value.lifecycle_id ?? `link:${uuid()}`, value.task, value.issue, value.role, value.worktree, value.harness,
           value.spawned_at, value.torn_down_at, value.status_start_offset ?? null, value.status_end_offset ?? null,
+          value.status_start_identity ?? null, value.status_end_identity ?? null, value.meta_generation ?? null,
+          value.busy_generation ?? null, value.blocked_meta_generation ?? null, value.blocked_busy_generation ?? null,
         );
     });
   }
 
-  closeTask(task: string, at = nowIso(), statusEndOffset: number | null = null): void {
-    this.raw.query("UPDATE task_links SET torn_down_at=?,status_end_offset=? WHERE task=? AND torn_down_at IS NULL").run(at, statusEndOffset, task);
+  closeTask(task: string, at = nowIso(), boundary: { statusOffset?: number | null; statusIdentity?: string | null; metaGeneration?: string | null; busyGeneration?: string | null } = {}): void {
+    this.raw.query("UPDATE task_links SET torn_down_at=?,status_end_offset=?,status_end_identity=?,meta_generation=?,busy_generation=? WHERE task=? AND torn_down_at IS NULL")
+      .run(at, boundary.statusOffset ?? null, boundary.statusIdentity ?? null, boundary.metaGeneration ?? null, boundary.busyGeneration ?? null, task);
   }
 
   taskLinks(issue?: string, activeOnly = false): TaskLink[] {

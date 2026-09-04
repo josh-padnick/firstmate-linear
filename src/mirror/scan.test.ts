@@ -152,4 +152,37 @@ describe("fleet scanner", () => {
     expect(scanFleet(home, db, secondEnv).observations.filter((item) => item.source === "status")).toHaveLength(0);
     db.close();
   });
+
+  test("a status written before close is ingested for the closed lifecycle", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: started\n");
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
+    let db = StateDatabase.open(env);
+    scanFleet(home, db, env);
+    db.close();
+    writeFileSync(path, "working: started\ndone: finished\n");
+    expect(runTask(["close", "task"], { ...env, FM_LINEAR_NOW_EPOCH: "1767225660" })).toBe(0);
+    db = StateDatabase.open(env);
+
+    expect(scanFleet(home, db, env).observations).toContainEqual(expect.objectContaining({ verb: "done", issue: "ABC-1" }));
+    db.close();
+  });
+
+  test("a replacement status file is not constrained by the prior file offset", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: first lifecycle has a long status line\n");
+    const firstEnv = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1"], firstEnv)).toBe(0);
+    expect(runTask(["close", "task"], { ...firstEnv, FM_LINEAR_NOW_EPOCH: "1767225660" })).toBe(0);
+    expect(runTask(["link", "task", "ABC-1"], { ...firstEnv, FM_LINEAR_NOW_EPOCH: "1767225720" })).toBe(0);
+    unlinkSync(path);
+    writeFileSync(path, "working: new\n");
+    const db = StateDatabase.open(firstEnv);
+
+    expect(scanFleet(home, db, firstEnv).observations).toContainEqual(expect.objectContaining({ verb: "working", note: "new" }));
+    db.close();
+  });
 });

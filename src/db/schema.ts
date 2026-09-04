@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -84,7 +84,13 @@ CREATE TABLE IF NOT EXISTS task_links (
   spawned_at TEXT NOT NULL,
   torn_down_at TEXT,
   status_start_offset INTEGER,
-  status_end_offset INTEGER
+  status_end_offset INTEGER,
+  status_start_identity TEXT,
+  status_end_identity TEXT,
+  meta_generation TEXT,
+  busy_generation TEXT,
+  blocked_meta_generation TEXT,
+  blocked_busy_generation TEXT
 );
 
 CREATE INDEX IF NOT EXISTS task_links_issue_idx ON task_links(issue, role, torn_down_at);
@@ -218,4 +224,13 @@ ALTER TABLE issue_snapshots ADD COLUMN managed INTEGER NOT NULL DEFAULT 1;
 export const MIGRATE_TO_V9_SQL = `
 ALTER TABLE task_links ADD COLUMN status_start_offset INTEGER;
 ALTER TABLE task_links ADD COLUMN status_end_offset INTEGER;
+`;
+
+export const MIGRATE_TO_V10_SQL = `
+ALTER TABLE task_links ADD COLUMN status_start_identity TEXT;
+ALTER TABLE task_links ADD COLUMN status_end_identity TEXT;
+ALTER TABLE task_links ADD COLUMN meta_generation TEXT;
+ALTER TABLE task_links ADD COLUMN busy_generation TEXT;
+ALTER TABLE task_links ADD COLUMN blocked_meta_generation TEXT;
+ALTER TABLE task_links ADD COLUMN blocked_busy_generation TEXT;
 `;

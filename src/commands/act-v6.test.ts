@@ -142,4 +142,17 @@ describe("v6 act read gate", () => {
     expect(after.receipt(receipt)?.consumed_at).toBeNull();
     after.close();
   });
+
+  test("an action receipt cannot mutate an issue after it leaves scope", () => {
+    const { env, receipt } = setup();
+    const db = StateDatabase.open(env);
+    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Someone Else", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: false, observed_at: "2026-01-01T00:01:00Z" });
+    db.close();
+
+    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"], env)).toBe(1);
+    const after = StateDatabase.open(env);
+    expect(after.receipt(receipt)?.consumed_at).toBeNull();
+    expect(after.jobs()).toHaveLength(0);
+    after.close();
+  });
 });

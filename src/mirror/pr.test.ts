@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { runTask } from "../commands/task.ts";
 import { StateDatabase } from "../db/database.ts";
 import { inspectPr, scanPullRequests } from "./pr.ts";
 
@@ -69,6 +70,23 @@ describe("PR signals", () => {
 
     expect(current.observations.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
     expect(db.observations("ABC-1").filter((item) => item.verb === "pr-green")).toHaveLength(2);
+    db.close();
+  });
+
+  test("a relinked task waits for a new metadata producer generation", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    const metaPath = join(home, "state", "task.meta");
+    writeFileSync(metaPath, "spawn_gen=old\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    const firstEnv = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1"], firstEnv)).toBe(0);
+    expect(runTask(["close", "task"], { ...firstEnv, FM_LINEAR_NOW_EPOCH: "1767225660" })).toBe(0);
+    expect(runTask(["link", "task", "ABC-1"], { ...firstEnv, FM_LINEAR_NOW_EPOCH: "1767225720" })).toBe(0);
+    const db = StateDatabase.open(firstEnv);
+    const inspect = () => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] });
+
+    expect(scanPullRequests(home, db, inspect).observations).toHaveLength(0);
+    writeFileSync(metaPath, "spawn_gen=new\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    expect(scanPullRequests(home, db, inspect).observations.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
     db.close();
   });
 

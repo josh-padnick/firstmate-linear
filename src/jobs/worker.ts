@@ -20,6 +20,7 @@ const RESOLVE_LABELS = `query($issue:String!){issue(id:$issue){id labels{nodes{i
 const UPDATE_LABELS = `mutation($issue:String!,$added:[String!],$removed:[String!]){issueUpdate(id:$issue,input:{addedLabelIds:$added,removedLabelIds:$removed}){success issue{id labels{nodes{name}}}}}`;
 const RESOLVE_LABEL_GROUP = `query($name:String!){issueLabels(first:50,filter:{name:{eq:$name}}){nodes{id name isGroup team{id}}}}`;
 const CREATE_LABEL_GROUP = `mutation($name:String!){issueLabelCreate(input:{name:$name,isGroup:true,color:"#6B7280"}){success issueLabel{id name isGroup}}}`;
+const RESOLVE_MANAGED = `query($issue:String!){viewer{displayName} issue(id:$issue){identifier assignee{displayName} project{name slugId}}}`;
 
 export type JobPayload = Record<string, unknown>;
 
@@ -57,7 +58,10 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
   const note = typeof body.comment === "string" ? body.comment.trim() : "";
   const outcome = (): JobOutcome => ({
     nativeId: resolved.issue.id,
-    followups: note ? [{ key: `${job.key}:comment`, kind: "linear.comment", target: issue, payload: { issue, body: note } }] : undefined,
+    followups: note ? [{
+      key: `${job.key}:comment`, kind: "linear.comment", target: issue,
+      payload: { issue, body: note, requires_managed: body.requires_managed === true || undefined },
+    }] : undefined,
   });
   if (resolved.issue.state?.name === target) return outcome();
   const expected = typeof body.expected_state === "string" ? body.expected_state : null;
@@ -229,6 +233,18 @@ export async function executeJob(job: Job, options: {
   if (body.requires_managed === true) {
     if (!options.db) throw new Error("managed issue guard requires the state database");
     if (options.db.latestSnapshot(job.target)?.managed !== true) return {};
+    const resolved = value(await options.transport.call("job-resolve-managed", { query: RESOLVE_MANAGED, variables: { issue: job.target } }));
+    const issue = resolved?.issue;
+    const identifier = typeof issue?.identifier === "string" ? issue.identifier : job.target;
+    const teamKey = identifier.slice(0, identifier.indexOf("-")).toUpperCase();
+    const team = options.config.teams.find((item) => item.key === teamKey);
+    const assigned = team?.managed === "all" || (typeof resolved?.viewer?.displayName === "string"
+      && issue?.assignee?.displayName === resolved.viewer.displayName);
+    const allowedProjects = new Set(team?.projects.map((item) => item.toLowerCase()) ?? []);
+    const projectManaged = Boolean(team) && (!allowedProjects.size
+      || allowedProjects.has(issue?.project?.slugId?.toLowerCase() ?? "")
+      || allowedProjects.has(issue?.project?.name?.toLowerCase() ?? ""));
+    if (!issue || !assigned || !projectManaged) return {};
   }
   switch (job.kind) {
     case "linear.issue-state": return updateIssueState(job, body, options.transport, options.config);

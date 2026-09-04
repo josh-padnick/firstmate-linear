@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import type { WorkflowConfig } from "../config/schema.ts";
@@ -116,7 +116,8 @@ describe("service activation", () => {
     const yaml = (mirror: "shadow" | "on") => `version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\nfeatures: { relay: off, mirror: ${mirror}, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n`;
     writeFileSync(configPath, yaml("shadow"));
     writeFileSync(join(root, "state", "worker.meta"), "model=codex\n");
-    writeFileSync(join(root, "state", "worker.status"), "done: old lifecycle\n");
+    const statusPath = join(root, "state", "worker.status");
+    writeFileSync(statusPath, "working: old lifecycle\n");
     let db = StateDatabase.open({ FM_HOME: root });
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
     db.close();
@@ -125,18 +126,17 @@ describe("service activation", () => {
     const run = (...args: string[]) => spawnSync(command, args, { env, encoding: "utf8" });
     expect(run("task", "link", "worker", "ABC-1").status).toBe(0);
     expect(run("service", "once").status).toBe(0);
+    appendFileSync(statusPath, "done: closed lifecycle\n");
     expect(run("task", "close", "worker").status).toBe(0);
     expect(run("task", "link", "worker", "ABC-1").status).toBe(0);
-    unlinkSync(join(root, "state", "worker.status"));
     writeFileSync(configPath, yaml("on"));
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
-    writeFileSync(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { viewer: { id: "me" }, issue: { id: "issue-id", state: { name: "Building" }, team: { states: { nodes: [{ id: "done", name: "Done" }] }, members: { nodes: [] } } } } }));
-    writeFileSync(join(fixtures, "02-update.json"), JSON.stringify({ data: { issueUpdate: { success: true } } }));
     const log = join(root, "service.log");
     const result = spawnSync(command, ["service", "once"], { env: { ...env, FM_LINEAR_FIXTURE_DIR: fixtures, FM_LINEAR_FIXTURE_LOG: log }, encoding: "utf8" });
     expect(result.status).toBe(0);
     db = StateDatabase.open({ FM_HOME: root });
     expect(db.jobs().filter((job) => job.kind === "linear.issue-state")).toHaveLength(0);
+    expect(existsSync(log)).toBe(false);
     db.close();
   });
 });

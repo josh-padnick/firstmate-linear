@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { type Observation, observationBelongsToTaskLink, type StateDatabase, type TaskLink } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { nowIso } from "../time.ts";
+import { sidecarGeneration } from "./generation.ts";
 
 export type PrSnapshot = {
   state: "OPEN" | "MERGED" | "CLOSED";
@@ -72,6 +73,8 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
   for (const link of db.taskLinks(undefined, true)) {
     const path = join(home, "state", `${link.task}.meta`);
     if (!existsSync(path)) continue;
+    const generation = sidecarGeneration(path, "spawn_gen");
+    if (generation && generation === link.blocked_meta_generation) continue;
     const values = meta(path);
     const url = values.pr;
     const expectedHead = values.pr_head;
