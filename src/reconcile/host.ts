@@ -68,6 +68,7 @@ export function collectHostSamples(home: string, db: StateDatabase, config: Work
   for (const sample of out) {
     db.recordHostSample(sample);
     db.setServiceState(`host-sampled:${sample.host}`, at, at);
+    db.pruneHostSamples(sample.host, formatIso(now - config.hosts.window));
   }
   return out;
 }
@@ -89,10 +90,10 @@ export function reconcileHostHealth(db: StateDatabase, config: WorkflowConfig, e
   let emitted = 0;
   let cleared = 0;
   for (const host of hosts) {
-    const samples = db.hostSamples(host);
+    const cutoff = now - config.hosts.window;
+    const samples = db.hostSamples(host, formatIso(cutoff));
     const latest = samples.at(-1);
     if (!latest) continue;
-    const cutoff = now - config.hosts.window;
     const before = samples.filter((sample) => (parseIso(sample.observed_at) ?? 0) < cutoff).at(-1);
     const recent = [...(before ? [before] : []), ...samples.filter((sample) => (parseIso(sample.observed_at) ?? 0) >= cutoff)];
     const spansWindow = recent.length > 0 && (parseIso(recent[0]!.observed_at) ?? now) <= now - config.hosts.window;

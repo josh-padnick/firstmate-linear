@@ -121,6 +121,15 @@ describe("v6 act read gate", async () => {
     after.close();
   });
 
+  test("status rejects a globally valid role that the team does not map", async () => {
+    const { env, receipt } = setup();
+    expect(await runActV6(["status", "ABC-1", "--receipt", receipt, "--role", "waiting"], env)).toBe(1);
+    const db = StateDatabase.open(env);
+    expect(db.jobs()).toHaveLength(0);
+    expect(db.receipt(receipt)?.consumed_at).toBeNull();
+    db.close();
+  });
+
   test("gate replies require a verdict and ownership", async () => {
     const { env, receipt } = setup();
     expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it"], env)).toBe(1);

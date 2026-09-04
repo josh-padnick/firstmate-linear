@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
 import { testWorkflowConfig } from "../testing/config.ts";
@@ -52,15 +52,27 @@ test("remote recipient activity acknowledges through the remote probe interval",
   db.close();
 });
 
-test("remote probes are throttled per steer", () => {
+test("remote probes are limited per host and rotate fairly", () => {
   const home = mkdtempSync("/private/tmp/fml-steer-"); roots.push(home);
   const db = new StateDatabase(join(home, "db"), join(home, "backups"));
   db.recordSteer({ issue: "ABC-1", home: "mini", task: "first", record_path: "/remote/state/first.inbox/one.json", sent_at: "2026-01-01T12:00:00Z" });
   db.recordSteer({ issue: "ABC-2", home: "mini", task: "second", record_path: "/remote/state/second.inbox/two.json", sent_at: "2026-01-01T12:00:00Z" });
   const probed: string[] = [];
   const probe = (steer: { task: string }) => { probed.push(steer.task); return steer.task === "second" ? "acknowledged" as const : "unacknowledged" as const; };
-  expect(reconcileSteers(home, db, testWorkflowConfig(), { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:01:00Z") / 1000) }, new Set(), probe).acked).toBe(1);
+  expect(reconcileSteers(home, db, testWorkflowConfig(), { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:01:00Z") / 1000) }, new Set(), probe).acked).toBe(0);
+  expect(probed).toEqual(["first"]);
+  expect(reconcileSteers(home, db, testWorkflowConfig(), { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:01:01Z") / 1000) }, new Set(), probe).acked).toBe(1);
   expect(probed).toEqual(["first", "second"]);
+  db.close();
+});
+
+test("local discovery skips records removed between listing and inspection", () => {
+  const home = mkdtempSync("/private/tmp/fml-steer-"); roots.push(home);
+  const inbox = join(home, "state", "worker.inbox"); mkdirSync(inbox, { recursive: true });
+  symlinkSync(join(home, "already-moved.msg"), join(inbox, "missing.msg"));
+  const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+  expect(discoverLocalSteers(home, db)).toBe(0);
+  expect(db.steers()).toHaveLength(0);
   db.close();
 });
 

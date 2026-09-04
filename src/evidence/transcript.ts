@@ -34,11 +34,10 @@ function locator(link: TaskLink, userHome: string): string | null {
   return null;
 }
 
-function inWindow(path: string, link: TaskLink, now: number): boolean {
-  const modified = statSync(path).mtimeMs / 1000;
+function inWindow(modified: number, link: TaskLink, now: number): boolean {
   const start = parseIso(link.spawned_at) ?? 0;
   const end = parseIso(link.torn_down_at ?? "") ?? now;
-  return modified >= start && modified <= end + 1;
+  return modified / 1000 >= start && modified / 1000 <= end + 1;
 }
 
 export function transcriptTail(db: StateDatabase, issue: string, count: number, env: NodeJS.ProcessEnv = process.env): string {
@@ -49,12 +48,18 @@ export function transcriptTail(db: StateDatabase, issue: string, count: number, 
   if (!link) return "transcript tail: omitted (no linked worker session locator)";
   const root = locator(link, userHome);
   if (!root) return `transcript tail: omitted (no locator for harness ${link.harness ?? "unknown"})`;
-  const candidates = files(root)
-    .filter((path) => inWindow(path, link, now))
-    .filter((path) => link.harness !== "codex" || readFileSync(path, "utf8").includes(link.worktree!))
-    .sort((left, right) => statSync(left).mtimeMs - statSync(right).mtimeMs);
-  const selected = candidates.at(-1);
+  const candidates = files(root).flatMap((path) => {
+    try {
+      const modified = statSync(path).mtimeMs;
+      if (!inWindow(modified, link, now)) return [];
+      if (link.harness === "codex" && !readFileSync(path, "utf8").includes(link.worktree!)) return [];
+      return [{ path, modified }];
+    } catch { return []; }
+  }).sort((left, right) => left.modified - right.modified);
+  const selected = candidates.at(-1)?.path;
   if (!selected) return "transcript tail: omitted (no session in the task time window)";
-  const lines = readFileSync(selected, "utf8").split(/\r?\n/).filter(Boolean).slice(-count);
+  let lines: string[];
+  try { lines = readFileSync(selected, "utf8").split(/\r?\n/).filter(Boolean).slice(-count); }
+  catch { return "transcript tail: omitted (session became unavailable)"; }
   return [`transcript tail (${link.harness}):`, ...lines].join("\n");
 }

@@ -58,7 +58,7 @@ function prSourceIdentity(generation: string | null, url: string, snapshot: PrSn
   const checks = [...snapshot.requiredChecks]
     .map((check) => ({ name: check.name, state: check.state.toLowerCase() }))
     .sort((left, right) => left.name.localeCompare(right.name) || left.state.localeCompare(right.state));
-  return `pr:${sha256(JSON.stringify({ generation, url, state: snapshot.state, head: snapshot.headRefOid, base: snapshot.baseRefName, checks, verdict: snapshot.verdict ?? null }))}`;
+  return `pr:${sha256(JSON.stringify({ generation, url, state: snapshot.state, head: snapshot.headRefOid, base: snapshot.baseRefName, checks, verdict: snapshot.verdict ?? null, autoMergeArmed: snapshot.autoMergeArmed ?? false }))}`;
 }
 
 function prReportedIdentity(generation: string | null, url: string): string {
@@ -250,7 +250,7 @@ function recordPreparedLinks(db: StateDatabase, prepared: PreparedPrLink[], obse
           autoMergeArmed: snapshot.autoMergeArmed ?? false,
         };
         const verdictObservation: Observation = {
-          id: `obs:${sha256(`${lifecycle}:${url}:${snapshot.headRefOid}:verdict:${JSON.stringify(snapshot.verdict)}`)}`,
+          id: `obs:${sha256(`${lifecycle}:${url}:${snapshot.headRefOid}:verdict:${JSON.stringify({ verdict: snapshot.verdict, autoMergeArmed: snapshot.autoMergeArmed ?? false })}`)}`,
           source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id,
           issue: link.issue, verb: "verdict", key: snapshot.verdict.verdict, note: JSON.stringify(detail),
           source_identity: sourceIdentity, observed_at: observedAt,

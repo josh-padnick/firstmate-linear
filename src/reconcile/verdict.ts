@@ -20,8 +20,20 @@ type VerdictDetail = {
 
 function parseDetail(observation: Observation): VerdictDetail | null {
   try {
-    const value = JSON.parse(observation.note ?? "null") as VerdictDetail;
-    return value && typeof value.url === "string" && typeof value.verdict === "string" ? value : null;
+    const value = JSON.parse(observation.note ?? "null") as Partial<VerdictDetail> | null;
+    if (!value || !["auto-mergeable", "needs-human", "changes-requested"].includes(value.verdict ?? "")) return null;
+    if (value.risk !== null && !["low", "medium", "high"].includes(value.risk ?? "")) return null;
+    if (![value.reason, value.url, value.headSha].every((item) => typeof item === "string" && item.length > 0)) return null;
+    if (!Array.isArray(value.changedFiles) || value.changedFiles.some((file) => !file || typeof file.path !== "string"
+      || !Number.isSafeInteger(file.additions) || file.additions < 0
+      || !Number.isSafeInteger(file.deletions) || file.deletions < 0)) return null;
+    if (!Number.isSafeInteger(value.lines) || value.lines! < 0 || typeof value.autoMergeArmed !== "boolean") return null;
+    if (value.gateConclusion !== undefined && typeof value.gateConclusion !== "string") return null;
+    if (value.checkName !== undefined && typeof value.checkName !== "string") return null;
+    if (value.source !== undefined && !["check", "labels", "review"].includes(value.source)) return null;
+    if (value.checkConclusions !== undefined && (!value.checkConclusions || typeof value.checkConclusions !== "object"
+      || Array.isArray(value.checkConclusions) || Object.values(value.checkConclusions).some((item) => typeof item !== "string"))) return null;
+    return value as VerdictDetail;
   } catch { return null; }
 }
 

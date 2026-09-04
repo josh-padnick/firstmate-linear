@@ -19,6 +19,14 @@ describe("contract commands", () => {
     expect(parsed.captain.display_name).toBe("Josh: Admin");
   });
 
+  test("init rejects malformed or incomplete discovered role maps before writing", () => {
+    for (const roleMap of ["{", JSON.stringify({ building: "Building" })]) {
+      const home = mkdtempSync("/private/tmp/fml-init-"); roots.push(home);
+      expect(runInit(["--captain", "Captain", "--team", "ABC"], { FM_HOME: home, FM_LINEAR_INIT_ROLE_MAP: roleMap })).toBe(1);
+      expect(existsSync(join(home, "config", "linear-workflow.yaml"))).toBe(false);
+    }
+  });
+
   test("contract lint rejects missing, unsupported, and malformed template contracts", () => {
     const home = mkdtempSync("/private/tmp/fml-contract-"); roots.push(home);
     expect(runInit(["--captain", "Captain", "--team", "ABC"], { FM_HOME: home })).toBe(0);

@@ -55,6 +55,15 @@ test("auto-mergeable verdict waits visibly until the configured gate check succe
   db.close();
 });
 
+test("malformed durable verdict details are ignored", () => {
+  const { db } = setup();
+  const malformed = observation({ verdict: "auto-mergeable" });
+  malformed.note = JSON.stringify({ verdict: "auto-mergeable", url: "https://github.test/pr/1", headSha: "abc" });
+  expect(reconcileVerdicts(db, verdictConfig(), [malformed])).toEqual({ handled: 0, stalled: 0 });
+  expect(db.jobs()).toHaveLength(0);
+  db.close();
+});
+
 test("service policy downgrades auto merge to the merge gate", () => {
   const { db } = setup();
   const base = verdictConfig();

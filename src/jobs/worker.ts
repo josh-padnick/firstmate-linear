@@ -114,6 +114,20 @@ async function updateIssueRole(job: Job, body: JobPayload, transport: LinearTran
   return { ...outcome(), transitionedRole: targetRole };
 }
 
+async function updateLegacyIssueState(job: Job, body: JobPayload, transport: LinearTransport, config: WorkflowConfig): Promise<JobOutcome> {
+  const issue = requiredString(body.issue ?? job.target, "issue");
+  const teamKey = issue.slice(0, issue.indexOf("-")).toUpperCase();
+  const team = config.teams.find((item) => item.key === teamKey);
+  if (!team) throw new Error(`configured team not found: ${teamKey}`);
+  const targetState = requiredString(body.state, "state");
+  const targetRole = roleForState(team, targetState);
+  if (!targetRole) throw new Error(`legacy target status is unmapped for ${teamKey}: ${targetState}`);
+  const expectedState = typeof body.expected_state === "string" ? body.expected_state : null;
+  const expectedRole = expectedState ? roleForState(team, expectedState) : null;
+  if (expectedState && !expectedRole) throw new Error(`legacy expected status is unmapped for ${teamKey}: ${expectedState}`);
+  return updateIssueRole(job, { ...body, role: targetRole, expected_role: expectedRole ?? undefined }, transport, config);
+}
+
 function promiseSourceWatermarks(
   db: StateDatabase,
   issue: string,
@@ -354,6 +368,7 @@ export async function executeJob(job: Job, options: {
   }
   switch (job.kind) {
     case "linear.issue-role": return updateIssueRole(job, body, options.transport, options.config);
+    case "linear.issue-state": return updateLegacyIssueState(job, body, options.transport, options.config);
     case "promise.implicit": {
       if (!options.db) throw new Error("implicit promise requires the state database");
       const issue = requiredString(body.issue ?? job.target, "issue");

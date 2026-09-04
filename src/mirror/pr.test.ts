@@ -50,6 +50,24 @@ describe("PR signals", () => {
     db.close();
   });
 
+  test("auto-merge state changes create distinct verdict observations", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    writeFileSync(join(home, "state", "task.meta"), "pr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const snapshot = (autoMergeArmed: boolean) => ({
+      state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }],
+      verdict: { verdict: "auto-mergeable" as const, risk: "low" as const, reason: "reviewed" }, autoMergeArmed,
+    });
+    scanPullRequests(home, db, () => snapshot(false));
+    scanPullRequests(home, db, () => snapshot(true));
+    const verdicts = db.observations("ABC-1").filter((item) => item.verb === "verdict");
+    expect(verdicts).toHaveLength(2);
+    expect(new Set(verdicts.map((item) => item.id)).size).toBe(2);
+    expect(new Set(verdicts.map((item) => item.source_identity)).size).toBe(2);
+    db.close();
+  });
+
   test("one failed PR inspection does not suppress another lifecycle", () => {
     const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
     writeFileSync(join(home, "state", "broken.meta"), "pr=https://github.com/acme/repo/pull/1\npr_head=broken\npr_base=main\n");

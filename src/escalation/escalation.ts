@@ -4,6 +4,8 @@ import { nowEpoch, nowIso, parseIso } from "../time.ts";
 
 const TOKEN_DEADLINES: Record<string, number> = {
   "start-now": 5 * 60,
+  "plan-approved": 5 * 60,
+  approval: 5 * 60,
   "gate-pass": 5 * 60,
   "ball-returned": 5 * 60,
   verdict: 5 * 60,

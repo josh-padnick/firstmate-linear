@@ -15,7 +15,7 @@ export function planReviewDeadlines(home: string, db: StateDatabase, config: Wor
     if (!snapshot.managed) continue;
     const teamKey = snapshot.issue.slice(0, snapshot.issue.indexOf("-")).toUpperCase();
     const team = config.teams.find((item) => item.key === teamKey);
-    if (!team || snapshot.role !== "review-gate") continue;
+    if (!team?.roles["review-gate"] || snapshot.role !== "review-gate") continue;
     const primaryLinks = db.taskLinks(snapshot.issue, true).filter((link) => link.role === "primary");
     const primaryTasks = new Set(primaryLinks.map((link) => link.task));
     if (primaryTasks.size === 0) continue;

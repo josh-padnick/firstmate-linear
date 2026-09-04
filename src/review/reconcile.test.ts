@@ -39,6 +39,17 @@ describe("review deadline reconciler", () => {
     db.close();
   });
 
+  test("a persisted review-gate snapshot is ignored after the role is unmapped", () => {
+    const root = mkdtempSync("/private/tmp/fml-review-deadline-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", role: "review-gate", assignee: "Captain", labels: [], agent_label: null, last_actor: "service", last_signal: "pr-green", observed_at: "2026-01-01T00:00:00Z" });
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.observe({ id: "obs:green", source: "pr", task: "task", issue: "ABC-1", verb: "pr-green", key: "pr", note: null, observed_at: "2026-01-01T00:00:00Z" });
+    const disabled = { ...config, teams: config.teams.map((team) => ({ ...team, roles: { ...team.roles, "review-gate": undefined } })) };
+    expect(planReviewDeadlines(root, db, disabled, { FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T01:00:00Z") / 1000) })).toEqual({ jobs: [], findings: [] });
+    db.close();
+  });
+
   test("a relinked task does not inherit review readiness", () => {
     const root = mkdtempSync("/private/tmp/fml-review-deadline-"); roots.push(root);
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));

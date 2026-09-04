@@ -67,3 +67,17 @@ test("remote host sampling uses the structured registry host", () => {
   expect(readFileSync(calls, "utf8")).toStartWith("fm-mini sh -c ");
   db.close();
 });
+
+test("host sampling retains only the active window and one preceding sample", () => {
+  const root = mkdtempSync("/private/tmp/fml-host-"); roots.push(root);
+  const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+  const config = testWorkflowConfig();
+  for (const observed_at of ["2026-01-01T11:00:00Z", "2026-01-01T11:50:00Z", "2026-01-01T11:56:00Z"]) {
+    db.recordHostSample({ host: "local", observed_at, load1: 1, cores: 10, free_mb: 4096, top_processes: "[]" });
+  }
+  collectHostSamples(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:00:00Z") / 1000) });
+  expect(db.hostSamples("local").map((sample) => sample.observed_at)).toEqual([
+    "2026-01-01T11:50:00Z", "2026-01-01T11:56:00Z", "2026-01-01T12:00:00Z",
+  ]);
+  db.close();
+});

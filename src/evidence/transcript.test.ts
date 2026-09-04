@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
 import { transcriptTail } from "./transcript.ts";
@@ -22,4 +22,20 @@ test("Claude transcript tail selects only the session in the task window", () =>
   expect(tail).toContain("two\nthree");
   expect(tail).not.toContain("old session");
   db.close();
+});
+
+test("transcript tail skips an unreadable session instead of failing the command", () => {
+  const root = mkdtempSync("/private/tmp/fml-transcript-"); roots.push(root);
+  const userHome = join(root, "user");
+  const worktree = "/code/reused";
+  const sessions = join(userHome, ".codex", "sessions"); mkdirSync(sessions, { recursive: true });
+  const readable = join(sessions, "readable.jsonl"); writeFileSync(readable, `${worktree}\nuseful evidence\n`);
+  const unreadable = join(sessions, "unreadable.jsonl"); writeFileSync(unreadable, `${worktree}\nsecret\n`); chmodSync(unreadable, 0o000);
+  utimesSync(readable, new Date("2026-01-01T12:10:00Z"), new Date("2026-01-01T12:10:00Z"));
+  utimesSync(unreadable, new Date("2026-01-01T12:11:00Z"), new Date("2026-01-01T12:11:00Z"));
+  const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+  db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree, harness: "codex", spawned_at: "2026-01-01T12:00:00Z", torn_down_at: "2026-01-01T12:20:00Z" });
+  expect(transcriptTail(db, "ABC-1", 2, { FM_LINEAR_USER_HOME: userHome, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:30:00Z") / 1000) })).toContain("useful evidence");
+  db.close();
+  chmodSync(unreadable, 0o600);
 });

@@ -67,7 +67,11 @@ function validateExpected(expected: string, team: TeamConfig, vocabulary: string
 
 function roleForAction(verb: string, verdict: string | null, owner: string | null, team: TeamConfig, explicit: string | null): WorkflowRole | null {
   if (explicit && !(WORKFLOW_ROLES as readonly string[]).includes(explicit)) throw new Error(`unknown workflow role: ${explicit}`);
-  if (explicit) return explicit as WorkflowRole;
+  if (explicit) {
+    const role = explicit as WorkflowRole;
+    if (!team.roles[role]) throw new Error(`workflow role is unmapped for ${team.key}: ${role}`);
+    return role;
+  }
   if (verb === "complete") return "done";
   if (verb === "cancel") return "canceled";
   if (verb === "handoff-to-captain") {

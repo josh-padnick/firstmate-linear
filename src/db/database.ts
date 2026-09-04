@@ -897,8 +897,18 @@ export class StateDatabase {
       VALUES(?,?,?,?,?,?)`).run(value.host, value.observed_at, value.load1, value.cores, value.free_mb, value.top_processes);
   }
 
-  hostSamples(host: string): HostSample[] {
-    return this.raw.query("SELECT * FROM host_samples WHERE host=? ORDER BY observed_at").all(host) as HostSample[];
+  hostSamples(host: string, since?: string): HostSample[] {
+    if (!since) return this.raw.query("SELECT * FROM host_samples WHERE host=? ORDER BY observed_at").all(host) as HostSample[];
+    const before = this.raw.query("SELECT * FROM host_samples WHERE host=? AND observed_at<? ORDER BY observed_at DESC LIMIT 1").get(host, since) as HostSample | null;
+    const recent = this.raw.query("SELECT * FROM host_samples WHERE host=? AND observed_at>=? ORDER BY observed_at").all(host, since) as HostSample[];
+    return before ? [before, ...recent] : recent;
+  }
+
+  pruneHostSamples(host: string, since: string): number {
+    const result = this.raw.query(`DELETE FROM host_samples WHERE host=? AND observed_at<?
+      AND observed_at<>(SELECT MAX(observed_at) FROM host_samples WHERE host=? AND observed_at<?)`)
+      .run(host, since, host, since);
+    return result.changes;
   }
 
   serviceState(key: string): string | null {

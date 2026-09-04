@@ -76,7 +76,9 @@ export function discoverLocalSteers(home: string, db: StateDatabase): number {
     try { records = readdirSync(directory).filter((item) => item !== "handled" && !item.startsWith(".")); } catch { continue; }
     for (const record of records) {
       const path = join(directory, record);
-      const sentAt = statSync(path).mtime.toISOString().replace(/\.\d{3}Z$/, "Z");
+      let sentAt: string;
+      try { sentAt = statSync(path).mtime.toISOString().replace(/\.\d{3}Z$/, "Z"); }
+      catch { continue; }
       const link = lifecycleAt(db, task, sentAt);
       const issue = link?.issue ?? null;
       const before = db.steers().length;
@@ -94,7 +96,21 @@ export function reconcileSteers(home: string, db: StateDatabase, config: Workflo
   let acked = 0;
   let redelivered = 0;
   let stalled = 0;
-  for (const steer of db.steers(true)) {
+  const openSteers = db.steers(true);
+  const probeByHost = new Map<string, string>();
+  for (const steer of openSteers) {
+    if (steer.home === "local" || degradedHosts.has(steer.home)) continue;
+    const lastChecked = parseIso(db.serviceState(`steer-remote-checked:${steer.id}`) ?? "") ?? 0;
+    if (now - lastChecked < config.deadlines.steer.remote_check) continue;
+    const selected = probeByHost.get(steer.home);
+    if (!selected) {
+      probeByHost.set(steer.home, steer.id);
+      continue;
+    }
+    const selectedChecked = parseIso(db.serviceState(`steer-remote-checked:${selected}`) ?? "") ?? 0;
+    if (lastChecked < selectedChecked) probeByHost.set(steer.home, steer.id);
+  }
+  for (const steer of openSteers) {
     if (steer.lifecycle_id && !db.taskLinks(steer.issue ?? undefined, true)
       .some((link) => link.lifecycle_id === steer.lifecycle_id && link.task === steer.task)) {
       db.acknowledgeSteer(steer.id, at);
@@ -105,7 +121,7 @@ export function reconcileSteers(home: string, db: StateDatabase, config: Workflo
     if (steer.home !== "local") {
       const checkedKey = `steer-remote-checked:${steer.id}`;
       const lastChecked = parseIso(db.serviceState(checkedKey) ?? "") ?? 0;
-      if (now - lastChecked >= config.deadlines.steer.remote_check) {
+      if (probeByHost.get(steer.home) === steer.id) {
         const probe = remoteProbe(steer, home, env);
         db.setServiceState(checkedKey, at, at);
         remoteEvidence = probe === "acknowledged";

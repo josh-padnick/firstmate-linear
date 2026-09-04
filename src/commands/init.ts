@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { configPath, loadConfigFile } from "../config/load.ts";
+import { configPath, loadConfigFile, parseConfig } from "../config/load.ts";
 import { StateDatabase } from "../db/database.ts";
 import { resolveHome } from "../env.ts";
 import { atomicWriteFile, ensurePrivateDir } from "../fsutil.ts";
@@ -24,35 +24,41 @@ export function runInit(args: string[], env: NodeJS.ProcessEnv = process.env): n
     process.stderr.write(`fm-linear init: ${error instanceof Error ? error.message : String(error)}\n`);
     return 2;
   }
-  if (!existsSync(destination)) {
-    if (!captainInput || !teamInput) {
-      process.stderr.write("fm-linear init: --captain NAME and --team KEY are required for a new config\n");
-      return 2;
+  try {
+    if (!existsSync(destination)) {
+      if (!captainInput || !teamInput) {
+        process.stderr.write("fm-linear init: --captain NAME and --team KEY are required for a new config\n");
+        return 2;
+      }
+      let rendered = ASSETS.configExample
+        .replace("CAPTAIN_NAME", JSON.stringify(captainInput))
+        .replace("key: TEAM", `key: ${JSON.stringify(teamInput)}`);
+      const discoveredRoles = env.FM_LINEAR_INIT_ROLE_MAP?.trim();
+      if (discoveredRoles) {
+        const roles = JSON.parse(discoveredRoles) as Partial<Record<WorkflowRole, string>>;
+        const block = Object.entries(roles).map(([role, name]) => `      ${role}: ${JSON.stringify(name)}`).join("\n");
+        rendered = rendered.replace(/    roles:\n(?:      .*\n)+?    agent_labels:/, `    roles:\n${block}\n    agent_labels:`);
+      }
+      parseConfig(Bun.YAML.parse(rendered), destination);
+      ensurePrivateDir(join(home, "config"));
+      ensurePrivateDir(join(home, "state", "linear"));
+      atomicWriteFile(destination, rendered);
+      for (const [contents, targetName] of [
+        [ASSETS.replyTemplate, "reply.md"],
+        [ASSETS.reportTemplate, "report.md"],
+        [ASSETS.reviewTemplate, "review-walkthrough.html"],
+      ] as const) {
+        const target = join(dirname(destination), targetName);
+        if (!existsSync(target)) atomicWriteFile(target, contents, 0o600);
+      }
     }
-    ensurePrivateDir(join(home, "config"));
-    ensurePrivateDir(join(home, "state", "linear"));
-    let rendered = ASSETS.configExample
-      .replace("CAPTAIN_NAME", JSON.stringify(captainInput))
-      .replace("key: TEAM", `key: ${JSON.stringify(teamInput)}`);
-    const discoveredRoles = env.FM_LINEAR_INIT_ROLE_MAP?.trim();
-    if (discoveredRoles) {
-      const roles = JSON.parse(discoveredRoles) as Partial<Record<WorkflowRole, string>>;
-      const block = Object.entries(roles).map(([role, name]) => `      ${role}: ${JSON.stringify(name)}`).join("\n");
-      rendered = rendered.replace(/    roles:\n(?:      .*\n)+?    agent_labels:/, `    roles:\n${block}\n    agent_labels:`);
-    }
-    atomicWriteFile(destination, rendered);
-    for (const [contents, targetName] of [
-      [ASSETS.replyTemplate, "reply.md"],
-      [ASSETS.reportTemplate, "report.md"],
-      [ASSETS.reviewTemplate, "review-walkthrough.html"],
-    ] as const) {
-      const target = join(dirname(destination), targetName);
-      if (!existsSync(target)) atomicWriteFile(target, contents, 0o600);
-    }
+    loadConfigFile(destination);
+    const db = StateDatabase.open(env);
+    db.close();
+  } catch (error) {
+    process.stderr.write(`fm-linear init: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
   }
-  loadConfigFile(destination);
-  const db = StateDatabase.open(env);
-  db.close();
   process.stdout.write(`fm-linear init: ready at ${home}\nconfig: ${destination}\n`);
   return 0;
 }

@@ -45,6 +45,56 @@ describe("job worker", () => {
     db.close();
   });
 
+  test("a legacy state job is translated through the current role mapping", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: {
+      viewer: { id: "me", displayName: "Firstmate" },
+      issue: {
+        id: "issue-id", identifier: "ABC-1", state: { id: "old", name: "Approve Deliverable" },
+        team: { states: { nodes: [{ id: "new", name: "Validating Code" }] }, members: { nodes: [] } },
+      },
+    } }));
+    await Bun.write(join(fixtures, "02-update.json"), JSON.stringify({ data: { issueUpdate: { success: true } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.enqueue({
+      key: "legacy-state", kind: "linear.issue-state", target: "ABC-1",
+      payload: { issue: "ABC-1", state: "Validating Code", expected_state: "Approve Deliverable" },
+    }, "2026-01-01T00:00:00Z");
+    const result = await processJobs({
+      db, config, transport: new LinearTransport({ fixtureDir: fixtures }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" },
+    });
+    expect(result).toMatchObject({ done: 1, dead: 0 });
+    expect(db.jobs()[0]).toMatchObject({ kind: "linear.issue-state", state: "done" });
+    db.close();
+  });
+
+  test("pending, retry, and running legacy state jobs remain executable", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const resolved = JSON.stringify({ data: {
+      viewer: { id: "me", displayName: "Firstmate" },
+      issue: {
+        id: "issue-id", identifier: "ABC-1", state: { id: "current", name: "Validating Code" },
+        team: { states: { nodes: [{ id: "current", name: "Validating Code" }] }, members: { nodes: [] } },
+      },
+    } });
+    for (const index of [1, 2, 3]) await Bun.write(join(fixtures, `0${index}-resolve.json`), resolved);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    for (const state of ["pending", "retry", "running"] as const) {
+      const job = db.enqueue({ key: `legacy-${state}`, kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Validating Code" } }, "2026-01-01T00:00:00Z");
+      db.raw.query("UPDATE jobs SET state=? WHERE id=?").run(state, job.id);
+    }
+    const result = await processJobs({
+      db, config, transport: new LinearTransport({ fixtureDir: fixtures }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" },
+    });
+    expect(result).toMatchObject({ done: 3, dead: 0 });
+    expect(db.jobs().map((job) => job.state)).toEqual(["done", "done", "done"]);
+    db.close();
+  });
+
   test("a retried gate mutation is discarded after the issue leaves scope", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const log = join(root, "calls.log");

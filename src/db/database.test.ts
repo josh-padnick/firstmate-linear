@@ -287,7 +287,7 @@ describe("state database", () => {
     migrated.close();
   });
 
-  test("v13 migration adds host ownership to task links", () => {
+  test("v14 migration adds host ownership to task links", () => {
     const db = database();
     const path = db.path;
     db.close();
@@ -301,7 +301,7 @@ describe("state database", () => {
     migrated.close();
   });
 
-  test("v14 migration preserves the original steer message for idempotent redelivery", () => {
+  test("v15 migration preserves the original steer message for idempotent redelivery", () => {
     const db = database();
     const path = db.path;
     db.close();
@@ -314,7 +314,7 @@ describe("state database", () => {
     migrated.close();
   });
 
-  test("v15 migration adds the remote steer delivery identity", () => {
+  test("v16 migration adds the remote steer delivery identity", () => {
     const db = database();
     const path = db.path;
     db.close();
@@ -330,7 +330,7 @@ describe("state database", () => {
     migrated.close();
   });
 
-  test("v16 migration adds steer lifecycle identity", () => {
+  test("v17 migration adds steer lifecycle identity", () => {
     const db = database();
     const path = db.path;
     db.linkTask({
@@ -355,7 +355,7 @@ describe("state database", () => {
     migrated.close();
   });
 
-  test("v17 migration backfills an unambiguous legacy steer lifecycle", () => {
+  test("v18 migration backfills an unambiguous legacy steer lifecycle", () => {
     const db = database();
     const path = db.path;
     db.linkTask({
