@@ -5,6 +5,8 @@ import { resolveHome } from "../env.ts";
 import {
   CONFIG_VERSION,
   ConfigError,
+  DEFAULT_PROGRESS_DEADLINES,
+  DEFAULT_PROMISE_VOCABULARY,
   FEATURE_MODES,
   STATUS_KEYS,
   type FeatureMode,
@@ -13,6 +15,18 @@ import {
   type TeamConfig,
   type WorkflowConfig,
 } from "./schema.ts";
+
+function duration(value: unknown, path: string, pointer: string, fallback: number): number {
+  if (value == null) return fallback;
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.floor(value);
+  if (typeof value !== "string") throw new ConfigError(path, pointer, "expected a duration such as 30m or 2h");
+  const match = /^(\d+)(s|m|h|d)$/.exec(value.trim());
+  if (!match) throw new ConfigError(path, pointer, "expected a duration such as 30m or 2h");
+  const units: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
+  const seconds = Number(match[1]) * units[match[2]!]!;
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new ConfigError(path, pointer, "duration must be positive");
+  return seconds;
+}
 
 const DEFAULT_STATUSES: Record<StatusKey, string> = {
   backlog: "Backlog",
@@ -106,6 +120,10 @@ export function parseConfig(raw: unknown, path: string): WorkflowConfig {
   if (unique.size !== teams.length) throw new ConfigError(path, ".teams", "team keys must be unique");
   const features = record(root.features ?? {}, path, ".features");
   const templates = record(root.templates ?? {}, path, ".templates");
+  const deadlines = record(root.deadlines ?? {}, path, ".deadlines");
+  const progress = record(deadlines.progress ?? {}, path, ".deadlines.progress");
+  const stalled = record(deadlines.stalled ?? {}, path, ".deadlines.stalled");
+  const promises = record(root.promises ?? {}, path, ".promises");
   return {
     version: CONFIG_VERSION,
     captain: { display_name: string(captain.display_name, path, ".captain.display_name") },
@@ -119,6 +137,25 @@ export function parseConfig(raw: unknown, path: string): WorkflowConfig {
       reply: templatePath(templates.reply, "reply.md", path, ".templates.reply"),
       report: templatePath(templates.report, "report.md", path, ".templates.report"),
       review_walkthrough: templatePath(templates.review_walkthrough, "review-walkthrough.html", path, ".templates.review_walkthrough"),
+    },
+    deadlines: {
+      progress: Object.fromEntries(Object.entries(DEFAULT_PROGRESS_DEADLINES).map(([status, fallback]) => [
+        status,
+        duration(progress[status], path, `.deadlines.progress.${status}`, fallback),
+      ])),
+      stalled: { mention: duration(stalled.mention, path, ".deadlines.stalled.mention", 30 * 60) },
+    },
+    promises: {
+      required_on_firstmate_owned: promises.required_on_firstmate_owned == null
+        ? true
+        : promises.required_on_firstmate_owned === true
+          ? true
+          : promises.required_on_firstmate_owned === false
+            ? false
+            : (() => { throw new ConfigError(path, ".promises.required_on_firstmate_owned", "expected true or false"); })(),
+      vocabulary: promises.vocabulary == null
+        ? [...DEFAULT_PROMISE_VOCABULARY]
+        : strings(promises.vocabulary, path, ".promises.vocabulary"),
     },
     sourcePath: path,
   };

@@ -17,18 +17,28 @@ export type Escalation = { eventId: string; issue: string; ageSeconds: number; j
 export function planEscalations(db: StateDatabase, config: WorkflowConfig, env: NodeJS.ProcessEnv = process.env): Escalation[] {
   const now = nowEpoch(env);
   const out: Escalation[] = [];
+  const existingJobs = new Set(db.jobs().map((job) => job.key));
   for (const event of db.listEvents(["waiting-for-core"])) {
+    if (event.type === "resumed") continue;
     const created = parseIso(event.created_at);
     if (created === null) continue;
     const age = Math.max(0, now - created);
-    const deadline = TOKEN_DEADLINES[event.token] ?? 60 * 60;
+    const stalled = event.token === "stalled";
+    const deadline = stalled
+      ? config.deadlines?.stalled.mention ?? 30 * 60
+      : TOKEN_DEADLINES[event.token] ?? 60 * 60;
     if (age < deadline) continue;
-    const rung = age >= 24 * 3600 ? "24h" : age >= 3600 ? "1h" : "initial";
+    const rung = stalled ? "mention" : age >= 24 * 3600 ? "24h" : age >= 3600 ? "1h" : "initial";
+    const body = stalled
+      ? `${config.captain.display_name}: Firstmate has not handled this stalled issue after ${Math.floor(age / 60)} minutes. ${event.note ?? "Open the Firstmate inbox for the specific overdue action."}`
+      : `${config.captain.display_name}: Firstmate still needs your input on this issue (${event.token}, waiting ${Math.floor(age / 60)} minutes).`;
+    const key = `${event.id}:escalation:${rung}`;
+    if (existingJobs.has(key)) continue;
     out.push({
       eventId: event.id, issue: event.issue, ageSeconds: age,
       job: {
-        key: `${event.id}:escalation:${rung}`, kind: "linear.comment", target: event.issue,
-        payload: { issue: event.issue, body: `${config.captain.display_name}: Firstmate still needs your input on this issue (${event.token}, waiting ${Math.floor(age / 60)} minutes).` },
+        key, kind: "linear.comment", target: event.issue,
+        payload: { issue: event.issue, body },
       },
     });
   }

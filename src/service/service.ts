@@ -17,6 +17,7 @@ import { scanPullRequests } from "../mirror/pr.ts";
 import { applyEscalations } from "../escalation/escalation.ts";
 import { applyReviewDeadlines, planReviewDeadlines } from "../review/reconcile.ts";
 import { sha256 } from "../hash.ts";
+import { reconcileStalls } from "../reconcile/stall.ts";
 
 export type ServiceHealth = {
   schema: "fm-linear.health.v1";
@@ -33,6 +34,7 @@ export type ServiceHealth = {
   mirrorActions: number;
   findings: number;
   escalations: number;
+  stalls: number;
 };
 
 export type ServiceCycleResult = {
@@ -44,6 +46,7 @@ export type ServiceCycleResult = {
   mirrorActions: number;
   findings: number;
   escalations: number;
+  stalls: number;
 };
 
 function intervalSeconds(env: NodeJS.ProcessEnv): number {
@@ -97,7 +100,7 @@ export async function serviceCycle(options: {
 }): Promise<ServiceCycleResult> {
   const env = options.env ?? process.env;
   if (!activationActive(env)) {
-    return { captured: 0, jobsDone: 0, jobsRetried: 0, jobsDead: 0, resumed: false, mirrorActions: 0, findings: 0, escalations: 0 };
+    return { captured: 0, jobsDone: 0, jobsRetried: 0, jobsDead: 0, resumed: false, mirrorActions: 0, findings: 0, escalations: 0, stalls: 0 };
   }
   const skipCapture = env.FM_LINEAR_SKIP_CAPTURE === "1";
   const transport = options.transport ?? new LinearTransport({ apiKey: skipCapture ? "offline-spike" : loadKey(resolveHome(env), env) });
@@ -110,7 +113,6 @@ export async function serviceCycle(options: {
   const mirrorActions = applyMirrorPlan(options.db, options.config, mirror);
   const review = planReviewDeadlines(resolveHome(env), options.db, options.config, env);
   const reviewActions = applyReviewDeadlines(options.db, options.config, review);
-  const escalations = applyEscalations(options.db, options.config, env);
   for (const finding of [...scan.findings.map((item) => ({ ...item, issue: "SYSTEM-0" })), ...pr.findings, ...mirror.findings, ...review.findings]) {
     const task = "task" in finding && typeof finding.task === "string" ? finding.task : "service";
     options.db.observe({
@@ -119,8 +121,21 @@ export async function serviceCycle(options: {
       key: finding.code, note: finding.detail, observed_at: nowIso(env),
     });
   }
-  const jobs = await processJobs({ db: options.db, config: options.config, env, transport });
-  return { captured: capture.captured, jobsDone: jobs.done, jobsRetried: jobs.retried, jobsDead: jobs.dead, resumed: options.resumed ?? false, mirrorActions: mirrorActions + reviewActions, findings: scan.findings.length + pr.findings.length + mirror.findings.length + review.findings.length, escalations };
+  const before = await processJobs({ db: options.db, config: options.config, env, transport });
+  const stalls = reconcileStalls(resolveHome(env), options.db, options.config, env);
+  const escalations = applyEscalations(options.db, options.config, env);
+  const after = await processJobs({ db: options.db, config: options.config, env, transport });
+  return {
+    captured: capture.captured,
+    jobsDone: before.done + after.done,
+    jobsRetried: before.retried + after.retried,
+    jobsDead: before.dead + after.dead,
+    resumed: options.resumed ?? false,
+    mirrorActions: mirrorActions + reviewActions,
+    findings: scan.findings.length + pr.findings.length + mirror.findings.length + review.findings.length,
+    escalations,
+    stalls: stalls.emitted,
+  };
 }
 
 export async function runServiceOnce(options: { env?: NodeJS.ProcessEnv; transport?: LinearTransport } = {}): Promise<ServiceCycleResult> {
@@ -138,7 +153,7 @@ export async function runServiceOnce(options: { env?: NodeJS.ProcessEnv; transpo
       cycle_started_at: started, cycle_completed_at: nowIso(env), last_success_at: nowIso(env),
       consecutive_failures: 0, last_error: null, captured: result.captured,
       jobs_done: result.jobsDone, resumed, mirrorActions: result.mirrorActions,
-      findings: result.findings, escalations: result.escalations,
+      findings: result.findings, escalations: result.escalations, stalls: result.stalls,
     });
     return result;
   } catch (error) {
@@ -147,7 +162,7 @@ export async function runServiceOnce(options: { env?: NodeJS.ProcessEnv; transpo
       cycle_started_at: started, cycle_completed_at: nowIso(env), last_success_at: previous?.last_success_at ?? null,
       consecutive_failures: (previous?.consecutive_failures ?? 0) + 1,
       last_error: error instanceof Error ? error.message : String(error), captured: 0, jobs_done: 0, resumed,
-      mirrorActions: 0, findings: 0, escalations: 0,
+      mirrorActions: 0, findings: 0, escalations: 0, stalls: 0,
     });
     throw error;
   } finally {
@@ -197,9 +212,9 @@ export async function runService(env: NodeJS.ProcessEnv = process.env): Promise<
         cycle_started_at: started, cycle_completed_at: nowIso(env), last_success_at: nowIso(env),
         consecutive_failures: 0, last_error: null, captured: result.captured,
         jobs_done: result.jobsDone, resumed: first && resumed, mirrorActions: result.mirrorActions,
-        findings: result.findings, escalations: result.escalations,
+        findings: result.findings, escalations: result.escalations, stalls: result.stalls,
       });
-      log(paths.serviceLog, `ok captured=${result.captured} jobs=${result.jobsDone} retry=${result.jobsRetried} dead=${result.jobsDead} mirror=${result.mirrorActions} escalations=${result.escalations} findings=${result.findings}`);
+      log(paths.serviceLog, `ok captured=${result.captured} jobs=${result.jobsDone} retry=${result.jobsRetried} dead=${result.jobsDead} mirror=${result.mirrorActions} stalls=${result.stalls} escalations=${result.escalations} findings=${result.findings}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       writeHealth(paths.serviceHealth, {
@@ -207,7 +222,7 @@ export async function runService(env: NodeJS.ProcessEnv = process.env): Promise<
         cycle_started_at: started, cycle_completed_at: nowIso(env), last_success_at: health?.last_success_at ?? null,
         consecutive_failures: (health?.consecutive_failures ?? 0) + 1, last_error: message,
         captured: 0, jobs_done: 0, resumed: first && resumed,
-        mirrorActions: 0, findings: 0, escalations: 0,
+        mirrorActions: 0, findings: 0, escalations: 0, stalls: 0,
       });
       log(paths.serviceLog, `fail ${message}`);
     }

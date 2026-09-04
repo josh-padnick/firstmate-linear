@@ -32,6 +32,20 @@ features:
   mirror: shadow
   escalation: shadow
 
+deadlines:
+  progress:
+    "Plan In Progress": 30m
+    Building: 45m
+    "Validating Code": 60m
+    Waiting: 4h
+    "Needs Firstmate Decision": 15m
+  stalled:
+    mention: 30m
+
+promises:
+  required_on_firstmate_owned: true
+  vocabulary: ["status:*", "board:*", pr-reported, pr-green, pr-merged, comment, dispatch, none]
+
 templates:
   reply: reply.md
   report: report.md

@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -112,6 +112,23 @@ CREATE TABLE IF NOT EXISTS receipts (
   event_rowid INTEGER NOT NULL,
   consumed_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS promises (
+  id TEXT PRIMARY KEY,
+  issue TEXT NOT NULL,
+  source_event_id TEXT NOT NULL,
+  expected_event TEXT NOT NULL,
+  deadline_at TEXT NOT NULL,
+  reply_job_id TEXT NOT NULL,
+  reply_comment_id TEXT,
+  created_at TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('open', 'kept', 'overdue', 'superseded')),
+  observation_id TEXT,
+  superseded_by TEXT,
+  stalled_event_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS promises_issue_state_idx ON promises(issue,state,created_at);
 `;
 
 export const MIGRATE_TO_V2_SQL = `

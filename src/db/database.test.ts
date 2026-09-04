@@ -163,6 +163,21 @@ describe("state database", () => {
     migrated.close();
   });
 
+  test("v2 migration creates durable promise storage", () => {
+    const db = database();
+    const path = db.path;
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("DROP TABLE promises; PRAGMA user_version = 2;");
+    legacy.close();
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.createPromise({
+      issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green",
+      deadline_at: "2026-01-01T00:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T00:00:00Z",
+    })).toMatchObject({ issue: "ABC-1", state: "open" });
+    migrated.close();
+  });
+
   test("report consumption follows insertion order when a late event has an old source timestamp", () => {
     const db = database();
     db.capture(event("event:first"));

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { optionValue } from "./args.ts";
 
 const TEMPLATE_CONTRACTS = {
-  reply: { allowed: ["body", "verdict"], required: ["body"] },
+  reply: { allowed: ["body", "verdict", "next"], required: ["body", "next"] },
   report: { allowed: ["summary", "events", "drift"], required: ["summary", "events", "drift"] },
   review_walkthrough: { allowed: ["issue", "title", "outcome", "changes", "verification", "review"], required: ["issue", "title"] },
 } as const;

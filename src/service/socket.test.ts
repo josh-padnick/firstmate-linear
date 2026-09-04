@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
-import { handleLongPollRequest, handleServiceRequest } from "./protocol.ts";
+import { eventOutput, handleLongPollRequest, handleServiceRequest } from "./protocol.ts";
 import { runtimePaths } from "../paths.ts";
 import { createSocketServer } from "./socket.ts";
 
@@ -63,5 +63,19 @@ describe("service protocol", () => {
     const response = await handleLongPollRequest(db, { op: "source.poll", request_id: "request:inactive", sequence: 0 }, 0, () => false);
     expect(response).toEqual({ ok: true, result: { status: "no-result", output: "" } });
     expect(db.deliveryForEvent("event:parked")).toBeNull();
+  });
+
+  test("a stalled wake names the overdue promise and concrete action", () => {
+    const output = JSON.parse(eventOutput({
+      id: "event:stalled",
+      issue: "ABC-1",
+      token: "stalled",
+      author: "fm-linear",
+      note: "stalled ABC-1: promised pr-green by 12:40, not observed",
+      raw_ref: JSON.stringify({ expected: "pr-green", required: "check why validation runs have not reached a green PR" }),
+    }));
+    expect(output.reason).toContain("promised pr-green");
+    expect(output.required).toContain("validation runs");
+    expect(output.then).toContain("event:stalled");
   });
 });

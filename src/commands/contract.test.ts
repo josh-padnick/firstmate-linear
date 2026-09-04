@@ -15,7 +15,8 @@ describe("contract commands", () => {
     expect(existsSync(join(bad, "config"))).toBe(false);
     const home = mkdtempSync("/private/tmp/fml-init-"); roots.push(home);
     expect(runInit(["--captain", "Josh: Admin", "--team", "ABC"], { FM_HOME: home })).toBe(0);
-    expect(Bun.YAML.parse(readFileSync(join(home, "config", "linear-workflow.yaml"), "utf8")).captain.display_name).toBe("Josh: Admin");
+    const parsed = Bun.YAML.parse(readFileSync(join(home, "config", "linear-workflow.yaml"), "utf8")) as { captain: { display_name: string } };
+    expect(parsed.captain.display_name).toBe("Josh: Admin");
   });
 
   test("contract lint rejects missing, unsupported, and malformed template contracts", () => {

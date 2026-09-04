@@ -10,17 +10,21 @@ export type ServiceResponse =
   | { ok: true; result: Record<string, unknown> }
   | { ok: false; error: string; retryable: boolean };
 
-export function eventOutput(event: { id: string; issue: string; token: string; author: string; raw_ref: string }): string {
+export function eventOutput(event: { id: string; issue: string; token: string; author: string; note: string | null; raw_ref: string }): string {
   let raw: unknown = null;
   try { raw = JSON.parse(event.raw_ref); } catch { raw = null; }
+  const concrete = raw && typeof raw === "object" && "required" in raw && typeof raw.required === "string"
+    ? raw.required
+    : null;
   return JSON.stringify({
     schema: "fm-linear.core-event.v1",
     event_id: event.id,
     issue: event.issue,
     token: event.token,
     author: event.author,
+    reason: event.note,
     event: raw,
-    required: `Run fm-linear inbox show ${event.id}`,
+    required: concrete ? `${concrete}. Run fm-linear inbox show ${event.id}` : `Run fm-linear inbox show ${event.id}`,
     then: `Handle with fm-linear act or fm-linear inbox handle ${event.id}`,
   });
 }

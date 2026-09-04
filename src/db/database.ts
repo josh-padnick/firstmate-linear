@@ -63,6 +63,25 @@ export type NewJob = {
   nextAttemptAt?: string;
 };
 
+export type PromiseState = "open" | "kept" | "overdue" | "superseded";
+
+export type PromiseRecord = {
+  id: string;
+  issue: string;
+  source_event_id: string;
+  expected_event: string;
+  deadline_at: string;
+  reply_job_id: string;
+  reply_comment_id: string | null;
+  created_at: string;
+  state: PromiseState;
+  observation_id: string | null;
+  superseded_by: string | null;
+  stalled_event_id: string | null;
+};
+
+export type NewPromise = Pick<PromiseRecord, "issue" | "source_event_id" | "expected_event" | "deadline_at" | "reply_job_id" | "created_at">;
+
 export type IssueSnapshot = {
   issue: string;
   state: string;
@@ -341,6 +360,7 @@ export class StateDatabase {
     issue: string;
     captain: string;
     jobs: NewJob[];
+    promise?: Omit<NewPromise, "source_event_id" | "reply_job_id">;
     note: string;
     at?: string;
   }): string[] {
@@ -352,7 +372,12 @@ export class StateDatabase {
       const relevant = events.filter((event) => event.issue === options.issue && event.disposition === "waiting-for-core");
       if (!relevant.length) throw new Error(`receipt does not contain an event for ${options.issue}`);
       this.assertReceiptFresh(options.issue, options.captain, receipt);
-      for (const job of options.jobs) this.enqueue(job, at);
+      const enqueued = options.jobs.map((job) => this.enqueue(job, at));
+      if (options.promise) {
+        const reply = enqueued.find((job) => job.kind === "linear.comment");
+        if (!reply) throw new Error("a promise requires a captain-facing reply job");
+        this.createPromise({ ...options.promise, source_event_id: relevant.at(-1)!.id, reply_job_id: reply.id });
+      }
       for (const event of relevant) {
         this.raw.query("UPDATE events SET disposition='handled-by-core',disposition_at=?,note=? WHERE id=?")
           .run(at, options.note, event.id);
@@ -417,6 +442,7 @@ export class StateDatabase {
   finishJob(id: string, nativeId: string | null = null, at = nowIso()): void {
     this.raw.query("UPDATE jobs SET state='done',native_id=COALESCE(?,native_id),done_at=?,last_error=NULL WHERE id=?")
       .run(nativeId, at, id);
+    if (nativeId) this.raw.query("UPDATE promises SET reply_comment_id=? WHERE reply_job_id=?").run(nativeId, id);
   }
 
   retryJob(id: string, error: string, nextAttemptAt: string, dead = false): void {
@@ -447,6 +473,11 @@ export class StateDatabase {
     const rows = this.raw.query(`SELECT s.* FROM issue_snapshots s JOIN (
       SELECT issue,MAX(observed_at) observed_at FROM issue_snapshots GROUP BY issue
     ) latest ON latest.issue=s.issue AND latest.observed_at=s.observed_at ORDER BY s.issue`).all() as Array<Omit<IssueSnapshot, "labels"> & { labels: string }>;
+    return rows.map((row) => ({ ...row, labels: JSON.parse(row.labels) as string[] }));
+  }
+
+  snapshots(issue: string): IssueSnapshot[] {
+    const rows = this.raw.query("SELECT * FROM issue_snapshots WHERE issue=? ORDER BY rowid").all(issue) as Array<Omit<IssueSnapshot, "labels"> & { labels: string }>;
     return rows.map((row) => ({ ...row, labels: JSON.parse(row.labels) as string[] }));
   }
 
@@ -514,5 +545,44 @@ export class StateDatabase {
   setConsumerCursor(name: string, value: string, at = nowIso()): void {
     this.raw.query(`INSERT INTO consumer_cursors(name,value,updated_at) VALUES(?,?,?)
       ON CONFLICT(name) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).run(name, value, at);
+  }
+
+  createPromise(value: NewPromise): PromiseRecord {
+    const id = `promise:${sha256(`${value.issue}:${value.source_event_id}:${value.expected_event}:${value.deadline_at}:${value.reply_job_id}`)}`;
+    this.raw.query("UPDATE promises SET state='superseded',superseded_by=? WHERE issue=? AND state IN ('open','overdue') AND id<>?")
+      .run(id, value.issue, id);
+    this.raw.query(`INSERT OR IGNORE INTO promises(
+      id,issue,source_event_id,expected_event,deadline_at,reply_job_id,created_at,state
+    ) VALUES(?,?,?,?,?,?,?,'open')`).run(
+      id, value.issue, value.source_event_id, value.expected_event, value.deadline_at,
+      value.reply_job_id, value.created_at,
+    );
+    return this.promise(id)!;
+  }
+
+  promise(id: string): PromiseRecord | null {
+    return this.raw.query("SELECT * FROM promises WHERE id=?").get(id) as PromiseRecord | null;
+  }
+
+  promises(issue?: string, states?: PromiseState[]): PromiseRecord[] {
+    const clauses: string[] = [];
+    const args: string[] = [];
+    if (issue) { clauses.push("issue=?"); args.push(issue); }
+    if (states?.length) {
+      clauses.push(`state IN (${states.map(() => "?").join(",")})`);
+      args.push(...states);
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    return this.raw.query(`SELECT * FROM promises${where} ORDER BY created_at,id`).all(...args) as PromiseRecord[];
+  }
+
+  keepPromise(id: string, observationId: string): void {
+    this.raw.query("UPDATE promises SET state='kept',observation_id=? WHERE id=? AND state IN ('open','overdue')")
+      .run(observationId, id);
+  }
+
+  markPromiseOverdue(id: string, stalledEventId: string): void {
+    this.raw.query("UPDATE promises SET state='overdue',stalled_event_id=? WHERE id=? AND state IN ('open','overdue')")
+      .run(stalledEventId, id);
   }
 }

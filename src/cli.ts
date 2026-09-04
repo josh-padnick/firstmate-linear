@@ -20,7 +20,7 @@ Usage:
   fm-linear install [--harness claude|grok|codex] [--no-bind]
   fm-linear service run|once
   fm-linear inbox list|show [EVENT]|handle EVENT --receipt RECEIPT
-  fm-linear act <verb> ISSUE --receipt RECEIPT [flags]
+  fm-linear act <verb> ISSUE --receipt RECEIPT [--next EVENT --by DURATION] [flags]
   fm-linear report
   fm-linear mirror --plan|apply
   fm-linear task link|close|list
@@ -29,7 +29,7 @@ Usage:
   fm-linear config show --effective|import DIR
   fm-linear cutover enable|disable
   fm-linear doctor [--offline]
-  fm-linear status
+  fm-linear status [--issue ISSUE]
   fm-linear uninstall
 `;
 

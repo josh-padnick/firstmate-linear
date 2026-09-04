@@ -2,6 +2,9 @@ import { readText } from "../fsutil.ts";
 import { StateDatabase } from "../db/database.ts";
 import { runtimePaths } from "../paths.ts";
 import { nowEpoch, parseIso } from "../time.ts";
+import { issueStatus } from "../reconcile/stall.ts";
+import { normalizedComment } from "../classify/classify.ts";
+import { optionValue } from "./args.ts";
 
 function age(iso: string | null, env: NodeJS.ProcessEnv): string {
   if (!iso) return "never";
@@ -35,7 +38,26 @@ export function buildStatus(env: NodeJS.ProcessEnv = process.env): { text: strin
   } finally { db.close(); }
 }
 
-export function runStatus(_args: string[], env: NodeJS.ProcessEnv = process.env): number {
-  try { const result = buildStatus(env); process.stdout.write(result.text); return result.code; }
+export function isCaptainStatusQuery(body: string): boolean {
+  const normalized = normalizedComment(body).replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+  return new Set(["status", "current status", "update"]).has(normalized);
+}
+
+export function buildIssueStatus(home: string, db: StateDatabase, issue: string): string {
+  return issueStatus(home, db, issue);
+}
+
+export function runStatus(args: string[], env: NodeJS.ProcessEnv = process.env): number {
+  try {
+    if (args.includes("--issue")) {
+      const issue = optionValue(args, "--issue")?.trim();
+      if (!issue) throw new Error("--issue requires an issue identifier");
+      const db = StateDatabase.open(env);
+      try { process.stdout.write(`${buildIssueStatus(runtimePaths(env).root, db, issue)}\n`); }
+      finally { db.close(); }
+      return 0;
+    }
+    const result = buildStatus(env); process.stdout.write(result.text); return result.code;
+  }
   catch (error) { process.stderr.write(`fm-linear status: ${error instanceof Error ? error.message : String(error)}\n`); return 2; }
 }

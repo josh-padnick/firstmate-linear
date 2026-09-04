@@ -65,10 +65,11 @@ describe("job worker", () => {
     await Bun.write(join(fixtures, "03-verify.json"), JSON.stringify({ data: { comment: { id: expectedId } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
     const log = join(root, "calls.log");
-    db.enqueue({ key: "comment:key", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "Hello" } }, "2026-01-01T00:00:00Z");
+    db.enqueue({ key: "comment:key", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "Hello", actor: "core" } }, "2026-01-01T00:00:00Z");
     const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
     expect(result.done).toBe(1);
     expect(db.jobs()[0]?.native_id).toBe(expectedId);
+    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ verb: "firstmate-comment", issue: "ABC-1" }));
     const createCall = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line.split("\t")[1]!)).find((call) => call.variables?.body === "Hello");
     expect(createCall?.variables.issue).toBe("issue-id");
     db.close();
@@ -135,6 +136,7 @@ describe("job worker", () => {
     const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env: { FM_HOME: root }, maxAttempts: 1 });
     expect(result.done).toBe(1);
     expect(db.event("event:relay")?.disposition).toBe("handled-by-service");
+    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ verb: "relay", task: "task-1" }));
     db.close();
   });
 

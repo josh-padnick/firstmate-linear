@@ -33,4 +33,24 @@ describe("v6 config", () => {
     expect(config.teams.map((team) => team.key)).toEqual(["ABC", "FAC"]);
     expect(config.teams[1]?.projects).toEqual(["fabrica"]);
   });
+
+  test("stall deadlines and promise vocabulary have effective defaults", () => {
+    const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
+    const path = join(root, "config.yaml"); writeFileSync(path, yaml());
+    const config = loadConfigFile(path);
+    expect(config.deadlines?.progress.Building).toBe(45 * 60);
+    expect(config.deadlines?.stalled.mention).toBe(30 * 60);
+    expect(config.promises).toMatchObject({ required_on_firstmate_owned: true });
+    expect(config.promises?.vocabulary).toContain("pr-green");
+  });
+
+  test("stall durations are overridable with duration strings", () => {
+    const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
+    const path = join(root, "config.yaml");
+    writeFileSync(path, `${yaml()}deadlines:\n  progress: { Building: 7m }\n  stalled: { mention: 9m }\npromises:\n  required_on_firstmate_owned: false\n  vocabulary: [pr-green, none]\n`);
+    const config = loadConfigFile(path);
+    expect(config.deadlines?.progress.Building).toBe(7 * 60);
+    expect(config.deadlines?.stalled.mention).toBe(9 * 60);
+    expect(config.promises).toEqual({ required_on_firstmate_owned: false, vocabulary: ["pr-green", "none"] });
+  });
 });

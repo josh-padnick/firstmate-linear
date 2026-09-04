@@ -10,6 +10,7 @@ export const TOKENS = [
   "scope-changed",
   "comment",
   "resumed",
+  "stalled",
   "noise",
 ] as const;
 

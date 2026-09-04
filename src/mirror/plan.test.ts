@@ -79,7 +79,7 @@ describe("mirror plan", () => {
       const db = new StateDatabase(join(root, "db"), join(root, "backups"));
       db.snapshot({ issue: "ABC-1", state: "Prioritized", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
       db.linkTask({ task: "support", issue: "ABC-1", role: "support", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
-      const observation: Observation = { id: `support-${verb}`, source: "summary", task: "support", issue: "ABC-1", verb, key: null, note: null, observed_at: "2026-01-01T00:01:00Z" };
+      const observation: Observation = { id: `support-${verb}`, source: "summary", task: "support", issue: "ABC-1", verb, key: "control", note: null, observed_at: "2026-01-01T00:01:00Z" };
       db.observe(observation);
       expect(planMirror(db, config, [observation]).actions.filter((action) => action.job.kind === "linear.issue-state")).toHaveLength(0);
       db.close();
@@ -117,7 +117,7 @@ describe("mirror plan", () => {
     mapped.teams[0]!.agent_labels = { opus: "Agent: opus", unknown: "Agent: unknown" };
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
     db.linkTask({ task: "primary", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
-    const model: Observation = { id: "model", source: "meta", task: "primary", issue: "ABC-1", verb: "model-resolved", key: "model", note: "model=opus", observed_at: "2026-01-01T00:01:00Z" };
+    const model: Observation = { id: "model", source: "summary", task: "primary", issue: "ABC-1", verb: "model-resolved", key: "model", note: "model=opus", observed_at: "2026-01-01T00:01:00Z" };
     const working: Observation = { ...model, id: "working", source: "status", verb: "working", key: "default", note: null, observed_at: "2026-01-01T00:02:00Z" };
     db.observe(model); db.observe(working);
     const label = planMirror(db, mapped, [model, working]).actions.find((action) => action.job.kind === "linear.agent-label");

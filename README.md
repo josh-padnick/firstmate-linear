@@ -69,15 +69,23 @@ fm-linear config import /absolute/path/to/private/linear-config
 ```sh
 fm-linear inbox list
 fm-linear inbox show EVENT_ID
-fm-linear act reply ENG-123 --receipt RECEIPT --comment "..." --verdict changes-requested --to firstmate
+fm-linear act reply ENG-123 --receipt RECEIPT --comment "Validation is running." --next pr-green --by 45m
 fm-linear inbox handle EVENT_ID --receipt RECEIPT --note "no write needed"
 fm-linear report
-fm-linear status
+fm-linear status --issue ENG-123
 ```
 
 `inbox show` prints the complete captured event and issues a receipt bound to exact event IDs.
 Every mutating `act` requires that receipt.
 If a newer captain comment arrives between reading and acting, the write is refused and the newer event is printed.
+
+Captain-facing replies on Firstmate-owned issues must declare the next observable event and a deadline with `--next` and `--by`.
+Use `--next none` when no follow-up is expected.
+The service records the same promise shown in the reply's `Next:` line and emits one specific `stalled` event if it becomes overdue.
+
+The service also checks deterministic progress heartbeats without periodically waking the model.
+It emits a `stalled` event only when a Firstmate-owned issue exceeds its configured status deadline and no linked primary task is busy.
+Run `fm-linear status --issue ENG-123` to inspect the last observed progress, open promises, and linked task states.
 
 The exact normalized comments `approved` and `lgtm` are approvals only while an issue is in an approval status.
 Conditional text such as `Approved if you fix X` is feedback and returns ownership to Firstmate.
@@ -108,7 +116,7 @@ An invalid config edit leaves the last-known-good config active, and `doctor` na
 
 ## Reliability model
 
-The service database owns domain events, dispositions, snapshots, task links, observations, receipts, and the mutation outbox.
+The service database owns domain events, dispositions, snapshots, task links, observations, promises, receipts, and the mutation outbox.
 Firstmate core owns durable process-event capture, wake publication, re-announcement, and `(source, sequence)` handling.
 `core_deliveries` joins those ledgers without copying either one's responsibilities.
 

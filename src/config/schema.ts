@@ -48,8 +48,28 @@ export type WorkflowConfig = {
     report: string;
     review_walkthrough: string;
   };
+  deadlines?: {
+    progress: Record<string, number>;
+    stalled: { mention: number };
+  };
+  promises?: {
+    required_on_firstmate_owned: boolean;
+    vocabulary: string[];
+  };
   sourcePath: string;
 };
+
+export const DEFAULT_PROGRESS_DEADLINES: Record<string, number> = {
+  "Plan In Progress": 30 * 60,
+  Building: 45 * 60,
+  "Validating Code": 60 * 60,
+  Waiting: 4 * 60 * 60,
+  "Needs Firstmate Decision": 15 * 60,
+};
+
+export const DEFAULT_PROMISE_VOCABULARY = [
+  "status:*", "board:*", "pr-reported", "pr-green", "pr-merged", "comment", "dispatch", "none",
+] as const;
 
 export class ConfigError extends Error {
   constructor(

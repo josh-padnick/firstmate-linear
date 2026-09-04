@@ -1,16 +1,34 @@
 import { StateDatabase, type DomainEvent } from "../db/database.ts";
 import { optionValue } from "./args.ts";
+import { loadConfig } from "../config/load.ts";
+import { resolveHome } from "../env.ts";
+import { firstmateOwnedStatuses } from "../reconcile/stall.ts";
+import { buildIssueStatus, isCaptainStatusQuery } from "./status.ts";
 
 const PENDING = ["waiting-for-core"] as const;
 
-export function renderEvent(event: DomainEvent): string {
+function rawObject(event: DomainEvent): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(event.raw_ref) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
+export function renderEvent(event: DomainEvent, statusFacts: string | null = null): string {
   let body = event.raw_ref;
   try { body = JSON.stringify(JSON.parse(event.raw_ref), null, 2); } catch { /* retain raw */ }
+  const raw = rawObject(event);
+  const concrete = event.token === "stalled" && typeof raw?.required === "string"
+    ? raw.required
+    : "read the complete event below before acting";
+  const required = statusFacts
+    ? `ground your reply in these observed issue facts:\n${statusFacts}\nrequired action: ${concrete}`
+    : concrete;
   return [
     `${event.id} ${event.token} ${event.issue}`,
     `author: ${event.author}`,
     `created: ${event.created_at}`,
-    `required: read the complete event below before acting`,
+    `required: ${required}`,
     `then: use fm-linear act with this receipt, or inbox handle if no write is needed`,
     "----- BEGIN EVENT -----",
     body,
@@ -21,6 +39,7 @@ export function renderEvent(event: DomainEvent): string {
 export function runInboxV6(args: string[], env: NodeJS.ProcessEnv = process.env): number {
   const db = StateDatabase.open(env);
   try {
+    const config = loadConfig(env);
     const sub = args[0] ?? "list";
     if (sub === "list") {
       const events = db.listEvents([...PENDING]);
@@ -43,7 +62,18 @@ export function runInboxV6(args: string[], env: NodeJS.ProcessEnv = process.env)
           continue;
         }
         const receipt = db.issueReceipt([event.id]);
-        process.stdout.write(`${renderEvent(event)}\nreceipt: ${receipt}\n`);
+        const raw = rawObject(event);
+        const team = config.teams.find((item) => item.key === event.team);
+        const snapshot = db.latestSnapshot(event.issue);
+        const statusFacts = event.author === config.captain.display_name
+          && event.type === "comment"
+          && typeof raw?.body === "string"
+          && isCaptainStatusQuery(raw.body)
+          && team
+          && firstmateOwnedStatuses(team).has(snapshot?.state ?? "")
+          ? buildIssueStatus(resolveHome(env), db, event.issue)
+          : null;
+        process.stdout.write(`${renderEvent(event, statusFacts)}\nreceipt: ${receipt}\n`);
       }
       return 0;
     }

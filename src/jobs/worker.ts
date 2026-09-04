@@ -259,11 +259,26 @@ export async function processJobs(options: {
       const result = await executeJob(job, { db: options.db, config: options.config, transport: options.transport, env });
       options.db.transaction(() => {
         for (const followup of result.followups ?? []) options.db.enqueue(followup, nowIso(env));
-        if (job.kind === "relay") {
-          const eventId = requiredString(payload(job).event_id, "event_id");
-          options.db.setDisposition(eventId, "handled-by-service", `relayed to ${result.nativeId ?? job.target}`, nowIso(env));
+        const completedAt = nowIso(env);
+        if (job.kind === "linear.comment" && payload(job).actor === "core") {
+          options.db.observe({
+            id: `obs:${sha256(`firstmate-comment:${job.id}:${result.nativeId ?? "unknown"}`)}`,
+            source: "summary", task: null, issue: job.target, verb: "firstmate-comment",
+            key: result.nativeId ?? job.id, note: null, observed_at: completedAt,
+          });
         }
-        options.db.finishJob(job.id, result.nativeId ?? null, nowIso(env));
+        if (job.kind === "relay") {
+          const relayPayload = payload(job);
+          const eventId = requiredString(relayPayload.event_id, "event_id");
+          const task = requiredString(relayPayload.task, "task");
+          options.db.observe({
+            id: `obs:${sha256(`relay:${job.id}:${task}`)}`,
+            source: "summary", task, issue: job.target, verb: "relay",
+            key: eventId, note: null, observed_at: completedAt,
+          });
+          options.db.setDisposition(eventId, "handled-by-service", `relayed to ${result.nativeId ?? job.target}`, completedAt);
+        }
+        options.db.finishJob(job.id, result.nativeId ?? null, completedAt);
       });
       done += 1;
     } catch (error) {

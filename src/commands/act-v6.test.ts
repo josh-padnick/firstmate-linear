@@ -19,6 +19,63 @@ function setup(): { home: string; env: NodeJS.ProcessEnv; receipt: string } {
 }
 
 describe("v6 act read gate", () => {
+  test("captain-facing replies on firstmate-owned issues require a next promise", () => {
+    const { env, receipt } = setup();
+    const db = StateDatabase.open(env);
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
+    db.close();
+
+    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "I will validate it"], env)).toBe(1);
+
+    const after = StateDatabase.open(env);
+    expect(after.receipt(receipt)?.consumed_at).toBeNull();
+    expect(after.jobs()).toHaveLength(0);
+    after.close();
+  });
+
+  test("next none allows a reply without recording a promise", () => {
+    const { env, receipt } = setup();
+    const db = StateDatabase.open(env);
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
+    db.close();
+
+    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Nothing else is expected", "--next", "none"], env)).toBe(0);
+
+    const after = StateDatabase.open(env);
+    expect(after.promises("ABC-1")).toHaveLength(0);
+    expect(JSON.parse(after.jobs().find((job) => job.kind === "linear.comment")!.payload).body).toContain("Next: none");
+    after.close();
+  });
+
+  test("next and by create a durable promise with the rendered commitment", () => {
+    const { env, receipt } = setup();
+    const db = StateDatabase.open(env);
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
+    db.close();
+    env.FM_LINEAR_NOW_EPOCH = String(Date.parse("2026-01-01T00:02:00Z") / 1000);
+
+    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Validation is running", "--next", "pr-green", "--by", "30m"], env)).toBe(0);
+
+    const after = StateDatabase.open(env);
+    expect(after.promises("ABC-1")[0]).toMatchObject({ expected_event: "pr-green", deadline_at: "2026-01-01T00:32:00Z", state: "open" });
+    const comment = after.jobs().find((job) => job.kind === "linear.comment")!;
+    expect(JSON.parse(comment.payload).body).toContain("Next: pr-green by 30m");
+    after.finishJob(comment.id, "linear-comment-1", "2026-01-01T00:03:00Z");
+    expect(after.promises("ABC-1")[0]?.reply_comment_id).toBe("linear-comment-1");
+    after.close();
+  });
+
+  test("next none rejects a meaningless deadline", () => {
+    const { env, receipt } = setup();
+    const db = StateDatabase.open(env);
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
+    db.close();
+    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "No follow-up", "--next", "none", "--by", "30m"], env)).toBe(1);
+    const after = StateDatabase.open(env);
+    expect(after.receipt(receipt)?.consumed_at).toBeNull();
+    after.close();
+  });
+
   test("gate replies require a verdict and ownership", async () => {
     const { env, receipt } = setup();
     expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it"], env)).toBe(1);
