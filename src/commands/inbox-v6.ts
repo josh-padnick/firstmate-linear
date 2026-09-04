@@ -94,10 +94,8 @@ export async function runInboxV6(args: string[], env: NodeJS.ProcessEnv = proces
         return 1;
       }
       try {
-        const team = config.teams.find((item) => item.key === event.team);
-        if (!team) throw new Error(`unmanaged team: ${event.team}`);
         await synchronizeReceiptCaptainComments({
-          db, receiptId, issue: event.issue, team, captain: config.captain.display_name, env,
+          db, receiptId, issue: event.issue, config, env,
           transport: dependencies.transport,
         });
         db.handleWithReceipt(event.id, receiptId, config.captain.display_name, note);

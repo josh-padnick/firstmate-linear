@@ -154,6 +154,14 @@ describe("v6 act read gate", async () => {
         user: { displayName: "Captain" }, issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null }, parent: null,
       }],
     } } }));
+    writeFileSync(join(home, "fixtures", "02-issue.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" },
+      issue: {
+        identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:00:04Z",
+        state: { name: "Building" }, assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" },
+        project: null, labels: { nodes: [] }, history: { pageInfo: { hasNextPage: false }, nodes: [] },
+      },
+    } }));
 
     expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"], env)).toBe(1);
 
@@ -170,6 +178,16 @@ describe("v6 act read gate", async () => {
       apiKey: "test",
       fetchImpl: async (_input, init) => {
         const payload = JSON.parse(String(init?.body)) as { query: string };
+        if (payload.query.includes("issue(id:$id)")) {
+          return new Response(JSON.stringify({ data: {
+            viewer: { displayName: "Firstmate" },
+            issue: {
+              identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:00:02Z",
+              state: { name: "Building" }, assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" },
+              project: null, labels: { nodes: [] }, history: { pageInfo: { hasNextPage: false }, nodes: [] },
+            },
+          } }), { status: 200 });
+        }
         const since = /updatedAt:\{gte:"([^"]+)"/.exec(payload.query)?.[1] ?? "";
         const nodes = since <= "2026-01-01T00:00:02Z" ? [{
           id: "linear-comment-between-event-and-receipt",

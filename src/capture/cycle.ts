@@ -1,16 +1,16 @@
-import { classifyEvent, isExactApproval, type ClassifiableEvent } from "../classify/classify.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
-import { StateDatabase, type IssueSnapshot } from "../db/database.ts";
+import { StateDatabase } from "../db/database.ts";
 import { loadKey, resolveHome } from "../env.ts";
 import { sha256 } from "../hash.ts";
-import { identityMatches } from "../identity.ts";
 import { isManagedIssue } from "../managed.ts";
 import { compareIso, formatIso, nowEpoch, nowIso, overlapTimestamp, parseIso } from "../time.ts";
 import { LinearTransport } from "../transport.ts";
-import { decideRelay } from "../relay/decide.ts";
 import { deriveComments, deriveHistory, deriveIssueCreation, type SeenStore } from "./derive.ts";
 import { fetchComments, fetchIssues } from "./fetch.ts";
-import type { LedgerEvent, LinearHistory, LinearIssue } from "./types.ts";
+import { captureCanonicalEvent, eventId, snapshotFromLinearIssue } from "./ingest.ts";
+import type { LedgerEvent, LinearHistory } from "./types.ts";
+
+export { eventId } from "./ingest.ts";
 
 export type CaptureCycleResult = {
   captured: number;
@@ -43,24 +43,6 @@ function minIso(values: Array<string | null | undefined>): string | null {
   }, null);
 }
 
-function snapshotAtRevision(current: IssueSnapshot | null, event: LedgerEvent, history: LinearHistory[], failOnAmbiguous: boolean): { snapshot: IssueSnapshot | null; ambiguous: boolean } {
-  if (!current || event.event.type !== "comment") return { snapshot: current, ambiguous: false };
-  let state = current.state;
-  const transitions = history.filter((item) => item.issue === event.event.issue && item.fromState?.name && item.toState?.name);
-  if (transitions.some((item) => compareIso(item.createdAt, event.updated_at) === null)) {
-    throw new Error(`cannot reconstruct state for ${event.event.issue} at comment revision`);
-  }
-  if (failOnAmbiguous && transitions.some((item) => compareIso(item.createdAt, event.updated_at) === 0)) return { snapshot: current, ambiguous: true };
-  const later = transitions
-    .filter((item) => compareIso(item.createdAt, event.updated_at) === 1)
-    .sort((a, b) => -(compareIso(a.createdAt, b.createdAt) ?? 0) || b.id.localeCompare(a.id));
-  for (const transition of later) {
-    if (transition.toState?.name !== state) throw new Error(`cannot reconstruct state for ${event.event.issue} at comment revision`);
-    state = transition.fromState?.name ?? state;
-  }
-  return { snapshot: { ...current, state }, ambiguous: false };
-}
-
 class DatabaseSeenStore implements SeenStore {
   private readonly local = new Set<string>();
   constructor(private readonly db: StateDatabase) {}
@@ -68,47 +50,6 @@ class DatabaseSeenStore implements SeenStore {
     return this.local.has(key) || this.db.event(eventId(key)) !== null;
   }
   add(key: string): void { this.local.add(key); }
-}
-
-export function eventId(dedupeKey: string): string {
-  return `linear:${sha256(dedupeKey)}`;
-}
-
-function teamFromIssue(issue: string): string {
-  return issue.includes("-") ? issue.slice(0, issue.indexOf("-")).toUpperCase() : "";
-}
-
-function snapshot(issue: LinearIssue, agentLabels: Record<string, string>, observedAt: string, isManaged: boolean, captain: string): IssueSnapshot {
-  const labels = (issue.labels?.nodes ?? []).map((item) => item.name ?? "").filter(Boolean);
-  const knownLabels = new Set(Object.values(agentLabels));
-  const history = [...(issue.history?.nodes ?? [])].sort((a, b) => -(compareIso(a.createdAt, b.createdAt) ?? 0) || b.id.localeCompare(a.id));
-  return {
-    issue: issue.identifier,
-    state: issue.state?.name ?? "",
-    assignee: issue.assignee?.displayName ?? null,
-    labels,
-    agent_label: labels.find((label) => knownLabels.has(label)) ?? null,
-    last_actor: identityMatches(history[0]?.actor?.displayName, captain) ? captain : history[0]?.actor?.displayName ?? null,
-    last_signal: null,
-    managed: isManaged,
-    observed_at: observedAt,
-  };
-}
-
-function toClassifiable(event: LedgerEvent): ClassifiableEvent {
-  return {
-    id: eventId(event.dedupe_key),
-    team: teamFromIssue(event.event.issue),
-    issue: event.event.issue,
-    type: event.event.type,
-    author: event.event.author,
-    body: event.event.body,
-    from_state: event.event.from_state,
-    to_state: event.event.to_state,
-    from_assignee: event.event.from_assignee,
-    to_assignee: event.event.to_assignee,
-    created_at: event.created_at,
-  };
 }
 
 export async function captureCycle(options: {
@@ -213,7 +154,7 @@ export async function captureCycle(options: {
     for (const issue of result.issues) {
       const isManaged = managedIds.has(issue.identifier);
       if (isManaged || options.db.latestSnapshot(issue.identifier)) {
-        options.db.snapshot(snapshot(issue, team.agent_labels, observedAt, isManaged, options.config.captain.display_name));
+        options.db.snapshot(snapshotFromLinearIssue(issue, team.agent_labels, observedAt, isManaged, options.config.captain.display_name));
       }
     }
     allEvents.push(...deriveHistory(managedHistory, seen, observedAt, eventCutoff, self, bootstrapCutoff !== null));
@@ -233,45 +174,12 @@ export async function captureCycle(options: {
   let jobs = 0;
   allEvents.sort((a, b) => (compareIso(a.created_at, b.created_at) ?? 0) || a.dedupe_key.localeCompare(b.dedupe_key));
   for (const legacy of allEvents) {
-    const event = toClassifiable(legacy);
-    if (identityMatches(event.author, options.config.captain.display_name)) event.author = options.config.captain.display_name;
-    const currentSnapshot = options.db.latestSnapshot(event.issue);
-    const revision = snapshotAtRevision(
-      currentSnapshot,
-      legacy,
-      allHistory,
-      event.type === "comment" && event.author === options.config.captain.display_name && isExactApproval(event.body ?? ""),
-    );
-    const eventSnapshot = revision.snapshot;
-    const classification = revision.ambiguous
-      ? { token: "approval" as const, disposition: "waiting-for-core" as const, jobs: [], note: "approval chronology is ambiguous; automatic transition withheld" }
-      : classifyEvent(event, options.config, eventSnapshot);
-    const team = options.config.teams.find((item) => item.key === event.team);
-    const relayEligible = classification.token === "comment"
-      || (classification.token === "ball-returned" && eventSnapshot?.state === team?.statuses.needs_decision);
-    const relay = classification.disposition === "waiting-for-core" && relayEligible
-      ? decideRelay({ event, db: options.db, config: options.config, home: resolveHome(env) })
-      : null;
-    const disposition = relay?.disposition ?? classification.disposition;
-    const eventJobs = [...classification.jobs, ...(relay?.job ? [relay.job] : [])];
-    if (options.db.capture({
-      id: event.id,
-      team: event.team,
-      issue: event.issue,
-      type: event.type,
-      token: classification.token,
-      author: event.author,
-      body_sha: legacy.event.body_sha256,
-      created_at: event.created_at,
-      captured_at: observedAt,
-      disposition,
-      note: relay?.note ?? classification.note,
-      raw_ref: JSON.stringify(legacy.event),
-    }, eventJobs)) {
+    const result = captureCanonicalEvent({ config: options.config, db: options.db, env, event: legacy, history: allHistory });
+    if (result.captured) {
       captured += 1;
-      jobs += eventJobs.length;
-      if (disposition === "ignored") ignored += 1;
-      if (disposition === "waiting-for-core") waiting += 1;
+      jobs += result.jobs;
+      if (result.disposition === "ignored") ignored += 1;
+      if (result.disposition === "waiting-for-core") waiting += 1;
     }
   }
 

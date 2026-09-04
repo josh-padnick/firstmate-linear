@@ -124,7 +124,7 @@ export async function runActV6(args: string[], env: NodeJS.ProcessEnv = process.
     const receiptState = db.receipt(receipt);
     if (!receiptState || receiptState.consumed_at) throw new Error(`receipt missing or already consumed: ${receipt}`);
     await synchronizeReceiptCaptainComments({
-      db, receiptId: receipt, issue, team, captain: config.captain.display_name, env,
+      db, receiptId: receipt, issue, config, env,
       transport: dependencies.transport,
     });
     const keyBase = `${receipt}:${verb}:${issue}`;

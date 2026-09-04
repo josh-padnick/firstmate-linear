@@ -201,12 +201,13 @@ export async function fetchIssues(
 }
 
 const ISSUE_SNAPSHOT_QUERY =
-  "query($id:String!){issue(id:$id){identifier title description updatedAt createdAt state{name} assignee{id displayName} creator{id displayName} project{name slugId} labels{nodes{name}} history(first:10){nodes{id createdAt actor{displayName} fromState{name} toState{name} fromAssignee{displayName} toAssignee{displayName} updatedDescription addedLabels{name} removedLabels{name}}}}}";
+  "query($id:String!){viewer{displayName} issue(id:$id){identifier title description updatedAt createdAt state{name} assignee{id displayName} creator{id displayName} project{name slugId} labels{nodes{name}} history(first:10){pageInfo{hasNextPage endCursor} nodes{id createdAt actor{displayName} fromState{name} toState{name} fromAssignee{displayName} toAssignee{displayName} updatedDescription addedLabels{name} removedLabels{name}}}}}";
 
 export async function fetchIssueSnapshot(
   transport: LinearTransport,
   identifier: string,
-): Promise<{ issue: LinearIssue; history: LinearHistory[] } | null> {
+  options: { historyCutoff?: string | null; maxPages?: number } = {},
+): Promise<{ issue: LinearIssue; history: LinearHistory[]; viewer: string | null } | null> {
   const result = await transport.call("canary-issue", {
     query: ISSUE_SNAPSHOT_QUERY,
     variables: { id: identifier },
@@ -214,13 +215,29 @@ export async function fetchIssueSnapshot(
   if (!result.ok) {
     throw new Error(result.error.message);
   }
-  const data = result.value.data as { issue?: LinearIssue };
+  const data = result.value.data as { viewer?: { displayName?: string | null }; issue?: LinearIssue };
   if (!data.issue?.identifier) {
     return null;
   }
-  const history = (data.issue.history?.nodes ?? []).map((node) => ({
+  const history: LinearHistory[] = (data.issue.history?.nodes ?? []).map((node) => ({
     ...node,
     issue: data.issue!.identifier,
   }));
-  return { issue: data.issue, history };
+  let pageInfo = data.issue.history?.pageInfo;
+  let after = pageInfo?.endCursor ?? null;
+  const maxPages = options.maxPages ?? Number(process.env.FM_LINEAR_MAX_HISTORY_PAGES ?? DEFAULT_MAX_PAGES);
+  for (let page = 1; page <= maxPages && pageInfo?.hasNextPage; page += 1) {
+    const oldest = history.reduce<string | null>((minimum, item) => !minimum || compareIso(item.createdAt, minimum) === -1 ? item.createdAt : minimum, null);
+    if (options.historyCutoff && oldest && (compareIso(oldest, options.historyCutoff) ?? -1) <= 0) break;
+    if (!after) throw new Error(`history pagination omitted endCursor for ${identifier}`);
+    const next = await transport.call("history", { query: HISTORY_QUERY, variables: { id: identifier, after } });
+    if (!next.ok) throw new Error(next.error.message);
+    const nextData = next.value.data as { issue?: { history?: { pageInfo?: { hasNextPage?: boolean; endCursor?: string | null }; nodes?: LinearHistory[] } } };
+    if (!Array.isArray(nextData.issue?.history?.nodes)) throw new Error(`malformed history response for ${identifier}`);
+    history.push(...nextData.issue.history.nodes.map((node) => ({ ...node, issue: identifier })));
+    pageInfo = nextData.issue.history.pageInfo;
+    after = pageInfo?.endCursor ?? null;
+    if (page === maxPages && pageInfo?.hasNextPage) throw new Error(`history pagination exceeded limit for ${identifier}`);
+  }
+  return { issue: data.issue, history, viewer: data.viewer?.displayName ?? null };
 }
