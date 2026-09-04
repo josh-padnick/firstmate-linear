@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowConfig } from "../config/schema.ts";
-import type { EventDisposition, NewJob, StateDatabase } from "../db/database.ts";
+import { type EventDisposition, type NewJob, observationBelongsToTaskLink, type StateDatabase, type TaskLink } from "../db/database.ts";
 import type { ClassifiableEvent } from "../classify/classify.ts";
 
 export type RelayDecision = {
@@ -10,10 +10,10 @@ export type RelayDecision = {
   note: string;
 };
 
-function activeKeys(db: StateDatabase, issue: string, task: string): string[] {
+function activeKeys(db: StateDatabase, link: TaskLink): string[] {
   const keys = new Set<string>();
-  for (const event of db.observations(issue)) {
-    if (event.task !== task) continue;
+  for (const event of db.observations(link.issue)) {
+    if (!observationBelongsToTaskLink(event, link)) continue;
     if (event.verb === "needs-decision" && event.key) keys.add(event.key);
     if (event.verb === "resolved" && event.key) keys.delete(event.key);
   }
@@ -48,7 +48,7 @@ export function decideRelay(options: {
   if (delegated(metaPath)) {
     return { disposition: "waiting-for-core", job: null, note: `relay task ${task.task} is delegated` };
   }
-  const keys = activeKeys(db, event.issue, task.task);
+  const keys = activeKeys(db, task);
   const snapshot = db.latestSnapshot(event.issue);
   const team = config.teams.find((item) => item.key === event.team);
   const building = snapshot?.state === team?.statuses.building;

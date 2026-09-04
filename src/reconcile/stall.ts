@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_PROGRESS_DEADLINES, type TeamConfig, type WorkflowConfig } from "../config/schema.ts";
-import { type DomainEvent, type PromiseRecord, type StateDatabase } from "../db/database.ts";
+import { type DomainEvent, type Observation, observationBelongsToTaskLink, type PromiseRecord, type StateDatabase } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { compareIso, formatIso, nowEpoch, nowIso, parseIso } from "../time.ts";
 
@@ -29,11 +29,9 @@ function later(left: Progress | null, right: Progress): Progress {
   return compared === 1 || compared === 0 ? right : left;
 }
 
-function wasPrimaryTaskAt(db: StateDatabase, issue: string, task: string, observedAt: string): boolean {
-  return db.taskLinks(issue).some((link) => link.task === task
-    && link.role === "primary"
-    && atOrAfter(observedAt, link.spawned_at)
-    && (!link.torn_down_at || atOrAfter(link.torn_down_at, observedAt)));
+function wasPrimaryTaskAt(db: StateDatabase, observation: Observation): boolean {
+  return db.taskLinks(observation.issue).some((link) => link.role === "primary"
+    && observationBelongsToTaskLink(observation, link));
 }
 
 function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progress | null {
@@ -44,7 +42,7 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
     const found = observations.find((item) => item.source === "status"
       && item.verb === verb
       && item.task
-      && wasPrimaryTaskAt(db, promise.issue, item.task, item.observed_at));
+      && wasPrimaryTaskAt(db, item));
     return found ? { id: found.id, kind: "status", at: found.observed_at, detail: `status ${verb}` } : null;
   }
   if (expected.startsWith("board:")) {
@@ -60,7 +58,7 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
     const found = observations.find((item) => item.source === "pr"
       && item.verb === expected
       && item.task
-      && wasPrimaryTaskAt(db, promise.issue, item.task, item.observed_at));
+      && wasPrimaryTaskAt(db, item));
     return found ? { id: found.id, kind: "pr", at: found.observed_at, detail: expected } : null;
   }
   if (expected === "comment") {
@@ -79,7 +77,7 @@ export function lastProgress(db: StateDatabase, issue: string): Progress | null 
   for (const item of db.observations(issue)) {
     const taskProgress = item.task
       && (item.source === "status" || item.source === "pr")
-      && wasPrimaryTaskAt(db, issue, item.task, item.observed_at);
+      && wasPrimaryTaskAt(db, item);
     const serviceProgress = item.verb === "firstmate-comment" || item.verb === "relay";
     if (taskProgress || serviceProgress) latest = later(latest, { id: item.id, kind: item.source, at: item.observed_at, detail: `${item.verb}${item.note ? ` ${item.note}` : ""}` });
   }
@@ -149,6 +147,8 @@ function emitStall(db: StateDatabase, options: {
   team: string;
   issue: string;
   reasonKey: string;
+  seriesKey: string;
+  stalledAt: string;
   note: string;
   required: string;
   kind: "promise" | "heartbeat";
@@ -181,6 +181,8 @@ function emitStall(db: StateDatabase, options: {
     raw_ref: JSON.stringify({
       kind: options.kind,
       reason_key: options.reasonKey,
+      escalation_key: `stall:${sha256(`${options.issue}:${options.seriesKey}`)}`,
+      stalled_at: options.stalledAt,
       expected: options.expected ?? null,
       deadline_at: options.deadlineAt ?? null,
       last_progress: options.progress,
@@ -220,7 +222,8 @@ export function reconcileStalls(home: string, db: StateDatabase, config: Workflo
     const last = progress ? `${clock(progress.at)}: ${progress.detail}` : "none";
     const note = `stalled ${promise.issue}: promised ${promise.expected_event} by ${clock(promise.deadline_at)}, not observed (last progress ${last})`;
     const emission = emitStall(db, {
-      team, issue: promise.issue, reasonKey: `promise:${promise.id}:${multiple}`, note,
+      team, issue: promise.issue, reasonKey: `promise:${promise.id}:${multiple}`,
+      seriesKey: `promise:${promise.id}`, stalledAt: promise.deadline_at, note,
       required: requiredFor(promise.expected_event), kind: "promise", expected: promise.expected_event,
       deadlineAt: promise.deadline_at, progress, at,
     });
@@ -255,6 +258,8 @@ export function reconcileStalls(home: string, db: StateDatabase, config: Workflo
     const note = `stalled ${snapshot.issue}: ${snapshot.state} ${Math.floor(age / 60)}m with no progress and no busy worker (last: ${progress?.detail ?? "board state"} ${clock(progress?.at ?? snapshot.observed_at)})`;
     if (emitStall(db, {
       team: team.key, issue: snapshot.issue, reasonKey: `heartbeat:${snapshot.state}:${progress?.id ?? snapshot.observed_at}:${multiple}`,
+      seriesKey: `heartbeat:${snapshot.state}:${progress?.id ?? snapshot.observed_at}`,
+      stalledAt: formatIso(progressAt + deadline),
       note, required: requiredFor(null), kind: "heartbeat", progress, at,
     }).captured) emitted += 1;
   }

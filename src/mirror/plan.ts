@@ -1,5 +1,5 @@
 import type { WorkflowConfig } from "../config/schema.ts";
-import type { NewJob, Observation, StateDatabase } from "../db/database.ts";
+import { type NewJob, type Observation, observationBelongsToTaskLink, type StateDatabase } from "../db/database.ts";
 import { compareIso } from "../time.ts";
 import { foldSignals, reduceTaskState, type TaskSignal } from "./reducer.ts";
 
@@ -37,10 +37,14 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
       findings.push({ code: "MISSING_SNAPSHOT", issue, detail: "cannot mirror without a current managed issue snapshot" });
       continue;
     }
-    const relevant = db.observations(issue);
+    const activeLinks = db.taskLinks(issue, true);
+    const relevant = db.observations(issue)
+      .filter((item) => item.task === null || activeLinks.some((link) => observationBelongsToTaskLink(item, link)));
+    const currentNewObservations = newObservations
+      .filter((item) => item.issue === issue && (item.task === null || activeLinks.some((link) => observationBelongsToTaskLink(item, link))));
     const latest = relevant.at(-1);
     if (!latest) continue;
-    const links = new Map(db.taskLinks(issue, true).map((link) => [link.task, link.role]));
+    const links = new Map(activeLinks.map((link) => [link.task, link.role]));
     const primary = new Set([...links].filter(([, role]) => role === "primary").map(([task]) => task));
     const primaryObservations = relevant.filter((item) => item.task !== null && primary.has(item.task));
     const latestPrimary = primaryObservations.at(-1);
@@ -84,11 +88,11 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
     }
     else if (reduced === "working") target = team.statuses.building;
 
-    for (const observation of newObservations.filter((item) => item.issue === issue && item.verb === "pr-reported")) {
+    for (const observation of currentNewObservations.filter((item) => item.verb === "pr-reported")) {
       const url = observation.note?.match(/https:\/\/\S+/)?.[0];
       if (url) actions.push({ issue, cause: observation.id, description: `attach ${url}`, job: { key: `${observation.id}:attachment`, kind: "linear.attachment", target: issue, payload: { issue, url, title: "Pull request" } } });
     }
-    const newModels = newObservations.filter((item) => item.issue === issue && item.verb === "model-resolved" && item.task !== null && primary.has(item.task));
+    const newModels = currentNewObservations.filter((item) => item.verb === "model-resolved" && item.task !== null && primary.has(item.task));
     const labelCauses = newModels.length > 0
       ? newModels.map((observation) => ({ cause: observation, model: observation }))
       : latestPrimary?.verb === "dispatch"

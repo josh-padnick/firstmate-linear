@@ -49,6 +49,15 @@ describe("state database", () => {
     db.close();
   });
 
+  test("relinking an active task updates one lifecycle interval", () => {
+    const db = database();
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: "old", harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "support", worktree: "new", harness: "codex", spawned_at: "2026-01-01T00:01:00Z", torn_down_at: null });
+
+    expect(db.taskLinks("ABC-1", true)).toEqual([expect.objectContaining({ role: "support", worktree: "new", harness: "codex", spawned_at: "2026-01-01T00:00:00Z" })]);
+    db.close();
+  });
+
   test("capture and its deterministic jobs commit together", () => {
     const db = database();
     expect(db.capture(event("event:1"), [{ key: "event:1:relay", kind: "relay", target: "ABC-1", payload: { event: "event:1" } }])).toBe(true);

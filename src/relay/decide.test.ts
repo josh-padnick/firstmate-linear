@@ -36,4 +36,20 @@ describe("relay decision", () => {
     expect(result.job?.payload).toMatchObject({ task: "replacement", key: null });
     db.close();
   });
+
+  test("a relinked task does not inherit unresolved keys from its prior lifecycle", () => {
+    const home = mkdtempSync("/private/tmp/fml-relay-"); roots.push(home);
+    mkdirSync(join(home, "state")); writeFileSync(join(home, "state", "task-1.meta"), "backend=tmux\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task-1", issue: "ABC-1", role: "primary", worktree: null, harness: "claude", spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.observe({ id: "old-key", source: "status", task: "task-1", issue: "ABC-1", verb: "needs-decision", key: "obsolete", note: null, observed_at: "2026-01-01T00:01:00Z" });
+    db.closeTask("task-1", "2026-01-01T00:02:00Z");
+    db.linkTask({ task: "task-1", issue: "ABC-1", role: "primary", worktree: null, harness: "claude", spawned_at: "2026-01-01T00:03:00Z", torn_down_at: null });
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T00:03:00Z" });
+
+    const result = decideRelay({ event: { id: "e1", team: "ABC", issue: "ABC-1", type: "comment", author: "Captain", body: "continue", created_at: "2026-01-01T00:04:00Z" }, db, config: base, home });
+
+    expect(result.job?.payload).toMatchObject({ task: "task-1", key: null });
+    db.close();
+  });
 });

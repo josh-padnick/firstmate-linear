@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowConfig } from "../config/schema.ts";
-import type { NewJob, StateDatabase } from "../db/database.ts";
+import { type NewJob, observationBelongsToTaskLink, type StateDatabase } from "../db/database.ts";
 import { nowEpoch, parseIso } from "../time.ts";
 import { checkReview } from "./review.ts";
 
@@ -15,10 +15,13 @@ export function planReviewDeadlines(home: string, db: StateDatabase, config: Wor
     const teamKey = snapshot.issue.slice(0, snapshot.issue.indexOf("-")).toUpperCase();
     const team = config.teams.find((item) => item.key === teamKey);
     if (!team || snapshot.state !== team.statuses.approve_deliverable) continue;
-    const primaryTasks = new Set(db.taskLinks(snapshot.issue, true).filter((link) => link.role === "primary").map((link) => link.task));
+    const primaryLinks = db.taskLinks(snapshot.issue, true).filter((link) => link.role === "primary");
+    const primaryTasks = new Set(primaryLinks.map((link) => link.task));
     if (primaryTasks.size === 0) continue;
     const transitions = db.observations(snapshot.issue)
-      .filter((item) => item.source === "pr" && item.task !== null && primaryTasks.has(item.task) && ["pr-green", "pr-withdrawn", "pr-merged"].includes(item.verb));
+      .filter((item) => item.source === "pr"
+        && primaryLinks.some((link) => observationBelongsToTaskLink(item, link))
+        && ["pr-green", "pr-withdrawn", "pr-merged"].includes(item.verb));
     const currentByTask = new Map<string, (typeof transitions)[number]>();
     for (const transition of transitions) currentByTask.set(transition.task!, transition);
     const current = [...currentByTask.values()];

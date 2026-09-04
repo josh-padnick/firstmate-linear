@@ -40,6 +40,19 @@ describe("review deadline reconciler", () => {
     db.close();
   });
 
+  test("a relinked task does not inherit review readiness", () => {
+    const root = mkdtempSync("/private/tmp/fml-review-deadline-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: "service", last_signal: "pr-green", observed_at: "2026-01-01T00:00:00Z" });
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.observe({ id: "old-green", source: "pr", task: "task", issue: "ABC-1", verb: "pr-green", key: "pr", note: null, observed_at: "2026-01-01T00:01:00Z" });
+    db.closeTask("task", "2026-01-01T00:02:00Z");
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:03:00Z", torn_down_at: null });
+
+    expect(planReviewDeadlines(root, db, config, { FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T01:00:00Z") / 1000) })).toEqual({ jobs: [], findings: [] });
+    db.close();
+  });
+
   test("merged primary and green support PRs cannot reactivate reminders", () => {
     const root = mkdtempSync("/private/tmp/fml-review-deadline-"); roots.push(root);
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));

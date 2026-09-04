@@ -270,4 +270,20 @@ describe("stall reconciliation", () => {
     expect(planEscalations(db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T14:02:00Z") / 1000) })).toHaveLength(0);
     db.close();
   });
+
+  test("periodic stall re-emission preserves one captain escalation", () => {
+    const { root, db } = setup();
+    db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    const env = { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:31:00Z") / 1000) };
+    reconcileStalls(root, db, config, env);
+    reconcileStalls(root, db, config, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T13:01:00Z") / 1000) });
+
+    const plan = planEscalations(db, config, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T13:02:00Z") / 1000) });
+
+    expect(plan).toHaveLength(1);
+    db.enqueue(plan[0]!.job, "2026-01-01T13:02:00Z");
+    reconcileStalls(root, db, config, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T13:31:00Z") / 1000) });
+    expect(planEscalations(db, config, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T14:02:00Z") / 1000) })).toHaveLength(0);
+    db.close();
+  });
 });

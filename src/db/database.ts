@@ -114,6 +114,15 @@ export type Observation = {
   observed_at: string;
 };
 
+export function observationBelongsToTaskLink(observation: Observation, link: TaskLink): boolean {
+  if (observation.issue !== link.issue || observation.task !== link.task) return false;
+  const afterSpawn = compareIso(observation.observed_at, link.spawned_at);
+  if (afterSpawn === null || afterSpawn < 0) return false;
+  if (!link.torn_down_at) return true;
+  const beforeTeardown = compareIso(observation.observed_at, link.torn_down_at);
+  return beforeTeardown !== null && beforeTeardown <= 0;
+}
+
 function stampForPath(now = new Date()): string {
   return now.toISOString().replace(/[:.]/g, "-");
 }
@@ -540,13 +549,26 @@ export class StateDatabase {
   }
 
   linkTask(value: TaskLink): void {
-    this.raw.query(`INSERT INTO task_links(task,issue,role,worktree,harness,spawned_at,torn_down_at)
-      VALUES(?,?,?,?,?,?,?) ON CONFLICT(task,issue,spawned_at) DO UPDATE SET
-      role=excluded.role,worktree=excluded.worktree,harness=excluded.harness,
-      torn_down_at=excluded.torn_down_at`).run(
-        value.task, value.issue, value.role, value.worktree, value.harness,
-        value.spawned_at, value.torn_down_at,
-      );
+    this.transaction(() => {
+      if (!value.torn_down_at) {
+        const active = this.raw.query(`SELECT * FROM task_links WHERE task=? AND issue=? AND torn_down_at IS NULL
+          ORDER BY spawned_at LIMIT 1`).get(value.task, value.issue) as TaskLink | null;
+        if (active) {
+          this.raw.query("UPDATE task_links SET role=?,worktree=?,harness=? WHERE task=? AND issue=? AND spawned_at=?")
+            .run(value.role, value.worktree, value.harness, active.task, active.issue, active.spawned_at);
+          this.raw.query("DELETE FROM task_links WHERE task=? AND issue=? AND torn_down_at IS NULL AND spawned_at<>?")
+            .run(active.task, active.issue, active.spawned_at);
+          return;
+        }
+      }
+      this.raw.query(`INSERT INTO task_links(task,issue,role,worktree,harness,spawned_at,torn_down_at)
+        VALUES(?,?,?,?,?,?,?) ON CONFLICT(task,issue,spawned_at) DO UPDATE SET
+        role=excluded.role,worktree=excluded.worktree,harness=excluded.harness,
+        torn_down_at=excluded.torn_down_at`).run(
+          value.task, value.issue, value.role, value.worktree, value.harness,
+          value.spawned_at, value.torn_down_at,
+        );
+    });
   }
 
   closeTask(task: string, at = nowIso()): void {
