@@ -76,7 +76,7 @@ fm-linear status --issue ENG-123
 ```
 
 `inbox show` prints the complete captured event and issues a receipt bound to exact event IDs.
-Every mutating `act` requires that receipt.
+Mutating `act` commands require that receipt, except for a direct `act reply --parent COMMENT_ID` when the caller already has the exact Linear thread target.
 If a newer captain comment arrives between reading and acting, the write is refused and the newer event is printed.
 
 Captain-facing replies on Firstmate-owned issues must declare the next observable event and a deadline with `--next` and `--by`.

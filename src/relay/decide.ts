@@ -49,10 +49,16 @@ export function decideRelay(options: {
     return { disposition: "waiting-for-core", job: null, note: `relay task ${task.task} is delegated` };
   }
   const keys = activeKeys(db, task);
+  const parentKey = event.parent_id
+    ? [...db.observations(event.issue)].reverse().find((observation) =>
+      observationBelongsToTaskLink(observation, task)
+      && observation.verb === "decision-comment"
+      && observation.note === event.parent_id
+      && keys.includes(observation.key))?.key ?? null
+    : null;
   const snapshot = db.latestSnapshot(event.issue);
-  const team = config.teams.find((item) => item.key === event.team);
   const building = snapshot?.role === "building";
-  if (keys.length > 1 || (keys.length === 0 && !building)) {
+  if ((keys.length > 1 && !parentKey) || (keys.length === 0 && !building)) {
     return { disposition: "waiting-for-core", job: null, note: `relay precondition failed: open keys=${keys.length}, role=${snapshot?.role ?? "unknown"}` };
   }
   const job: NewJob = {
@@ -62,7 +68,7 @@ export function decideRelay(options: {
       issue: event.issue,
       task: task.task,
       lifecycle_id: task.lifecycle_id,
-      key: keys[0] ?? null,
+      key: parentKey ?? keys[0] ?? null,
       requires_managed: true,
     },
   };

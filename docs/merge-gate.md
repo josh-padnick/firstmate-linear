@@ -23,3 +23,6 @@ fm-linear only observes the outcome in both modes.
 The service applies `never_auto_paths` and `max_auto_lines` preventively before a captain-free merge wake.
 For hands-off auto-merge, that copy is advisory because GitHub can merge before the service acts.
 A mismatch is recorded as `policy-disagreement` and surfaced to the captain, while the validator's policy and required authorization check remain the preventive control.
+
+Service-authored gate and merge notices live in one per-issue activity thread.
+Replies to captain comments stay under the captain's thread root.

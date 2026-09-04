@@ -74,6 +74,16 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
     let target: WorkflowRole | null = null;
     let stayReason: string | null = null;
     if (reduced === "needs-decision") {
+      const openDecisions = new Map<string, Observation>();
+      for (const observation of primaryObservations) {
+        const decisionKey = `${observation.task}\0${observation.key}`;
+        if (observation.verb === "resolved") openDecisions.delete(decisionKey);
+        if (observation.verb === "needs-decision") {
+          openDecisions.delete(decisionKey);
+          openDecisions.set(decisionKey, observation);
+        }
+      }
+      cause = [...openDecisions.values()].at(-1) ?? cause;
       const resolution = resolveSignalRole(team, "needs-decision");
       if (resolution.kind === "move") target = resolution.role;
       else stayReason = "Worker needs a captain decision, but decision-captain is unmapped.";
@@ -140,12 +150,40 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
           key: `${cause.id}:stay-comment:${sha256(stayReason)}`,
           kind: "linear.comment",
           target: issue,
-          payload: { issue, body: stayReason, requires_managed: true },
+          payload: { issue, body: stayReason, actor: "service", requires_managed: true },
         },
       });
     }
     if (target && target !== snapshot.role) {
-      actions.push({ issue, cause: cause.id, description: `${snapshot.role ?? "unmapped status"} -> ${target}`, job: { key: `${cause.id}:role:${target}`, kind: "linear.issue-role", target: issue, payload: { issue, role: target, expected_role: snapshot.role, cause_observation: cause.id, actor: "service", requires_managed: true, comment: cause.verb === "pr-green" ? "Required checks passed for the current PR head. Walkthrough: pending." : undefined } } });
+      const decision = cause.verb === "needs-decision";
+      const decisionLink = decision ? activeLinks.find((link) => link.task === cause.task) : null;
+      actions.push({
+        issue,
+        cause: cause.id,
+        description: `${snapshot.role ?? "unmapped status"} -> ${target}`,
+        job: {
+          key: `${cause.id}:role:${target}`,
+          kind: "linear.issue-role",
+          target: issue,
+          payload: {
+            issue,
+            role: target,
+            expected_role: snapshot.role,
+            cause_observation: cause.id,
+            actor: "service",
+            requires_managed: true,
+            comment: decision ? cause.note || "Worker needs a captain decision."
+              : cause.verb === "pr-green" ? "Required checks passed for the current PR head. Walkthrough: pending."
+                : undefined,
+            ...(decision ? {
+              decision_new_thread: config.comments.decision_new_thread,
+              decision_key: cause.key,
+              decision_task: cause.task,
+              decision_lifecycle_id: decisionLink?.lifecycle_id ?? null,
+            } : {}),
+          },
+        },
+      });
     }
   }
   return { actions, findings };

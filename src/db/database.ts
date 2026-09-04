@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, MIGRATE_TO_V11_SQL, MIGRATE_TO_V12_SQL, MIGRATE_TO_V13_SQL, MIGRATE_TO_V14_SQL, MIGRATE_TO_V15_SQL, MIGRATE_TO_V16_SQL, MIGRATE_TO_V17_SQL, MIGRATE_TO_V18_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, MIGRATE_TO_V11_SQL, MIGRATE_TO_V12_SQL, MIGRATE_TO_V13_SQL, MIGRATE_TO_V14_SQL, MIGRATE_TO_V15_SQL, MIGRATE_TO_V16_SQL, MIGRATE_TO_V17_SQL, MIGRATE_TO_V18_SQL, MIGRATE_TO_V19_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 import type { WorkflowRole } from "../config/schema.ts";
 
 export type EventDisposition =
@@ -103,10 +103,11 @@ export type IssueSnapshot = {
   last_actor: string | null;
   last_signal: string | null;
   managed: boolean;
+  activity_root_id: string | null;
   observed_at: string;
 };
 
-export type NewIssueSnapshot = Omit<IssueSnapshot, "managed"> & { managed?: boolean };
+export type NewIssueSnapshot = Omit<IssueSnapshot, "managed" | "activity_root_id"> & { managed?: boolean; activity_root_id?: string | null };
 
 export type TaskLink = {
   lifecycle_id: string;
@@ -267,6 +268,7 @@ export class StateDatabase {
         if (from > 0 && from < 16 && !tableHasColumn(db, "steers", "delivery_id")) db.exec(MIGRATE_TO_V16_SQL);
         if (from > 0 && from < 17 && !tableHasColumn(db, "steers", "lifecycle_id")) db.exec(MIGRATE_TO_V17_SQL);
         if (from > 0 && from < 18) db.exec(MIGRATE_TO_V18_SQL);
+        if (from > 0 && from < 19 && !tableHasColumn(db, "issue_snapshots", "activity_root_id")) db.exec(MIGRATE_TO_V19_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -590,10 +592,10 @@ export class StateDatabase {
     });
   }
 
-  finishJob(id: string, nativeId: string | null = null, at = nowIso(), sourceWatermarks: PromiseSourceWatermarks | null = null, deliveredAtOverride?: string): void {
+  finishJob(id: string, nativeId: string | null = null, at = nowIso(), sourceWatermarks: PromiseSourceWatermarks | null = null, deliveredAtOverride?: string, completionNote?: string): void {
     this.transaction(() => {
-      this.raw.query("UPDATE jobs SET state='done',native_id=COALESCE(?,native_id),done_at=?,last_error=NULL WHERE id=?")
-        .run(nativeId, at, id);
+      this.raw.query("UPDATE jobs SET state='done',native_id=COALESCE(?,native_id),done_at=?,last_error=? WHERE id=?")
+        .run(nativeId, at, completionNote ?? null, id);
       if (!nativeId) return;
       const pending = this.raw.query("SELECT rowid AS _rowid,id,issue,created_at,deadline_at FROM promises WHERE reply_job_id=? AND state='pending'").get(id) as {
         _rowid: number;
@@ -659,14 +661,23 @@ export class StateDatabase {
   }
 
   snapshot(value: NewIssueSnapshot): void {
+    const activityRootId = value.activity_root_id ?? this.latestSnapshot(value.issue)?.activity_root_id ?? null;
     this.raw.query(`INSERT INTO issue_snapshots(
-      issue,role,assignee,labels,agent_label,last_actor,last_signal,managed,observed_at
-    ) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(issue,observed_at) DO UPDATE SET
+      issue,role,assignee,labels,agent_label,last_actor,last_signal,managed,activity_root_id,observed_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(issue,observed_at) DO UPDATE SET
       role=excluded.role,assignee=excluded.assignee,labels=excluded.labels,agent_label=excluded.agent_label,
-      last_actor=excluded.last_actor,last_signal=excluded.last_signal,managed=excluded.managed`).run(
+      last_actor=excluded.last_actor,last_signal=excluded.last_signal,managed=excluded.managed,
+      activity_root_id=excluded.activity_root_id`).run(
       value.issue, value.role, value.assignee, JSON.stringify(value.labels), value.agent_label,
-      value.last_actor, value.last_signal, value.managed === false ? 0 : 1, value.observed_at,
+      value.last_actor, value.last_signal, value.managed === false ? 0 : 1, activityRootId, value.observed_at,
     );
+  }
+
+  setActivityRootId(issue: string, rootId: string): void {
+    const result = this.raw.query(`UPDATE issue_snapshots SET activity_root_id=? WHERE rowid=(
+      SELECT rowid FROM issue_snapshots WHERE issue=? ORDER BY observed_at DESC,rowid DESC LIMIT 1
+    )`).run(rootId, issue);
+    if (result.changes !== 1) throw new Error(`cannot store activity root without an issue snapshot: ${issue}`);
   }
 
   latestSnapshot(issue: string): IssueSnapshot | null {

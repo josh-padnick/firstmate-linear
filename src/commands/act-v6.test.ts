@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
@@ -8,7 +8,7 @@ import { runActV6 } from "./act-v6.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function setup(options: { liveState?: string; liveAssignee?: string; managed?: "all" | "assignee:self" } = {}): { home: string; env: NodeJS.ProcessEnv; receipt: string } {
+function setup(options: { liveState?: string; liveAssignee?: string; managed?: "all" | "assignee:self"; parentId?: string | null } = {}): { home: string; env: NodeJS.ProcessEnv; receipt: string } {
   const home = mkdtempSync("/private/tmp/fml-act-"); roots.push(home); mkdirSync(join(home, "config"));
   const fixtures = join(home, "fixtures"); mkdirSync(fixtures);
   const liveState = options.liveState ?? "Approve Deliverable";
@@ -26,12 +26,102 @@ function setup(options: { liveState?: string; liveAssignee?: string; managed?: "
   const env = { FM_HOME: home, FM_LINEAR_FIXTURE_DIR: fixtures };
   const db = StateDatabase.open(env);
   db.snapshot({ issue: "ABC-1", role: "review-gate", assignee: "Captain", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
-  db.capture({ id: "event:one", team: "ABC", issue: "ABC-1", type: "comment", token: "comment", author: "Captain", body_sha: null, created_at: "2026-01-01T00:00:01Z", captured_at: "2026-01-01T00:00:02Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
+  db.capture({ id: "event:one", team: "ABC", issue: "ABC-1", type: "comment", token: "comment", author: "Captain", body_sha: null, created_at: "2026-01-01T00:00:01Z", captured_at: "2026-01-01T00:00:02Z", disposition: "waiting-for-core", note: null, raw_ref: JSON.stringify({ comment_id: "captain-comment", parent_id: options.parentId ?? null, body: "Please respond" }) });
   const receipt = db.issueReceipt(["event:one"], "2026-01-01T00:00:03Z"); db.close();
   return { home, env, receipt };
 }
 
 describe("v6 act read gate", async () => {
+  test("reply without a receipt or explicit parent explains how to start a thread", async () => {
+    const { env } = setup();
+    const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    expect(await runActV6(["reply", "ABC-1", "--comment", "Update"], env)).toBe(1);
+
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining(
+      "reply needs a receipted event or --parent <comment-id>; use `act comment` for a new thread.",
+    ));
+    stderr.mockRestore();
+  });
+
+  test("reply with an explicit parent does not require a receipt", async () => {
+    const { env } = setup({ liveState: "Building", liveAssignee: "Firstmate" });
+    const db = StateDatabase.open(env);
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
+    db.close();
+
+    expect(await runActV6([
+      "reply", "ABC-1", "--parent", "captain-comment", "--comment", "Nothing else is expected", "--next", "none",
+    ], env)).toBe(0);
+
+    const after = StateDatabase.open(env);
+    expect(JSON.parse(after.jobs()[0]!.payload)).toMatchObject({ parent_id: "captain-comment" });
+    after.close();
+  });
+
+  test("comment without a parent starts a new thread and says so", async () => {
+    const { env, receipt } = setup();
+    const stdout = spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    expect(await runActV6([
+      "comment", "ABC-1", "--receipt", receipt, "--comment", "A separate update",
+      "--verdict", "changes-requested", "--to", "firstmate",
+    ], env)).toBe(0);
+
+    expect(stdout).toHaveBeenCalledWith(expect.stringContaining("new thread"));
+    stdout.mockRestore();
+    const after = StateDatabase.open(env);
+    expect(JSON.parse(after.jobs().find((job) => job.kind === "linear.comment")!.payload)).toMatchObject({ parent_id: null });
+    after.close();
+  });
+
+  test("a reply to a receipted captain comment targets the thread root", async () => {
+    const { env, receipt } = setup({ parentId: "thread-root" });
+
+    expect(await runActV6([
+      "reply", "ABC-1", "--receipt", receipt, "--comment", "I will update it",
+      "--verdict", "changes-requested", "--to", "firstmate",
+    ], env)).toBe(0);
+
+    const db = StateDatabase.open(env);
+    const comment = db.jobs().find((job) => job.kind === "linear.comment")!;
+    expect(JSON.parse(comment.payload)).toMatchObject({ parent_id: "thread-root" });
+    db.close();
+  });
+
+  test("a reply to a receipted top-level captain comment targets that comment", async () => {
+    const { env, receipt } = setup();
+
+    expect(await runActV6([
+      "reply", "ABC-1", "--receipt", receipt, "--comment", "I will update it",
+      "--verdict", "changes-requested", "--to", "firstmate",
+    ], env)).toBe(0);
+
+    const db = StateDatabase.open(env);
+    const comment = db.jobs().find((job) => job.kind === "linear.comment")!;
+    expect(JSON.parse(comment.payload)).toMatchObject({ parent_id: "captain-comment" });
+    db.close();
+  });
+
+  test("receipt-bearing handoff and terminal comments stay in the captain thread", async () => {
+    for (const verb of ["handoff-to-captain", "complete", "cancel"] as const) {
+      const { env, receipt } = setup({ liveState: "Building", liveAssignee: "Firstmate", parentId: "thread-root" });
+      const db = StateDatabase.open(env);
+      db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
+      db.close();
+      const promise = verb === "handoff-to-captain" ? ["--next", "none"] : [];
+
+      expect(await runActV6([
+        verb, "ABC-1", "--receipt", receipt, "--comment", `${verb} update`, ...promise,
+      ], env)).toBe(0);
+
+      const after = StateDatabase.open(env);
+      const comment = after.jobs().find((job) => job.kind === "linear.comment")!;
+      expect(JSON.parse(comment.payload)).toMatchObject({ parent_id: "thread-root" });
+      after.close();
+    }
+  });
+
   test("captain-facing replies on firstmate-owned issues require a next promise", async () => {
     const { env, receipt } = setup({ liveState: "Building", liveAssignee: "Firstmate" });
     const db = StateDatabase.open(env);

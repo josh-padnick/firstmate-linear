@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { loadConfig } from "../config/load.ts";
 import type { TeamConfig } from "../config/schema.ts";
 import type { WorkflowRole } from "../config/schema.ts";
-import { StateDatabase, type NewJob } from "../db/database.ts";
+import { StateDatabase, type DomainEvent, type IssueSnapshot, type NewJob } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { formatIso, nowEpoch, nowIso } from "../time.ts";
 import { LinearTransport } from "../transport.ts";
@@ -45,6 +45,15 @@ function renderReply(text: string, verdict: string | null, next: string | null, 
   const rendered = template.replaceAll("{{body}}", text).replaceAll("{{verdict}}", verdict ?? "").replaceAll("{{next}}", next ?? "").trim();
   if (/\{\{[^}]+\}\}/.test(rendered)) throw new Error("reply template has unresolved placeholders");
   return rendered;
+}
+
+function commentThreadRoot(event: DomainEvent): string | null {
+  if (event.type !== "comment") return null;
+  try {
+    const raw = JSON.parse(event.raw_ref) as { comment_id?: unknown; parent_id?: unknown };
+    if (typeof raw.parent_id === "string" && raw.parent_id) return raw.parent_id;
+    return typeof raw.comment_id === "string" && raw.comment_id ? raw.comment_id : null;
+  } catch { return null; }
 }
 
 function durationSeconds(value: string): number {
@@ -105,14 +114,32 @@ export async function runActV6(args: string[], env: NodeJS.ProcessEnv = process.
     const taskHome = optionValue(args, "--home")?.trim() || null;
     const by = optionValue(args, "--by")?.trim() || null;
     const receipt = optionValue(args, "--receipt");
-    if (!receipt) throw new Error(`${verb} requires an inbox receipt`);
+    const explicitParent = optionValue(args, "--parent")?.trim() || null;
+    if (!receipt && verb === "reply" && !explicitParent) {
+      throw new Error("reply needs a receipted event or --parent <comment-id>; use `act comment` for a new thread.");
+    }
+    if (!receipt && !(verb === "reply" && explicitParent)) throw new Error(`${verb} requires an inbox receipt`);
     db = StateDatabase.open(env);
-    const receiptState = db.receipt(receipt);
-    if (!receiptState || receiptState.consumed_at) throw new Error(`receipt missing or already consumed: ${receipt}`);
-    const snapshot = await synchronizeReceiptCaptainComments({
-      db, receiptId: receipt, issue, config, env,
-      transport: dependencies.transport,
-    });
+    let snapshot: IssueSnapshot | null = db.latestSnapshot(issue);
+    let receiptedComment: DomainEvent | null = null;
+    if (receipt) {
+      const receiptState = db.receipt(receipt);
+      if (!receiptState || receiptState.consumed_at) throw new Error(`receipt missing or already consumed: ${receipt}`);
+      receiptedComment = receiptState.event_ids
+        .map((id) => db!.event(id))
+        .filter((event): event is DomainEvent => event?.issue === issue && event.type === "comment")
+        .at(-1) ?? null;
+      snapshot = await synchronizeReceiptCaptainComments({
+        db, receiptId: receipt, issue, config, env,
+        transport: dependencies.transport,
+      });
+    }
+    if (!snapshot) throw new Error(`issue snapshot missing: ${issue}; run sync first`);
+    const receiptParent = receiptedComment ? commentThreadRoot(receiptedComment) : null;
+    const parentId = verb === "comment" ? explicitParent : receiptParent ?? explicitParent;
+    if (verb === "reply" && !parentId) {
+      throw new Error("reply needs a receipted event or --parent <comment-id>; use `act comment` for a new thread.");
+    }
     if (verdict && !VERDICTS.has(verdict)) throw new Error(`unknown verdict: ${verdict}`);
     if (owner && !OWNERS.has(owner)) throw new Error(`unknown owner: ${owner}`);
     if (verb === "status" && !explicitRole) throw new Error("status requires --role");
@@ -139,32 +166,45 @@ export async function runActV6(args: string[], env: NodeJS.ProcessEnv = process.
     const rendered = TEXT_VERBS.has(verb) ? renderReply(text, verdict, nextLine, config.templates.reply) : "";
     if (TEXT_VERBS.has(verb)) lintReply(rendered);
     const target = roleForAction(verb, verdict, owner, team, explicitRole);
-    const keyBase = `${receipt}:${verb}:${issue}`;
+    const keyBase = `${receipt ?? `parent:${explicitParent}`}:${verb}:${issue}`;
     const jobs: NewJob[] = [];
     if (verb === "send") jobs.push({
       key: `${keyBase}:send:${task}`, kind: "fleet.send", target: task!,
       payload: { issue, task, home: taskHome, lifecycle_id: sendLinks[0]!.lifecycle_id, message: text },
     });
     if (text) {
-      if (verb !== "send") jobs.push({ key: `${keyBase}:comment:${sha256(rendered)}`, kind: "linear.comment", target: issue, payload: { issue, body: rendered, actor: "core", requires_managed: true } });
+      if (verb !== "send") jobs.push({ key: `${keyBase}:comment:${sha256(rendered)}`, kind: "linear.comment", target: issue, payload: { issue, body: rendered, parent_id: parentId, actor: "core", requires_managed: true } });
     }
     if (target) {
       jobs.push({ key: `${keyBase}:role:${target}`, kind: "linear.issue-role", target: issue, payload: { issue, role: target, expected_role: snapshot.role, actor: "core", requires_managed: true } });
     }
     let handled: string[] = [];
     const createdAt = nowIso(env);
-    handled = db.actWithReceipt({
-      receiptId: receipt,
-      issue,
-      captain: config.captain.display_name,
-      jobs,
-      note: `${verb}${verdict ? ` verdict=${verdict}` : ""}`,
-      at: createdAt,
-      promise: expected && expected !== "none" && promiseSeconds
-        ? { issue, expected_event: expected, deadline_at: formatIso(nowEpoch(env) + promiseSeconds), created_at: createdAt }
-        : undefined,
-    });
-    process.stdout.write(`fm-linear act ${verb}: queued ${jobs.length} job(s)${handled.length ? `; handled ${handled.join(",")}` : ""}\n`);
+    const promised = expected && expected !== "none" && promiseSeconds
+      ? { issue, expected_event: expected, deadline_at: formatIso(nowEpoch(env) + promiseSeconds), created_at: createdAt }
+      : undefined;
+    if (receipt) {
+      handled = db.actWithReceipt({
+        receiptId: receipt,
+        issue,
+        captain: config.captain.display_name,
+        jobs,
+        note: `${verb}${verdict ? ` verdict=${verdict}` : ""}`,
+        at: createdAt,
+        promise: promised,
+      });
+    } else {
+      db.transaction(() => {
+        const enqueued = jobs.map((job) => db!.enqueue(job, createdAt));
+        if (promised) {
+          const reply = enqueued.find((job) => job.kind === "linear.comment");
+          if (!reply) throw new Error("a promise requires a captain-facing reply job");
+          db!.stagePromise({ ...promised, source_event_id: `comment:${explicitParent}`, reply_job_id: reply.id });
+        }
+      });
+    }
+    const threadNote = verb === "comment" && !parentId ? "; new thread" : "";
+    process.stdout.write(`fm-linear act ${verb}: queued ${jobs.length} job(s)${handled.length ? `; handled ${handled.join(",")}` : ""}${threadNote}\n`);
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

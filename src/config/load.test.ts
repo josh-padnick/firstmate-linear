@@ -55,6 +55,24 @@ describe("v6 config", () => {
     expect(config.promises).toEqual({ required_on_firstmate_owned: false, vocabulary: ["pr-green", "none"] });
   });
 
+  test("activity comment threading defaults on and can be disabled", () => {
+    const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
+    const defaults = join(root, "defaults.yaml"); writeFileSync(defaults, yaml());
+    expect(loadConfigFile(defaults).comments).toEqual({
+      activity_thread: true,
+      activity_root_body: "Firstmate activity thread. Replies here are read like any other comment.",
+      decision_new_thread: true,
+    });
+
+    const disabled = join(root, "disabled.yaml");
+    writeFileSync(disabled, `${yaml()}comments:\n  activity_thread: false\n  activity_root_body: Activity\n  decision_new_thread: false\n`);
+    expect(loadConfigFile(disabled).comments).toEqual({
+      activity_thread: false,
+      activity_root_body: "Activity",
+      decision_new_thread: false,
+    });
+  });
+
   test("progress deadlines remain role keyed when workflow status names change", () => {
     const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
     const path = join(root, "config.yaml");

@@ -82,6 +82,11 @@ export type WorkflowConfig = {
     required_on_firstmate_owned: boolean;
     vocabulary: string[];
   };
+  comments: {
+    activity_thread: boolean;
+    activity_root_body: string;
+    decision_new_thread: boolean;
+  };
   messages: {
     idle_nudge: string;
     status_queries: string[];

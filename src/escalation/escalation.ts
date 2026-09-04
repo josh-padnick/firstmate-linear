@@ -50,7 +50,7 @@ export function planEscalations(db: StateDatabase, config: WorkflowConfig, env: 
       eventId: event.id, issue: event.issue, ageSeconds: age,
       job: {
         key, kind: "linear.comment", target: event.issue,
-        payload: { issue: event.issue, body, waiting_event_id: event.id, requires_managed: true },
+        payload: { issue: event.issue, body, actor: "service", waiting_event_id: event.id, requires_managed: true },
       },
     });
   }

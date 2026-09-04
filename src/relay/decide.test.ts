@@ -23,6 +23,32 @@ describe("relay decision", () => {
     db.close();
   });
 
+  test("a reply parent selects its decision key when more than one question is open", () => {
+    const home = mkdtempSync("/private/tmp/fml-relay-"); roots.push(home);
+    mkdirSync(join(home, "state")); writeFileSync(join(home, "state", "task-1.meta"), "backend=tmux\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task-1", issue: "ABC-1", role: "primary", worktree: null, harness: "claude", spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.snapshot({ issue: "ABC-1", role: "decision-captain", assignee: "Captain", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    for (const [index, key] of ["color", "size"].entries()) {
+      db.observe({ id: `need-${key}`, source: "status", task: "task-1", issue: "ABC-1", verb: "needs-decision", key, note: null, observed_at: `2026-01-01T00:0${index}:00Z` });
+      db.observe({ id: `question-${key}`, source: "summary", task: "task-1", issue: "ABC-1", verb: "decision-comment", key, note: `comment-${key}`, observed_at: `2026-01-01T00:0${index}:01Z` });
+    }
+
+    const result = decideRelay({
+      event: {
+        id: "e1", team: "ABC", issue: "ABC-1", type: "comment", author: "Captain",
+        body: "Large", parent_id: "comment-size", created_at: "2026-01-01T00:03:00Z",
+      },
+      db,
+      config: base,
+      home,
+    });
+
+    expect(result.disposition).toBe("classified");
+    expect(result.job?.payload).toMatchObject({ key: "size" });
+    db.close();
+  });
+
   test("a replacement task does not inherit unresolved keys from a closed task", () => {
     const home = mkdtempSync("/private/tmp/fml-relay-"); roots.push(home);
     mkdirSync(join(home, "state")); writeFileSync(join(home, "state", "replacement.meta"), "backend=tmux\n");

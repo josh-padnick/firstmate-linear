@@ -27,3 +27,6 @@ The next process records `service-restarted` evidence for the report.
 
 `inbox show` includes a transcript tail when a session can be located by harness, worktree, and task time window.
 It does not classify transcript prose or infer blockers from signatures.
+
+Service-authored progress updates live in one per-issue activity thread.
+Replies to captain comments stay under the captain's thread root.
