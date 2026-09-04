@@ -529,6 +529,32 @@ describe("job worker", () => {
     db.close();
   });
 
+  test("a lifecycle-bound steer redelivers to an active support task", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const bin = join(root, "bin"); mkdirSync(bin, { recursive: true });
+    const calls = join(root, "support-calls");
+    writeFileSync(join(bin, "fm-send.sh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${calls}"\n`);
+    chmodSync(join(bin, "fm-send.sh"), 0o755);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.linkTask({
+      lifecycle_id: "link:support", task: "support", issue: "ABC-1", role: "support",
+      worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null,
+    });
+    db.enqueue({
+      key: "support-redelivery", kind: "fleet.send", target: "support",
+      payload: {
+        task: "support", issue: "ABC-1", lifecycle_id: "link:support", record_path: "/remote/support.inbox/001.msg",
+        delivery_id: "delivery-support", message: "Report status",
+      },
+    }, "2026-01-01T00:01:00Z");
+
+    expect((await processJobs({
+      db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env: { FM_HOME: root },
+    })).done).toBe(1);
+    expect(readFileSync(calls, "utf8").trim()).toBe("support --fire-and-forget delivery-support Report status");
+    db.close();
+  });
+
   test("recorded captain identity resolves captain-owned state assignment", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);

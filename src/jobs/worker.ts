@@ -227,7 +227,7 @@ function sendToTask(job: Job, body: JobPayload, db: StateDatabase, env: NodeJS.P
   const task = requiredString(body.task, "task");
   const issue = requiredString(body.issue ?? job.target, "issue");
   if (typeof body.lifecycle_id === "string") {
-    const active = db.taskLinks(issue, true).some((link) => link.lifecycle_id === body.lifecycle_id && link.task === task && link.role === "primary");
+    const active = db.taskLinks(issue, true).some((link) => link.lifecycle_id === body.lifecycle_id && link.task === task);
     if (!active) return { skipped: "relay task lifecycle is no longer active" };
   }
   const decisionKey = typeof body.key === "string" && body.key ? body.key : null;

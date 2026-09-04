@@ -90,7 +90,10 @@ export function reconcileIdleWorkers(home: string, db: StateDatabase, config: Wo
     if (!episode.nudged_at) {
       db.enqueue({
         key: `${id}:nudge`, kind: "fleet.send", target: link.task,
-        payload: { task: link.task, issue: link.issue, home: host, message: config.messages.idle_nudge, idle_episode_id: id },
+        payload: {
+          task: link.task, issue: link.issue, home: host, lifecycle_id: link.lifecycle_id,
+          message: config.messages.idle_nudge, idle_episode_id: id,
+        },
       }, at);
       db.updateIdleEpisode(id, "nudged_at", at);
       nudged += 1;

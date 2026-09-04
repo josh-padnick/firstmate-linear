@@ -11,15 +11,29 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 function setup() {
   const root = mkdtempSync("/private/tmp/fml-verdict-"); roots.push(root);
   const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+  db.linkTask({
+    lifecycle_id: "link:worker", task: "worker", issue: "ABC-1", role: "primary",
+    worktree: null, harness: null, spawned_at: "2026-01-01T11:00:00Z", torn_down_at: null,
+  });
   db.snapshot({ issue: "ABC-1", role: "validating", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:00:00Z" });
+  recordHead(db, "link:worker", "worker", "https://github.test/pr/1", "abc");
   return { root, db };
 }
 
-function observation(detail: Record<string, unknown>): Observation {
-  return {
-    id: "obs:verdict", source: "pr", task: "worker", issue: "ABC-1", verb: "verdict", key: String(detail.verdict),
-    note: JSON.stringify({ risk: "low", reason: "reviewed", url: "https://github.test/pr/1", headSha: "abc", changedFiles: [], lines: 10, autoMergeArmed: false, ...detail }),
+function recordHead(db: StateDatabase, lifecycle: string, task: string, url: string, head: string): void {
+  db.observe({
+    id: `head:${lifecycle}:${head}`, source: "pr", task, task_lifecycle_id: lifecycle,
+    issue: "ABC-1", verb: "pr-green", key: "pr", note: `${url} head=${head}`,
     observed_at: "2026-01-01T12:01:00Z",
+  });
+}
+
+function observation(detail: Record<string, unknown>, fields: Partial<Observation> = {}): Observation {
+  return {
+    id: "obs:verdict", source: "pr", task: "worker", task_lifecycle_id: "link:worker",
+    issue: "ABC-1", verb: "verdict", key: String(detail.verdict),
+    note: JSON.stringify({ risk: "low", reason: "reviewed", url: "https://github.test/pr/1", headSha: "abc", changedFiles: [], lines: 10, autoMergeArmed: false, ...detail }),
+    observed_at: "2026-01-01T12:01:00Z", ...fields,
   };
 }
 
@@ -45,7 +59,6 @@ test("service policy downgrades auto merge to the merge gate", () => {
 
 test("changes-requested relays findings to a live primary task and returns to building", () => {
   const { db } = setup();
-  db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T11:00:00Z", torn_down_at: null });
   reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [observation({ verdict: "changes-requested", reason: "fix tests" })]);
   expect(db.jobs().map((job) => job.kind).sort()).toEqual(["fleet.send", "linear.issue-role"]);
   db.close();
@@ -61,14 +74,91 @@ test("hands-off auto merge stays silent only when the configured gate check is g
 });
 
 test("a durable verdict is consumed after the issue reaches validating", () => {
-  const { db } = setup();
-  db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:02:00Z" });
+  const root = mkdtempSync("/private/tmp/fml-verdict-"); roots.push(root);
+  const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+  db.linkTask({
+    lifecycle_id: "link:worker", task: "worker", issue: "ABC-1", role: "primary",
+    worktree: null, harness: null, spawned_at: "2026-01-01T11:00:00Z", torn_down_at: null,
+  });
+  db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:00:00Z" });
+  recordHead(db, "link:worker", "worker", "https://github.test/pr/1", "abc");
   const item = observation({ verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" } });
   db.observe(item);
   expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [item]).handled).toBe(0);
   db.snapshot({ issue: "ABC-1", role: "validating", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:03:00Z" });
   expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), []).handled).toBe(1);
   expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), []).handled).toBe(0);
+  db.close();
+});
+
+test("a verdict cannot cross into a replacement primary lifecycle", () => {
+  const { db } = setup();
+  const item = observation({ verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" } });
+  db.observe(item);
+  db.closeTask("worker", "2026-01-01T12:02:00Z");
+  db.linkTask({
+    lifecycle_id: "link:replacement", task: "worker", issue: "ABC-1", role: "primary",
+    worktree: null, harness: null, spawned_at: "2026-01-01T12:03:00Z", torn_down_at: null,
+  });
+  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), []).handled).toBe(0);
+  expect(db.jobs()).toHaveLength(0);
+  db.close();
+});
+
+test("a verdict cannot cross into a later validation episode", () => {
+  const { db } = setup();
+  const item = observation({ verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" } });
+  db.observe(item);
+  db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:02:00Z" });
+  db.snapshot({ issue: "ABC-1", role: "validating", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:03:00Z" });
+  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), []).handled).toBe(0);
+  expect(db.jobs()).toHaveLength(0);
+  db.close();
+});
+
+test("changes requested dominates an auto-mergeable sibling PR", () => {
+  const { db } = setup();
+  db.linkTask({
+    lifecycle_id: "link:sibling", task: "sibling", issue: "ABC-1", role: "primary",
+    worktree: null, harness: null, spawned_at: "2026-01-01T11:30:00Z", torn_down_at: null,
+  });
+  recordHead(db, "link:sibling", "sibling", "https://github.test/pr/2", "def");
+  const requested = observation({ verdict: "changes-requested", reason: "fix security" });
+  const safe = observation({
+    verdict: "auto-mergeable", url: "https://github.test/pr/2", headSha: "def",
+    checkConclusions: { "fleet-merge-gate": "success" },
+  }, { id: "obs:sibling", task: "sibling", task_lifecycle_id: "link:sibling" });
+  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [requested, safe]).handled).toBe(2);
+  expect(db.listEvents(["waiting-for-core"])).toHaveLength(0);
+  expect(db.jobs().map((job) => job.kind).sort()).toEqual(["fleet.send", "linear.issue-role"]);
+  expect(JSON.parse(db.jobs().find((job) => job.kind === "fleet.send")!.payload)).toMatchObject({ lifecycle_id: "link:worker" });
+  db.close();
+});
+
+test("merge authorization waits for every active primary verdict", () => {
+  const { db } = setup();
+  db.linkTask({
+    lifecycle_id: "link:sibling", task: "sibling", issue: "ABC-1", role: "primary",
+    worktree: null, harness: null, spawned_at: "2026-01-01T11:30:00Z", torn_down_at: null,
+  });
+  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [observation({
+    verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" },
+  })]).handled).toBe(0);
+  expect(db.jobs()).toHaveLength(0);
+  db.close();
+});
+
+test("a verdict must match the latest observed PR head", () => {
+  const { db } = setup();
+  db.observe({
+    id: "head:replacement", source: "pr", task: "worker", task_lifecycle_id: "link:worker",
+    issue: "ABC-1", verb: "pr-withdrawn", key: "pr",
+    note: "https://github.test/pr/1 current=def expected=def", observed_at: "2026-01-01T12:02:00Z",
+  });
+  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [observation({
+    verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" },
+  })]).handled).toBe(0);
+  expect(db.jobs()).toHaveLength(0);
   db.close();
 });
 

@@ -1,5 +1,5 @@
 import type { WorkflowConfig } from "../config/schema.ts";
-import type { Observation, StateDatabase } from "../db/database.ts";
+import type { Observation, StateDatabase, TaskLink } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { nowIso } from "../time.ts";
 
@@ -41,123 +41,172 @@ export function policyReason(config: WorkflowConfig, detail: VerdictDetail): str
   return null;
 }
 
+type ActiveVerdict = {
+  observation: Observation;
+  detail: VerdictDetail;
+  link: TaskLink;
+  policy: string | null;
+};
+
+function validationBoundary(db: StateDatabase, issue: string, links: TaskLink[]): string {
+  const snapshots = db.snapshots(issue);
+  let currentStart = snapshots.length - 1;
+  while (currentStart > 0 && snapshots[currentStart - 1]?.role === "validating") currentStart -= 1;
+  let priorValidation = currentStart - 1;
+  while (priorValidation >= 0 && snapshots[priorValidation]?.role !== "validating") priorValidation -= 1;
+  if (priorValidation >= 0) return snapshots[priorValidation + 1]!.observed_at;
+  return links.map((link) => link.spawned_at).sort()[0] ?? snapshots[currentStart]?.observed_at ?? "";
+}
+
+function currentPrHead(db: StateDatabase, issue: string, lifecycleId: string, url: string): string | null {
+  const state = db.observations(issue)
+    .filter((item) => item.source === "pr" && item.task_lifecycle_id === lifecycleId
+      && ["pr-green", "pr-withdrawn"].includes(item.verb) && item.note?.startsWith(`${url} `))
+    .at(-1);
+  if (!state?.note) return null;
+  return /(?:head|current)=([^\s]+)/.exec(state.note)?.[1] ?? null;
+}
+
+function configuredVerdict(config: WorkflowConfig, observation: Observation): VerdictDetail | null {
+  const detail = parseDetail(observation);
+  if (!detail || (detail.source && detail.source !== config.validation.source)) return null;
+  if (detail.source === "check" && detail.checkName && detail.checkName !== config.validation.check_name) return null;
+  return detail;
+}
+
 export function reconcileVerdicts(db: StateDatabase, config: WorkflowConfig, observations: Observation[], env: NodeJS.ProcessEnv = process.env): { handled: number; stalled: number } {
   if (config.validation.mode !== "verdict") return { handled: 0, stalled: 0 };
   let handled = 0;
   let stalled = 0;
   const at = nowIso(env);
-  const candidates = new Map<string, Observation>();
-  for (const observation of [...db.observations(), ...observations]
-    .filter((item) => item.source === "pr" && item.verb === "verdict")) {
-    const detail = parseDetail(observation);
-    if (!detail || (detail.source && detail.source !== config.validation.source)) continue;
-    if (detail.source === "check" && detail.checkName && detail.checkName !== config.validation.check_name) continue;
-    const prior = candidates.get(observation.issue);
-    if (!prior || observation.observed_at >= prior.observed_at) candidates.set(observation.issue, observation);
-  }
-  for (const observation of candidates.values()) {
-    if (db.latestSnapshot(observation.issue)?.role !== "validating") continue;
-    const handledKey = `verdict-handled:${observation.id}`;
-    if (db.serviceState(handledKey)) continue;
-    const team = config.teams.find((item) => item.key === observation.issue.split("-")[0]);
-    const detail = parseDetail(observation);
-    if (!team || !detail) continue;
-    if (detail.source && detail.source !== config.validation.source) continue;
-    if (detail.source === "check" && detail.checkName && detail.checkName !== config.validation.check_name) continue;
-    const policy = detail.verdict === "auto-mergeable" ? policyReason(config, detail) : null;
-    const verdict = policy ? "needs-human" : detail.verdict;
-    const reason = policy ?? detail.reason;
-    const gateConclusion = detail.checkConclusions?.[config.validation.gate_check_name] ?? "";
-    const gateGreen = gateConclusion.toLowerCase() === "success";
-    if (policy) db.raw.query("UPDATE pr_events SET policy_downgrade=1,reason=? WHERE id=?").run(reason, observation.id);
-    if (detail.autoMergeArmed && gateGreen && policy) {
-      db.capture({
-        id: `linear:${sha256(`policy-disagreement:${observation.id}`)}`, team: team.key, issue: observation.issue,
-        type: "verdict", token: "verdict", author: "fm-linear", body_sha: null, created_at: at, captured_at: at,
-        disposition: "waiting-for-core", note: `policy-disagreement: ${reason}; captain must review ${detail.url}`,
-        raw_ref: JSON.stringify({ kind: "policy-disagreement", required: `review the policy disagreement for ${detail.url}`, ...detail, policy_downgrade: true }),
-      });
-    }
-    if (verdict === "auto-mergeable") {
-      if (detail.autoMergeArmed && gateGreen) {
-        db.enqueueReconciliation({
-          key: `${observation.id}:promise:pr-merged`, kind: "promise.implicit", target: observation.issue,
-          payload: { issue: observation.issue, source_event_id: observation.id, expected_event: "pr-merged", deadline: "merge" },
-        }, at);
-        db.setServiceState(handledKey, at, at);
-        handled += 1;
-        continue;
-      }
-      if (!gateGreen) {
-        const id = `linear:${sha256(`verdict-gate-wait:${observation.id}`)}`;
-        db.capture({
-          id, team: team.key, issue: observation.issue, type: "verdict", token: "verdict", author: "fm-linear",
-          body_sha: null, created_at: at, captured_at: at, disposition: "waiting-for-core",
-          note: `validation found ${detail.url} auto-mergeable, but ${config.validation.gate_check_name} is not successful`,
-          raw_ref: JSON.stringify({ kind: "verdict-gate-wait", ...detail, required: `make ${config.validation.gate_check_name} successful before merge authorization` }),
+  const allVerdicts = [...db.observations(), ...observations]
+    .filter((item) => item.source === "pr" && item.verb === "verdict");
+  for (const snapshot of db.latestSnapshots().filter((item) => item.role === "validating")) {
+    const links = db.taskLinks(snapshot.issue, true).filter((item) => item.role === "primary");
+    if (!links.length) continue;
+    const boundary = validationBoundary(db, snapshot.issue, links);
+    const byLifecycle = new Map<string, ActiveVerdict>();
+    for (const observation of allVerdicts) {
+      const link = links.find((item) => item.lifecycle_id === observation.task_lifecycle_id && item.task === observation.task);
+      if (!link || observation.observed_at < boundary || observation.observed_at < link.spawned_at) continue;
+      const detail = configuredVerdict(config, observation);
+      if (!detail || currentPrHead(db, snapshot.issue, link.lifecycle_id, detail.url) !== detail.headSha) continue;
+      const prior = byLifecycle.get(link.lifecycle_id);
+      if (!prior || observation.observed_at >= prior.observation.observed_at) {
+        byLifecycle.set(link.lifecycle_id, {
+          observation, detail, link,
+          policy: detail.verdict === "auto-mergeable" ? policyReason(config, detail) : null,
         });
-        db.setServiceState(handledKey, at, at);
-        handled += 1;
-        continue;
       }
-      const id = `linear:${sha256(`verdict-merge:${observation.id}`)}`;
-      db.capture({
-        id, team: team.key, issue: observation.issue, type: "verdict", token: "verdict", author: "fm-linear",
-        body_sha: null, created_at: at, captured_at: at, disposition: "waiting-for-core",
-        note: `required: merge ${detail.url} (auto-mergeable, ${detail.risk ?? "n/a"})`,
-        raw_ref: JSON.stringify({ kind: "verdict", ...detail, verdict, required: `merge ${detail.url}` }),
-      }, [{
-        key: `${id}:promise:pr-merged`, kind: "promise.implicit", target: observation.issue,
-        payload: { issue: observation.issue, source_event_id: id, expected_event: "pr-merged", deadline: "merge" },
-      }]);
+    }
+    if (byLifecycle.size !== links.length) continue;
+    const candidates = links.map((link) => byLifecycle.get(link.lifecycle_id)!);
+    const aggregateId = sha256(JSON.stringify({
+      issue: snapshot.issue,
+      boundary,
+      lifecycles: candidates.map((item) => item.link.lifecycle_id),
+      verdicts: candidates.map((item) => item.observation.id),
+    }));
+    const handledKey = `verdict-aggregate-handled:${aggregateId}`;
+    if (db.serviceState(handledKey)) continue;
+    const team = config.teams.find((item) => item.key === snapshot.issue.split("-")[0]);
+    if (!team) continue;
+    for (const candidate of candidates.filter((item) => item.policy)) {
+      db.raw.query("UPDATE pr_events SET policy_downgrade=1,reason=? WHERE id=?")
+        .run(candidate.policy, candidate.observation.id);
+      if (candidate.detail.autoMergeArmed
+        && candidate.detail.checkConclusions?.[config.validation.gate_check_name]?.toLowerCase() === "success") {
+        db.capture({
+          id: `linear:${sha256(`policy-disagreement:${candidate.observation.id}`)}`,
+          team: team.key, issue: snapshot.issue, type: "verdict", token: "verdict", author: "fm-linear",
+          body_sha: null, created_at: at, captured_at: at, disposition: "waiting-for-core",
+          note: `policy-disagreement: ${candidate.policy}; captain must review ${candidate.detail.url}`,
+          raw_ref: JSON.stringify({
+            kind: "policy-disagreement", required: `review the policy disagreement for ${candidate.detail.url}`,
+            ...candidate.detail, policy_downgrade: true,
+          }),
+        });
+      }
+    }
+    const changesRequested = candidates.filter((item) => item.detail.verdict === "changes-requested");
+    if (changesRequested.length) {
+      db.enqueueReconciliation({
+        key: `verdict-aggregate:${aggregateId}:building`, kind: "linear.issue-role", target: snapshot.issue,
+        payload: { issue: snapshot.issue, role: "building", expected_role: "validating", actor: "service", requires_managed: true },
+      }, at);
+      for (const candidate of changesRequested) {
+        db.enqueueReconciliation({
+          key: `verdict-aggregate:${aggregateId}:findings:${candidate.link.lifecycle_id}`,
+          kind: "fleet.send", target: candidate.link.task,
+          payload: {
+            task: candidate.link.task, issue: snapshot.issue, lifecycle_id: candidate.link.lifecycle_id,
+            message: `Validation requested changes on ${candidate.detail.url}: ${candidate.detail.reason}`,
+          },
+        }, at);
+      }
       db.setServiceState(handledKey, at, at);
-      handled += 1;
+      handled += candidates.length;
       continue;
     }
-    if (verdict === "needs-human") {
+    const needsHuman = candidates.filter((item) => item.detail.verdict === "needs-human" || item.policy);
+    if (needsHuman.length) {
       const target = team.roles["merge-gate"] ? "merge-gate" : team.roles["review-gate"] ? "review-gate" : null;
+      const reasons = needsHuman.map((item) => item.policy ?? item.detail.reason).join("; ");
       if (target) {
         db.enqueueReconciliation({
-          key: `${observation.id}:verdict:${target}`, kind: "linear.issue-role", target: observation.issue,
+          key: `verdict-aggregate:${aggregateId}:${target}`, kind: "linear.issue-role", target: snapshot.issue,
           payload: {
-            issue: observation.issue, role: target, expected_role: "validating", actor: "service", requires_managed: true,
-            comment: `validated, green on ${detail.headSha}, risk ${detail.risk ?? "n/a"}; needs your merge word because ${reason}.`,
+            issue: snapshot.issue, role: target, expected_role: "validating", actor: "service", requires_managed: true,
+            comment: `Validation needs your merge word because ${reasons}.`,
           },
         }, at);
       } else {
-        const id = `linear:${sha256(`verdict-needs-human:${observation.id}`)}`;
+        const id = `linear:${sha256(`verdict-needs-human:${aggregateId}`)}`;
         db.capture({
-          id, team: team.key, issue: observation.issue, type: "verdict", token: "verdict", author: "fm-linear",
+          id, team: team.key, issue: snapshot.issue, type: "verdict", token: "verdict", author: "fm-linear",
           body_sha: null, created_at: at, captured_at: at, disposition: "waiting-for-core",
-          note: `validation needs human review for ${detail.url}: ${reason}`,
-          raw_ref: JSON.stringify({ kind: "verdict-needs-human", ...detail, required: `review the validation verdict for ${detail.url}` }),
+          note: `validation needs human review: ${reasons}`,
+          raw_ref: JSON.stringify({ kind: "verdict-needs-human", required: "review the validation verdicts", reasons }),
         });
       }
       db.setServiceState(handledKey, at, at);
-      handled += 1;
+      handled += candidates.length;
       continue;
     }
-    const links = db.taskLinks(observation.issue, true).filter((item) => item.role === "primary");
-    db.enqueueReconciliation({
-      key: `${observation.id}:verdict:building`, kind: "linear.issue-role", target: observation.issue,
-      payload: { issue: observation.issue, role: "building", expected_role: "validating", actor: "service", requires_managed: true },
-    }, at);
-    if (links.length) {
-      db.enqueueReconciliation({
-        key: `${observation.id}:findings:${links[0]!.lifecycle_id}`, kind: "fleet.send", target: links[0]!.task,
-        payload: { task: links[0]!.task, issue: observation.issue, message: `Validation requested changes on ${detail.url}: ${reason}` },
-      }, at);
-    } else {
-      const id = `linear:${sha256(`verdict-no-worker:${observation.id}`)}`;
-      if (db.capture({
-        id, team: team.key, issue: observation.issue, type: "stalled", token: "stalled", author: "fm-linear",
+    const unsafe = candidates.filter((item) => item.detail.checkConclusions?.[config.validation.gate_check_name]?.toLowerCase() !== "success");
+    if (unsafe.length) {
+      const id = `linear:${sha256(`verdict-gate-wait:${aggregateId}`)}`;
+      db.capture({
+        id, team: team.key, issue: snapshot.issue, type: "verdict", token: "verdict", author: "fm-linear",
         body_sha: null, created_at: at, captured_at: at, disposition: "waiting-for-core",
-        note: `stalled ${observation.issue}: validation requested changes but no live primary task exists`,
-        raw_ref: JSON.stringify({ kind: "verdict", required: `dispatch a worker to address validation findings for ${detail.url}` }),
-      })) stalled += 1;
+        note: `validation found all active PRs auto-mergeable, but ${config.validation.gate_check_name} is not successful for every PR`,
+        raw_ref: JSON.stringify({ kind: "verdict-gate-wait", required: `make ${config.validation.gate_check_name} successful for every active PR` }),
+      });
+      db.setServiceState(handledKey, at, at);
+      handled += candidates.length;
+      continue;
+    }
+    for (const candidate of candidates) {
+      if (candidate.detail.autoMergeArmed) {
+        db.enqueueReconciliation({
+          key: `${candidate.observation.id}:promise:pr-merged`, kind: "promise.implicit", target: snapshot.issue,
+          payload: { issue: snapshot.issue, source_event_id: candidate.observation.id, expected_event: "pr-merged", deadline: "merge" },
+        }, at);
+        continue;
+      }
+      const id = `linear:${sha256(`verdict-merge:${candidate.observation.id}`)}`;
+      db.capture({
+        id, team: team.key, issue: snapshot.issue, type: "verdict", token: "verdict", author: "fm-linear",
+        body_sha: null, created_at: at, captured_at: at, disposition: "waiting-for-core",
+        note: `required: merge ${candidate.detail.url} (auto-mergeable, ${candidate.detail.risk ?? "n/a"})`,
+        raw_ref: JSON.stringify({ kind: "verdict", ...candidate.detail, required: `merge ${candidate.detail.url}` }),
+      }, [{
+        key: `${id}:promise:pr-merged`, kind: "promise.implicit", target: snapshot.issue,
+        payload: { issue: snapshot.issue, source_event_id: id, expected_event: "pr-merged", deadline: "merge" },
+      }]);
     }
     db.setServiceState(handledKey, at, at);
-    handled += 1;
+    handled += candidates.length;
   }
   return { handled, stalled };
 }

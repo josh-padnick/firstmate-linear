@@ -25,6 +25,7 @@ test("idle worker gets one nudge and then one attributed proxy block", () => {
   db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T11:00:00Z", torn_down_at: null });
   const config = testWorkflowConfig();
   expect(reconcileIdleWorkers(home, db, config, { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:06:00Z") / 1000) })).toMatchObject({ nudged: 1, proxied: 0 });
+  expect(JSON.parse(db.jobs()[0]!.payload)).toMatchObject({ lifecycle_id: db.taskLinks("ABC-1", true)[0]!.lifecycle_id });
   expect(reconcileIdleWorkers(home, db, config, { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:07:00Z") / 1000) }).nudged).toBe(0);
   expect(reconcileIdleWorkers(home, db, config, { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:12:00Z") / 1000) })).toMatchObject({ nudged: 0, proxied: 1, stalled: 1 });
   expect(readFileSync(status, "utf8").match(/blocked \[key=idle\] \[service\]/g)).toHaveLength(1);
