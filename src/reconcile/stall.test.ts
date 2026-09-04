@@ -243,6 +243,24 @@ describe("stall reconciliation", () => {
     db.close();
   });
 
+  test("heartbeat uses the latest in-window transition across intermediate states", () => {
+    const { root, db } = setup();
+    db.snapshot({ issue: "ABC-1", state: "Plan In Progress", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T10:00:00Z" });
+    db.observe({ id: "obs:building-first", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Building", note: "Plan In Progress", observed_at: "2026-01-01T10:30:00Z" });
+    db.observe({ id: "obs:waiting", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Waiting", note: "Building", observed_at: "2026-01-01T11:00:00Z" });
+    db.observe({ id: "obs:building-latest", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Building", note: "Waiting", observed_at: "2026-01-01T11:30:00Z" });
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+
+    expect(reconcileStalls(root, db, config, {
+      FM_HOME: root,
+      FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:20:00Z") / 1000),
+    }).emitted).toBe(1);
+    const event = db.listEvents(["waiting-for-core"])[0]!;
+    expect(JSON.parse(event.raw_ref).last_progress).toMatchObject({ id: "obs:building-latest", at: "2026-01-01T11:30:00Z" });
+    expect(event.note).toContain("Building 50m");
+    db.close();
+  });
+
   test("a relinked task ignores the prior busy producer generation", () => {
     const { root, db } = setup();
     mkdirSync(join(root, "state"));

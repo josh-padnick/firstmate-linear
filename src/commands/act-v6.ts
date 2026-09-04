@@ -90,12 +90,18 @@ export async function runActV6(args: string[], env: NodeJS.ProcessEnv = process.
     const explicitStatus = optionValue(args, "--status")?.trim() || null;
     const expected = optionValue(args, "--next")?.trim() || null;
     const by = optionValue(args, "--by")?.trim() || null;
+    const receipt = optionValue(args, "--receipt");
+    if (!receipt) throw new Error(`${verb} requires an inbox receipt`);
+    db = StateDatabase.open(env);
+    const receiptState = db.receipt(receipt);
+    if (!receiptState || receiptState.consumed_at) throw new Error(`receipt missing or already consumed: ${receipt}`);
+    const snapshot = await synchronizeReceiptCaptainComments({
+      db, receiptId: receipt, issue, config, env,
+      transport: dependencies.transport,
+    });
     if (verdict && !VERDICTS.has(verdict)) throw new Error(`unknown verdict: ${verdict}`);
     if (owner && !OWNERS.has(owner)) throw new Error(`unknown owner: ${owner}`);
     if (verb === "status" && !explicitStatus) throw new Error("status requires --status");
-    db = StateDatabase.open(env);
-    const snapshot = db.latestSnapshot(issue);
-    if (snapshot?.managed === false) throw new Error(`issue is no longer managed: ${issue}`);
     const firstmateOwned = new Set([
       team.statuses.plan_in_progress, team.statuses.building, team.statuses.validating_code,
       team.statuses.waiting, team.statuses.needs_firstmate_decision,
@@ -119,21 +125,13 @@ export async function runActV6(args: string[], env: NodeJS.ProcessEnv = process.
     const rendered = TEXT_VERBS.has(verb) ? renderReply(text, verdict, nextLine, config.templates.reply) : "";
     if (TEXT_VERBS.has(verb)) lintReply(rendered);
     const target = statusFor(verb, verdict, owner, team, explicitStatus);
-    const receipt = optionValue(args, "--receipt");
-    if (!receipt) throw new Error(`${verb} requires an inbox receipt`);
-    const receiptState = db.receipt(receipt);
-    if (!receiptState || receiptState.consumed_at) throw new Error(`receipt missing or already consumed: ${receipt}`);
-    await synchronizeReceiptCaptainComments({
-      db, receiptId: receipt, issue, config, env,
-      transport: dependencies.transport,
-    });
     const keyBase = `${receipt}:${verb}:${issue}`;
     const jobs: NewJob[] = [];
     if (text) {
       jobs.push({ key: `${keyBase}:comment:${sha256(rendered)}`, kind: "linear.comment", target: issue, payload: { issue, body: rendered, actor: "core", requires_managed: true } });
     }
     if (target) {
-      jobs.push({ key: `${keyBase}:state:${target}`, kind: "linear.issue-state", target: issue, payload: { issue, state: target, expected_state: snapshot?.state ?? null, actor: "core", requires_managed: true } });
+      jobs.push({ key: `${keyBase}:state:${target}`, kind: "linear.issue-state", target: issue, payload: { issue, state: target, expected_state: snapshot.state, actor: "core", requires_managed: true } });
     }
     let handled: string[] = [];
     const createdAt = nowIso(env);

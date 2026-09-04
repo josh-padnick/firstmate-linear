@@ -9,6 +9,7 @@ import { deriveComments, type SeenStore } from "../capture/derive.ts";
 import { fetchIssueSnapshot } from "../capture/fetch.ts";
 import { captureCanonicalEvent, eventId, snapshotFromLinearIssue } from "../capture/ingest.ts";
 import type { LinearComment } from "../capture/types.ts";
+import type { IssueSnapshot } from "../db/database.ts";
 
 function receiptCommentsQuery(since: string): string {
   return `query($issue:String!,$after:String){comments(first:50,after:$after,orderBy:updatedAt,filter:{issue:{identifier:{eq:$issue}},updatedAt:{gte:${JSON.stringify(since)}}}){pageInfo{hasNextPage endCursor} nodes{id createdAt updatedAt body user{displayName} issue{identifier} parent{id}}}}`;
@@ -30,7 +31,7 @@ export async function synchronizeReceiptCaptainComments(options: {
   config: WorkflowConfig;
   env: NodeJS.ProcessEnv;
   transport?: LinearTransport;
-}): Promise<void> {
+}): Promise<IssueSnapshot> {
   const receipt = options.db.receipt(options.receiptId);
   if (!receipt || receipt.consumed_at) throw new Error(`receipt missing or already consumed: ${options.receiptId}`);
   const authorized = receipt.event_ids
@@ -67,24 +68,16 @@ export async function synchronizeReceiptCaptainComments(options: {
   const viewer = issueState.viewer || options.env.FM_LINEAR_SELF_NAME?.trim() || "firstmate";
   const managed = isManagedIssue(team, viewer, issueState.issue);
   const observedAt = nowIso(options.env);
-  if (!managed) {
-    options.db.snapshot(snapshotFromLinearIssue(
-      issueState.issue,
-      team.agent_labels,
-      observedAt,
-      false,
-      options.config.captain.display_name,
-    ));
-    throw new Error(`issue is no longer managed: ${options.issue}`);
-  }
-  if (!discovered.length) return;
-  options.db.snapshot(snapshotFromLinearIssue(
+  const snapshot = snapshotFromLinearIssue(
     issueState.issue,
     team.agent_labels,
     observedAt,
-    true,
+    managed,
     options.config.captain.display_name,
-  ));
+  );
+  options.db.snapshot(snapshot);
+  if (!managed) throw new Error(`issue is no longer managed: ${options.issue}`);
+  if (!discovered.length) return snapshot;
 
   const localSeen = new Set<string>();
   const seen: SeenStore = {
@@ -95,4 +88,5 @@ export async function synchronizeReceiptCaptainComments(options: {
   for (const event of events) {
     captureCanonicalEvent({ config: options.config, db: options.db, env: options.env, event, history: issueState.history });
   }
+  return snapshot;
 }

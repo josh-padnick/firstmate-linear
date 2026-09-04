@@ -171,7 +171,6 @@ export function lastProgress(db: StateDatabase, issue: string): Progress | null 
       const beforeSnapshot = compareIso(observation.observed_at, item.observed_at);
       const afterPrevious = previous ? compareIso(observation.observed_at, previous.observed_at) : 0;
       if (beforeSnapshot === null || beforeSnapshot === 1 || afterPrevious === null || afterPrevious === -1) continue;
-      if (previous && observation.note && observation.note !== previous.state) continue;
       transition = observation;
     }
     latest = transition

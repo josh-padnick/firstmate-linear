@@ -8,19 +8,21 @@ import { runActV6 } from "./act-v6.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function setup(): { home: string; env: NodeJS.ProcessEnv; receipt: string } {
+function setup(options: { liveState?: string; liveAssignee?: string; managed?: "all" | "assignee:self" } = {}): { home: string; env: NodeJS.ProcessEnv; receipt: string } {
   const home = mkdtempSync("/private/tmp/fml-act-"); roots.push(home); mkdirSync(join(home, "config"));
   const fixtures = join(home, "fixtures"); mkdirSync(fixtures);
+  const liveState = options.liveState ?? "Approve Deliverable";
+  const liveAssignee = options.liveAssignee ?? "Captain";
   writeFileSync(join(fixtures, "01-comments.json"), JSON.stringify({ data: { comments: { pageInfo: { hasNextPage: false }, nodes: [] } } }));
   writeFileSync(join(fixtures, "02-issue.json"), JSON.stringify({ data: {
     viewer: { displayName: "Firstmate" },
     issue: {
       identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:00:03Z",
-      state: { name: "Approve Deliverable" }, assignee: { displayName: "Captain" }, creator: { displayName: "Captain" },
+      state: { name: liveState }, assignee: { displayName: liveAssignee }, creator: { displayName: "Captain" },
       project: null, labels: { nodes: [] }, history: { pageInfo: { hasNextPage: false }, nodes: [] },
     },
   } }));
-  writeFileSync(join(home, "config", "linear-workflow.yaml"), `version: 1\ncaptain:\n  display_name: Captain\nteams:\n  - key: ABC\n    managed: all\n    projects: []\n    statuses:\n      approve_deliverable: Approve Deliverable\n      building: Building\n      validating_code: Validating Code\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n`);
+  writeFileSync(join(home, "config", "linear-workflow.yaml"), `version: 1\ncaptain:\n  display_name: Captain\nteams:\n  - key: ABC\n    managed: ${options.managed ?? "all"}\n    projects: []\n    statuses:\n      approve_deliverable: Approve Deliverable\n      building: Building\n      validating_code: Validating Code\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n`);
   const env = { FM_HOME: home, FM_LINEAR_FIXTURE_DIR: fixtures };
   const db = StateDatabase.open(env);
   db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
@@ -31,7 +33,7 @@ function setup(): { home: string; env: NodeJS.ProcessEnv; receipt: string } {
 
 describe("v6 act read gate", async () => {
   test("captain-facing replies on firstmate-owned issues require a next promise", async () => {
-    const { env, receipt } = setup();
+    const { env, receipt } = setup({ liveState: "Building", liveAssignee: "Firstmate" });
     const db = StateDatabase.open(env);
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
     db.close();
@@ -45,7 +47,7 @@ describe("v6 act read gate", async () => {
   });
 
   test("next none allows a reply without recording a promise", async () => {
-    const { env, receipt } = setup();
+    const { env, receipt } = setup({ liveState: "Building", liveAssignee: "Firstmate" });
     const db = StateDatabase.open(env);
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
     db.close();
@@ -59,7 +61,7 @@ describe("v6 act read gate", async () => {
   });
 
   test("next and by create a durable promise with the rendered commitment", async () => {
-    const { env, receipt } = setup();
+    const { env, receipt } = setup({ liveState: "Building", liveAssignee: "Firstmate" });
     const db = StateDatabase.open(env);
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
     const previous = db.createPromise({ issue: "ABC-1", source_event_id: "event:previous", expected_event: "status:done", deadline_at: "2026-01-01T00:20:00Z", reply_job_id: "job:previous", created_at: "2026-01-01T00:01:00Z" });
@@ -99,6 +101,39 @@ describe("v6 act read gate", async () => {
   test("gate replies require a verdict and ownership", async () => {
     const { env, receipt } = setup();
     expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it"], env)).toBe(1);
+  });
+
+  test("live gate state overrides a stale firstmate-owned snapshot", async () => {
+    const { env, receipt } = setup();
+    const db = StateDatabase.open(env);
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
+    db.close();
+
+    expect(await runActV6([
+      "reply", "ABC-1", "--receipt", receipt, "--comment", "Continuing", "--next", "none",
+    ], env)).toBe(1);
+
+    const after = StateDatabase.open(env);
+    expect(after.latestSnapshot("ABC-1")?.state).toBe("Approve Deliverable");
+    expect(after.receipt(receipt)?.consumed_at).toBeNull();
+    expect(after.jobs()).toHaveLength(0);
+    after.close();
+  });
+
+  test("live managed state overrides a stale unmanaged snapshot", async () => {
+    const { env, receipt } = setup();
+    const db = StateDatabase.open(env);
+    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Someone Else", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: false, observed_at: "2026-01-01T00:01:00Z" });
+    db.close();
+
+    expect(await runActV6([
+      "reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate",
+    ], env)).toBe(0);
+
+    const after = StateDatabase.open(env);
+    expect(after.latestSnapshot("ABC-1")?.managed).toBe(true);
+    expect(after.receipt(receipt)?.consumed_at).not.toBeNull();
+    after.close();
   });
 
   test("a valid gate reply enqueues jobs and consumes exact receipt", async () => {
@@ -224,7 +259,7 @@ describe("v6 act read gate", async () => {
   });
 
   test("an action receipt cannot mutate an issue after it leaves scope", async () => {
-    const { env, receipt } = setup();
+    const { env, receipt } = setup({ liveAssignee: "Someone Else", managed: "assignee:self" });
     const db = StateDatabase.open(env);
     db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Someone Else", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: false, observed_at: "2026-01-01T00:01:00Z" });
     db.close();
