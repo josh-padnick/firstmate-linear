@@ -1,17 +1,10 @@
 import { cutover, install, uninstall } from "../install/install.ts";
+import { optionValues } from "./args.ts";
 
 export function runInstall(args: string[], env: NodeJS.ProcessEnv = process.env): number {
-  const harnesses: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    if (args[index] !== "--harness") continue;
-    const harness = args[index + 1];
-    if (!harness || harness.startsWith("--")) {
-      process.stderr.write("fm-linear install: --harness requires a value\n");
-      return 2;
-    }
-    harnesses.push(harness);
-    index += 1;
-  }
+  let harnesses: string[];
+  try { harnesses = optionValues(args, "--harness"); }
+  catch (error) { process.stderr.write(`fm-linear install: ${error instanceof Error ? error.message : String(error)}\n`); return 2; }
   try {
     const result = install({ harnesses, bind: !args.includes("--no-bind"), env });
     process.stdout.write(`fm-linear install: binary=${result.binary}\nlaunch-agent=${result.plist}\n`);

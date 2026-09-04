@@ -1,10 +1,6 @@
 import { StateDatabase } from "../db/database.ts";
 import { nowIso } from "../time.ts";
-
-function flag(args: string[], name: string): string | null {
-  const index = args.indexOf(name);
-  return index >= 0 ? args[index + 1] ?? null : null;
-}
+import { optionValue } from "./args.ts";
 
 export function runTask(args: string[], env: NodeJS.ProcessEnv = process.env): number {
   const sub = args[0];
@@ -13,12 +9,12 @@ export function runTask(args: string[], env: NodeJS.ProcessEnv = process.env): n
     if (sub === "link") {
       const task = args[1];
       const issue = args[2];
-      const role = flag(args, "--role") ?? "primary";
+      const role = optionValue(args, "--role") ?? "primary";
       if (!task || !issue || (role !== "primary" && role !== "support")) {
         process.stderr.write("Usage: fm-linear task link TASK ISSUE [--role primary|support] [--worktree path] [--harness name]\n");
         return 2;
       }
-      db.linkTask({ task, issue, role, worktree: flag(args, "--worktree"), harness: flag(args, "--harness"), spawned_at: flag(args, "--spawned-at") ?? nowIso(env), torn_down_at: null });
+      db.linkTask({ task, issue, role, worktree: optionValue(args, "--worktree"), harness: optionValue(args, "--harness"), spawned_at: optionValue(args, "--spawned-at") ?? nowIso(env), torn_down_at: null });
       process.stdout.write(`fm-linear task: linked ${task} -> ${issue} (${role})\n`);
       return 0;
     }

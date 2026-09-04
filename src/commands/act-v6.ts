@@ -4,20 +4,15 @@ import type { TeamConfig } from "../config/schema.ts";
 import { StateDatabase, type NewJob } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { renderEvent } from "./inbox-v6.ts";
+import { optionValue } from "./args.ts";
 
 const TEXT_VERBS = new Set(["reply", "comment", "handoff-to-captain", "complete", "cancel"]);
 const VERDICTS = new Set(["approved", "changes-requested", "question"]);
 const OWNERS = new Set(["captain", "firstmate", "none"]);
 
-function flag(args: string[], name: string): string | null {
-  const index = args.indexOf(name);
-  const value = index >= 0 ? args[index + 1] : null;
-  return value && !value.startsWith("--") ? value : null;
-}
-
 function body(args: string[]): string {
-  const file = flag(args, "--comment-file");
-  return file ? readFileSync(file, "utf8") : flag(args, "--comment") ?? "";
+  const file = optionValue(args, "--comment-file");
+  return file ? readFileSync(file, "utf8") : optionValue(args, "--comment") ?? "";
 }
 
 function teamFor(issue: string, teams: TeamConfig[]): TeamConfig {
@@ -67,9 +62,9 @@ export function runActV6(args: string[], env: NodeJS.ProcessEnv = process.env): 
     if (args.includes("--actor")) throw new Error("--actor is reserved for the service and is not a public override");
     const team = teamFor(issue, config.teams);
     const text = body(args).trim();
-    const verdict = flag(args, "--verdict");
-    const owner = flag(args, "--to");
-    const explicitStatus = flag(args, "--status")?.trim() || null;
+    const verdict = optionValue(args, "--verdict");
+    const owner = optionValue(args, "--to");
+    const explicitStatus = optionValue(args, "--status")?.trim() || null;
     if (verdict && !VERDICTS.has(verdict)) throw new Error(`unknown verdict: ${verdict}`);
     if (owner && !OWNERS.has(owner)) throw new Error(`unknown owner: ${owner}`);
     if (verb === "status" && !explicitStatus) throw new Error("status requires --status");
@@ -83,7 +78,7 @@ export function runActV6(args: string[], env: NodeJS.ProcessEnv = process.env): 
     const rendered = TEXT_VERBS.has(verb) ? renderReply(text, verdict, config.templates.reply) : "";
     if (TEXT_VERBS.has(verb)) lintReply(rendered);
     const target = statusFor(verb, verdict, owner, team, explicitStatus);
-    const receipt = flag(args, "--receipt");
+    const receipt = optionValue(args, "--receipt");
     if (!receipt) throw new Error(`${verb} requires an inbox receipt`);
     const keyBase = `${receipt}:${verb}:${issue}`;
     const jobs: NewJob[] = [];

@@ -259,4 +259,15 @@ describe("installer", () => {
     expect(readFileSync(marker, "utf8")).toBe("user-owned extension\n");
     expect(existsSync(join(newRuntime, "bin", "fm-linear"))).toBe(false);
   });
+
+  test("no-bind reinstall refuses to strand an owned runtime at another root", () => {
+    const root = mkdtempSync("/private/tmp/fml-install-"); roots.push(root);
+    const home = join(root, "home");
+    const oldRuntime = join(root, "old-runtime");
+    const base = { FM_HOME: home, FM_LINEAR_LAUNCH_AGENTS_DIR: join(root, "agents"), FM_LINEAR_SKIP_LAUNCHCTL: "1", FM_LINEAR_REAL_LINEAR_AXI: "/usr/bin/true" };
+    install({ harnesses: [], bind: false, env: { ...base, FM_LINEAR_INSTALL_ROOT: oldRuntime } });
+    expect(() => install({ harnesses: [], bind: false, env: { ...base, FM_LINEAR_INSTALL_ROOT: join(root, "new-runtime") } })).toThrow("refusing to change owned install root");
+    const record = JSON.parse(readFileSync(join(home, "state", "linear", "install.json"), "utf8"));
+    expect(record.binary).toBe(join(oldRuntime, "bin", "fm-linear"));
+  });
 });

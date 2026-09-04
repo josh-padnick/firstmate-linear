@@ -327,10 +327,7 @@ export class StateDatabase {
       }
       const authorized = this.event(eventId);
       if (!authorized) throw new Error(`event not found: ${eventId}`);
-      const newer = this.newerCaptainEventAfterRowid(authorized.issue, receipt.event_rowid, authorized.author);
-      if (newer && !receipt.event_ids.includes(newer.id)) {
-        throw new Error(`stale receipt: newer captain event ${newer.id} must be read first`);
-      }
+      this.assertReceiptFresh(authorized.issue, authorized.author, receipt);
       const result = this.raw.query("UPDATE events SET disposition='handled-by-core',disposition_at=?,note=COALESCE(?,note) WHERE id=? AND disposition='waiting-for-core'")
         .run(at, note, eventId);
       if (result.changes !== 1) throw new Error(`event is not awaiting core handling: ${eventId}`);
@@ -354,10 +351,7 @@ export class StateDatabase {
       const events = receipt.event_ids.map((id) => this.event(id)).filter((event): event is DomainEvent => event !== null);
       const relevant = events.filter((event) => event.issue === options.issue && event.disposition === "waiting-for-core");
       if (!relevant.length) throw new Error(`receipt does not contain an event for ${options.issue}`);
-      const newer = this.newerCaptainEventAfterRowid(options.issue, receipt.event_rowid, options.captain);
-      if (newer && !receipt.event_ids.includes(newer.id)) {
-        throw new Error(`stale receipt: newer captain event ${newer.id} must be read first`);
-      }
+      this.assertReceiptFresh(options.issue, options.captain, receipt);
       for (const job of options.jobs) this.enqueue(job, at);
       for (const event of relevant) {
         this.raw.query("UPDATE events SET disposition='handled-by-core',disposition_at=?,note=? WHERE id=?")
@@ -379,12 +373,33 @@ export class StateDatabase {
       AND type='comment' ORDER BY rowid DESC LIMIT 1`).get(issue, captain, afterRowid) as DomainEvent | null;
   }
 
+  private newestAuthorizedRowid(issue: string, eventIds: string[]): number {
+    const rows = eventIds.map((id) => this.raw.query("SELECT rowid,issue FROM events WHERE id=?").get(id) as { rowid: number; issue: string } | null);
+    return Math.max(0, ...rows.filter((row): row is { rowid: number; issue: string } => row?.issue === issue).map((row) => row.rowid));
+  }
+
+  private assertReceiptFresh(issue: string, captain: string, receipt: { event_ids: string[]; event_rowid: number }): void {
+    for (const boundary of [this.newestAuthorizedRowid(issue, receipt.event_ids), receipt.event_rowid]) {
+      const newer = this.newerCaptainEventAfterRowid(issue, boundary, captain);
+      if (newer && !receipt.event_ids.includes(newer.id)) throw new Error(`stale receipt: newer captain event ${newer.id} must be read first`);
+    }
+  }
+
   enqueue(job: NewJob, at = nowIso()): Job {
     const id = `job:${sha256(job.key)}`;
     this.raw.query(`INSERT INTO jobs(id,key,kind,target,payload,state,attempts,next_attempt_at,created_at)
       VALUES(?,?,?,?,?,'pending',0,?,?) ON CONFLICT(key) DO NOTHING`).run(
         id, job.key, job.kind, job.target, JSON.stringify(job.payload), job.nextAttemptAt ?? at, at,
       );
+    return this.raw.query("SELECT * FROM jobs WHERE key=?").get(job.key) as Job;
+  }
+
+  enqueueReconciliation(job: NewJob, at = nowIso()): Job {
+    const existing = this.raw.query("SELECT state FROM jobs WHERE key=?").get(job.key) as { state: JobState } | null;
+    if (existing && (existing.state === "done" || existing.state === "dead")) {
+      this.raw.query(`UPDATE jobs SET kind=?,target=?,payload=?,state='pending',attempts=0,next_attempt_at=?,last_error=NULL,native_id=NULL,done_at=NULL WHERE key=?`)
+        .run(job.kind, job.target, JSON.stringify(job.payload), job.nextAttemptAt ?? at, job.key);
+    } else this.enqueue(job, at);
     return this.raw.query("SELECT * FROM jobs WHERE key=?").get(job.key) as Job;
   }
 

@@ -88,10 +88,12 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
         continue;
       }
       if (snapshot.state === "MERGED" && !base) {
+        recordPrState(db, { id: "", source: "pr", task: link.task, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base unverified`, observed_at: nowIso(env) }, `${link.task}:${link.issue}:${url}:${snapshot.headRefOid}:base-unverified`, observations);
         findings.push({ code: "PR_BASE_UNKNOWN", issue: link.issue, detail: `cannot verify expected base for ${url}` });
         continue;
       }
       if (snapshot.state === "MERGED" && snapshot.baseRefName !== base) {
+        recordPrState(db, { id: "", source: "pr", task: link.task, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base=${snapshot.baseRefName} expected=${base}`, observed_at: nowIso(env) }, `${link.task}:${link.issue}:${url}:${snapshot.headRefOid}:base-mismatch:${snapshot.baseRefName}`, observations);
         findings.push({ code: "PR_BASE_MISMATCH", issue: link.issue, detail: `${url} merged into ${snapshot.baseRefName}, expected ${base}` });
         continue;
       }

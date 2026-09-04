@@ -5,28 +5,30 @@ import { StateDatabase } from "../db/database.ts";
 import { resolveHome } from "../env.ts";
 import { atomicWriteFile, ensurePrivateDir } from "../fsutil.ts";
 import { ASSETS } from "../assets.ts";
-
-
-function value(args: string[], flag: string): string | null {
-  const index = args.indexOf(flag);
-  return index >= 0 ? args[index + 1] ?? null : null;
-}
+import { optionValue } from "./args.ts";
 
 export function runInit(args: string[], env: NodeJS.ProcessEnv = process.env): number {
   const home = resolveHome(env);
   const destination = configPath(env);
-  ensurePrivateDir(join(home, "config"));
-  ensurePrivateDir(join(home, "state", "linear"));
+  let captainInput: string | null;
+  let teamInput: string | null;
+  try {
+    captainInput = optionValue(args, "--captain") ?? env.FM_LINEAR_CAPTAIN_NAME?.trim() ?? null;
+    teamInput = optionValue(args, "--team")?.toUpperCase() ?? null;
+  } catch (error) {
+    process.stderr.write(`fm-linear init: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 2;
+  }
   if (!existsSync(destination)) {
-    const captain = value(args, "--captain") ?? env.FM_LINEAR_CAPTAIN_NAME?.trim();
-    const team = value(args, "--team")?.toUpperCase();
-    if (!captain || !team) {
+    if (!captainInput || !teamInput) {
       process.stderr.write("fm-linear init: --captain NAME and --team KEY are required for a new config\n");
       return 2;
     }
+    ensurePrivateDir(join(home, "config"));
+    ensurePrivateDir(join(home, "state", "linear"));
     const rendered = ASSETS.configExample
-      .replace("CAPTAIN_NAME", captain)
-      .replace("key: TEAM", `key: ${team}`);
+      .replace("CAPTAIN_NAME", JSON.stringify(captainInput))
+      .replace("key: TEAM", `key: ${JSON.stringify(teamInput)}`);
     atomicWriteFile(destination, rendered);
     for (const [contents, targetName] of [
       [ASSETS.replyTemplate, "reply.md"],

@@ -1,4 +1,5 @@
 import { StateDatabase, type DomainEvent } from "../db/database.ts";
+import { optionValue } from "./args.ts";
 
 const PENDING = ["waiting-for-core"] as const;
 
@@ -48,10 +49,8 @@ export function runInboxV6(args: string[], env: NodeJS.ProcessEnv = process.env)
     }
     if (sub === "handle") {
       const id = args[1];
-      const receiptFlag = args.indexOf("--receipt");
-      const receiptId = receiptFlag >= 0 ? args[receiptFlag + 1] : null;
-      const noteFlag = args.indexOf("--note");
-      const note = noteFlag >= 0 ? args[noteFlag + 1] ?? "handled" : "handled";
+      const receiptId = optionValue(args, "--receipt");
+      const note = optionValue(args, "--note") ?? "handled";
       if (!id || !receiptId) {
         process.stderr.write("Usage: fm-linear inbox handle <event-id> --receipt <receipt-id> [--note text]\n");
         return 2;

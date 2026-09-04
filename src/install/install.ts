@@ -262,6 +262,9 @@ export function install(options: { harnesses: string[]; bind: boolean; env?: Nod
   const installedHarnesses = [...new Set([...(prior?.harnesses ?? []), ...harnesses])];
   const claudeSettings = harnessPlans.find((plan) => plan.claudeSettings)?.claudeSettings ?? prior?.claudeSettings;
   const extensionPath = join(root, "extension", "1.0.0");
+  if ((prior?.binary && prior.binary !== binaryPath) || (prior?.linearAxiGuard && prior.linearAxiGuard !== linearAxiGuardPath)) {
+    throw new Error(`refusing to change owned install root: ${prior.binary} -> ${binaryPath}`);
+  }
   const ownedExtension = prior?.extension?.packageRoot === extensionPath ? prior.extension : undefined;
   if (options.bind && prior?.extension && !ownedExtension) {
     throw new Error(`refusing to change owned extension destination: ${prior.extension.packageRoot} -> ${extensionPath}`);

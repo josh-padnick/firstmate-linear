@@ -135,6 +135,17 @@ describe("state database", () => {
     db.close();
   });
 
+  test("a receipt for an older event cannot authorize past unread captain input", () => {
+    const db = database();
+    db.capture(event("event:old"));
+    db.capture({ ...event("event:new"), created_at: "2026-01-01T00:00:02Z" });
+    const receipt = db.issueReceipt(["event:old"]);
+    expect(() => db.actWithReceipt({ receiptId: receipt, issue: "ABC-1", captain: "captain", jobs: [], note: "done" })).toThrow("event:new must be read first");
+    expect(() => db.handleWithReceipt("event:old", receipt, "done")).toThrow("event:new must be read first");
+    expect(db.receipt(receipt)?.consumed_at).toBeNull();
+    db.close();
+  });
+
   test("v1 migration invalidates receipts without a trustworthy watermark", () => {
     const db = database();
     const path = db.path;
