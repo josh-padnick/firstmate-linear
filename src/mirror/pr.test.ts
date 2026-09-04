@@ -79,13 +79,18 @@ describe("PR signals", () => {
     const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:00:00Z") / 1000) };
     const inspect = () => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] });
     expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
-    expect(runTask(["close", "task"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:10:00Z") / 1000) }, { inspectPr: inspect })).toBe(0);
+    const closeEnv = { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:10:00Z") / 1000) };
+    expect(runTask(["close", "task"], closeEnv, { inspectPr: () => {
+      closeEnv.FM_LINEAR_NOW_EPOCH = String(Date.parse("2026-01-01T00:11:00Z") / 1000);
+      return inspect();
+    } })).toBe(0);
     const db = StateDatabase.open(env);
 
     const result = scanPullRequests(home, db, inspect, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:11:00Z") / 1000) });
 
     expect(result.observations).toHaveLength(0);
-    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ verb: "pr-green", observed_at: "2026-01-01T00:10:00Z" }));
+    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ verb: "pr-green", observed_at: "2026-01-01T00:11:00Z" }));
+    expect(db.taskLinks("ABC-1")[0]?.torn_down_at).toBe("2026-01-01T00:11:00Z");
     expect(scanPullRequests(home, db, () => ({ state: "MERGED", headRefOid: "abc123", baseRefName: "main", requiredChecks: [] }), { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:12:00Z") / 1000) }).observations).toHaveLength(0);
     db.close();
   });

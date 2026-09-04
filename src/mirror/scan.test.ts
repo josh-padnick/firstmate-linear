@@ -171,6 +171,25 @@ describe("fleet scanner", () => {
     db.close();
   });
 
+  test("a concurrent issue link starts after existing unscanned status", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: first issue\n");
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
+    let db = StateDatabase.open(env);
+    scanFleet(home, db, env);
+    db.close();
+    appendFileSync(path, "done: first issue only\n");
+    expect(runTask(["link", "task", "ABC-2"], { ...env, FM_LINEAR_NOW_EPOCH: "1767225660" })).toBe(0);
+    db = StateDatabase.open(env);
+
+    const observations = scanFleet(home, db, env).observations.filter((item) => item.source === "status" && item.verb === "done");
+
+    expect(observations.map((item) => item.issue)).toEqual(["ABC-1"]);
+    db.close();
+  });
+
   test("a status written before close is ingested for the closed lifecycle", () => {
     const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
     const path = join(home, "state", "task.status");
@@ -260,6 +279,33 @@ describe("fleet scanner", () => {
     const observations = scanFleet(home, db, env).observations.filter((item) => item.source === "status" && item.task_lifecycle_id === lifecycle);
     expect(observations.map((item) => item.verb)).toEqual(["working"]);
     expect(observations[0]?.note).toBe("after role change");
+    db.close();
+  });
+
+  test("status produced during PR inspection stays with the closing role", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: support work\n");
+    writeFileSync(join(home, "state", "task.meta"), "spawn_gen=g1\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1", "--role", "support"], env)).toBe(0);
+    let db = StateDatabase.open(env);
+    scanFleet(home, db, env);
+    db.close();
+
+    expect(runTask(["link", "task", "ABC-1", "--role", "primary", "--spawned-at", "2026-01-01T00:01:00Z"], { ...env, FM_LINEAR_NOW_EPOCH: "1767225660" }, {
+      inspectPr: () => {
+        appendFileSync(path, "done: support finished\n");
+        return { state: "OPEN", headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] };
+      },
+    })).toBe(0);
+    appendFileSync(path, "working: primary work\n");
+    db = StateDatabase.open(env);
+    const [support, primary] = db.taskLinks("ABC-1");
+    const observations = scanFleet(home, db, env).observations.filter((item) => item.source === "status");
+
+    expect(observations.filter((item) => item.task_lifecycle_id === support?.lifecycle_id).map((item) => item.verb)).toEqual(["done"]);
+    expect(observations.filter((item) => item.task_lifecycle_id === primary?.lifecycle_id).map((item) => item.verb)).toEqual(["working"]);
     db.close();
   });
 

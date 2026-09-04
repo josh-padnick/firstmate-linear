@@ -129,10 +129,28 @@ describe("fixture transport", () => {
   });
 
   test("recording redacts identity and content while preserving stable references", () => {
-    const redacted = redactFixture({ data: { issue: { id: "secret-id", title: "Secret title", assignee: { id: "secret-id", email: "person@example.com" } } } }) as any;
+    const redacted = redactFixture({ data: { issue: { id: "secret-id", identifier: "ABC-123", title: "Secret title", assignee: { id: "secret-id", email: "person@example.com" } } } }) as any;
     expect(redacted.data.issue.id).toStartWith("redacted-");
+    expect(redacted.data.issue.identifier).toBe("ABC-123");
     expect(redacted.data.issue.assignee.id).toBe(redacted.data.issue.id);
     expect(redacted.data.issue.title).toBe("[redacted]");
     expect(redacted.data.issue.assignee.email).toBe("redacted@example.invalid");
+  });
+
+  test("recorded issue identifiers remain routable when replayed", async () => {
+    const dir = tempDir();
+    const recorded = join(dir, "recorded");
+    const response = { data: { issue: { id: "secret-id", identifier: "ABC-123", title: "Secret title" } } };
+    const live = new LinearTransport({
+      apiKey: "test-key",
+      recordDir: recorded,
+      fetchImpl: async () => new Response(JSON.stringify(response), { status: 200 }),
+    });
+    expect((await live.call("issue", { query: "query Issue" })).ok).toBe(true);
+
+    const replayed = await new LinearTransport({ fixtureDir: recorded }).call("issue", { query: "query Issue" });
+
+    expect(replayed.ok).toBe(true);
+    if (replayed.ok) expect((replayed.value.data as any).issue.identifier.split("-")[0]).toBe("ABC");
   });
 });

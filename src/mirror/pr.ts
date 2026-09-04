@@ -155,8 +155,29 @@ function scanLinks(home: string, db: StateDatabase, links: TaskLink[], inspect: 
   return { observations, findings };
 }
 
-export function capturePullRequestsAtBoundary(home: string, db: StateDatabase, task: string, observedAt: string, inspect: PrInspect = inspectPr): PrScanResult {
-  return scanLinks(home, db, db.taskLinks(undefined, true).filter((link) => link.task === task), inspect, observedAt);
+export function capturePullRequestsAtBoundary(home: string, db: StateDatabase, task: string, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): PrScanResult & { observedAt: string } {
+  const links = db.taskLinks(undefined, true).filter((link) => link.task === task);
+  const snapshots = new Map<string, PrSnapshot>();
+  const findings: PrScanResult["findings"] = [];
+  for (const link of links) {
+    const path = join(home, "state", `${link.task}.meta`);
+    if (!existsSync(path)) continue;
+    const generation = sidecarGeneration(path, "spawn_gen");
+    if (generation && generation === link.blocked_meta_generation) continue;
+    const url = meta(path).pr;
+    if (url && !snapshots.has(url)) {
+      try { snapshots.set(url, inspect(url)); }
+      catch (error) { findings.push({ code: "PR_INSPECTION_FAILED", issue: link.issue, detail: error instanceof Error ? error.message : String(error) }); }
+    }
+  }
+  const observedAt = nowIso(env);
+  if (findings.length) return { observations: [], findings, observedAt };
+  const result = scanLinks(home, db, links, (url) => {
+    const snapshot = snapshots.get(url);
+    if (!snapshot) throw new Error(`PR metadata changed during task boundary capture: ${url}`);
+    return snapshot;
+  }, observedAt);
+  return { ...result, observedAt };
 }
 
 export function scanPullRequests(home: string, db: StateDatabase, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): PrScanResult {

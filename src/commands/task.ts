@@ -22,26 +22,30 @@ export function runTask(args: string[], env: NodeJS.ProcessEnv = process.env, de
       const statusPath = join(state, `${task}.status`);
       const metaPath = join(state, `${task}.meta`);
       const busyPath = join(state, `${task}.busy-state`);
-      const lifecycles = db.taskLinks().filter((link) => link.task === task);
-      const active = lifecycles.find((link) => link.issue === issue && link.torn_down_at === null);
-      const prior = active ?? (lifecycles.some((link) => link.torn_down_at === null) ? undefined : lifecycles.at(-1));
+      let lifecycles = db.taskLinks().filter((link) => link.task === task);
+      let active = lifecycles.find((link) => link.issue === issue && link.torn_down_at === null);
+      const roleChange = Boolean(active && active.role !== role);
+      const capture = roleChange
+        ? capturePullRequestsAtBoundary(resolveHome(env), db, task, dependencies.inspectPr ?? inspectPr, env)
+        : null;
+      if (capture?.findings.length) {
+        for (const finding of capture.findings) process.stderr.write(`fm-linear task: ${finding.detail}\n`);
+        return 1;
+      }
+      lifecycles = db.taskLinks().filter((link) => link.task === task);
+      active = lifecycles.find((link) => link.issue === issue && link.torn_down_at === null);
+      const concurrent = !active && lifecycles.some((link) => link.torn_down_at === null);
+      const prior = active ?? (concurrent ? undefined : lifecycles.at(-1));
       const status = statusFileState(statusPath, db.cursor(`status:${statusPath}`));
       const statusIdentity = status?.incarnationIdentity ?? null;
-      const statusStartOffset = !prior ? 0
-        : active || !prior.status_end_identity || prior.status_end_identity === statusIdentity
+      const statusStartOffset = concurrent ? status?.content.length ?? 0
+        : !prior ? 0
+          : active || !prior.status_end_identity || prior.status_end_identity === statusIdentity
           ? status?.content.length ?? 0
           : 0;
       const metaGeneration = sidecarGeneration(metaPath, "spawn_gen");
       const busyGeneration = sidecarGeneration(busyPath, "gen");
-      const roleChange = Boolean(active && active.role !== role);
-      const spawnedAt = optionValue(args, "--spawned-at") ?? nowIso(env);
-      if (roleChange) {
-        const capture = capturePullRequestsAtBoundary(resolveHome(env), db, task, spawnedAt, dependencies.inspectPr ?? inspectPr);
-        if (capture.findings.length) {
-          for (const finding of capture.findings) process.stderr.write(`fm-linear task: ${finding.detail}\n`);
-          return 1;
-        }
-      }
+      const spawnedAt = optionValue(args, "--spawned-at") ?? capture?.observedAt ?? nowIso(env);
       db.transaction(() => {
         if (status?.needsPersistence) db.setCursor(`status:${statusPath}`, statusCursorValue(status, 0));
         db.linkTask({
@@ -61,20 +65,21 @@ export function runTask(args: string[], env: NodeJS.ProcessEnv = process.env, de
       if (!task) return 2;
       const state = resolveStateDir(resolveHome(env), env);
       const statusPath = join(state, `${task}.status`);
-      const status = statusFileState(statusPath, db.cursor(`status:${statusPath}`));
-      const closedAt = nowIso(env);
-      const capture = capturePullRequestsAtBoundary(resolveHome(env), db, task, closedAt, dependencies.inspectPr ?? inspectPr);
+      const capture = capturePullRequestsAtBoundary(resolveHome(env), db, task, dependencies.inspectPr ?? inspectPr, env);
       if (capture.findings.length) {
         for (const finding of capture.findings) process.stderr.write(`fm-linear task: ${finding.detail}\n`);
         return 1;
       }
+      const status = statusFileState(statusPath, db.cursor(`status:${statusPath}`));
+      const metaGeneration = sidecarGeneration(join(state, `${task}.meta`), "spawn_gen");
+      const busyGeneration = sidecarGeneration(join(state, `${task}.busy-state`), "gen");
       db.transaction(() => {
         if (status?.needsPersistence) db.setCursor(`status:${statusPath}`, statusCursorValue(status, 0));
-        db.closeTask(task, closedAt, {
+        db.closeTask(task, capture.observedAt, {
           statusOffset: status?.content.length ?? 0,
           statusIdentity: status?.incarnationIdentity ?? null,
-          metaGeneration: sidecarGeneration(join(state, `${task}.meta`), "spawn_gen"),
-          busyGeneration: sidecarGeneration(join(state, `${task}.busy-state`), "gen"),
+          metaGeneration,
+          busyGeneration,
         });
       });
       process.stdout.write(`fm-linear task: closed ${task}\n`);

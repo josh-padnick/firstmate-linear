@@ -76,6 +76,7 @@ export function redactFixture(value: unknown): unknown {
     if (/email/i.test(key)) return "redacted@example.invalid";
     if (/url/i.test(key)) return "https://example.invalid/redacted";
     if (/displayName|name/i.test(key)) return `[redacted-${sha256(current).slice(0, 8)}]`;
+    if (key === "identifier" && /^[A-Za-z][A-Za-z0-9]*-[0-9]+$/.test(current)) return current;
     if (/^(?:id|identifier|.*Id)$/i.test(key)) {
       const prior = identifiers.get(current);
       if (prior) return prior;
