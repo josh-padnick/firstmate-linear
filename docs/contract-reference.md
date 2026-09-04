@@ -21,7 +21,8 @@ Include an `unknown` value to make unmapped models visible without inventing lab
 Template paths can be absolute or relative to the YAML file.
 `reply` supports `{{body}}` and `{{verdict}}`.
 `report` supports `{{summary}}`, `{{events}}`, and `{{drift}}`.
-The review walkthrough must contain sections with IDs `outcome`, `changes`, `verification`, and `review`, with no template or placeholder text left behind.
+The review template must include `{{issue}}` and `{{title}}` and sections with IDs `outcome`, `changes`, `verification`, and `review`.
+A completed walkthrough must retain those sections and contain no unresolved template or placeholder text.
 
 Run `fm-linear contract lint` after every config change.
 Run `fm-linear contract apply-states --team KEY` to idempotently ensure configured workflow states.

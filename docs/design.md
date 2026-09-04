@@ -61,7 +61,7 @@ It also reads task metadata and summary snapshots, and inspects pull requests by
 The reducer treats decision, blocked, and failed signals existentially.
 Completion is universal over primary tasks, support tasks never drive issue state, and `resolved` closes only its matching task key.
 
-A pull request becomes reviewable only when it is open, its current head equals the recorded head, and at least one required check has passed for that head.
+A pull request becomes reviewable only when it is open, its current head equals the recorded head, and every required check has passed or been skipped for that head.
 A merge becomes done only when the target matches the expected base from task metadata or the worktree's origin default branch.
 
 Every mutation is conditional on the last observed issue state and carries a causal event or observation in its deterministic key.
@@ -71,10 +71,11 @@ Captain-authored board transitions without a newer fleet signal are reported and
 
 Capture, classification, and initial jobs share a transaction.
 Cursor overlap makes a crash before cursor advancement replay-safe.
+Periodic full snapshots retain the incremental event overlap bound, so resyncs do not reinterpret older history as new activity.
 Native Linear comment IDs let the worker verify an ambiguous success without posting twice.
 
 Jobs retry with exponential backoff, deterministic jitter, server `Retry-After`, and a bounded dead-letter transition.
 Escalation rungs have deterministic keys, so repeated cycles cannot flood a thread.
 
 On a service gap longer than two poll intervals, the first cycle performs normal capture and reconciliation and records a `resumed` event for Firstmate.
-Reports consume their own cursor and never mutate capture state.
+Reports consume events and observations in database insertion order through independent row cursors and never mutate capture state.

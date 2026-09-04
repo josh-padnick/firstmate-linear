@@ -112,7 +112,7 @@ export async function serviceCycle(options: {
   const reviewActions = applyReviewDeadlines(options.db, options.config, review);
   const escalations = applyEscalations(options.db, options.config, env);
   for (const finding of [...scan.findings.map((item) => ({ ...item, issue: "SYSTEM-0" })), ...pr.findings, ...mirror.findings, ...review.findings]) {
-    const task = "task" in finding ? finding.task : "service";
+    const task = "task" in finding && typeof finding.task === "string" ? finding.task : "service";
     options.db.observe({
       id: `obs:${sha256(`finding:${finding.code}:${task}:${finding.issue}:${finding.detail}`)}`,
       source: "summary", task, issue: finding.issue, verb: `finding-${finding.code.toLowerCase()}`,
