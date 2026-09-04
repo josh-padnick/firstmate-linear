@@ -39,7 +39,16 @@ describe("SQLite capture cycle", () => {
         issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null }, parent: null,
       }] },
     } }));
-    await Bun.write(join(fixtures, "02-fail-500.json"), "{}");
+    await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify({ data: { issues: {
+      pageInfo: { hasNextPage: false }, nodes: [{
+        identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:06:00Z",
+        state: { name: "Approve Deliverable" }, assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" }, labels: { nodes: [] },
+        history: { pageInfo: { hasNextPage: false }, nodes: [{
+          id: "inconsistent-transition", createdAt: "2026-01-01T00:05:30Z", actor: { displayName: "Captain" },
+          fromState: { name: "Building" }, toState: { name: "Approve Plan" },
+        }] },
+      }],
+    } } }));
     const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
 
     await expect(captureCycle({
@@ -47,9 +56,10 @@ describe("SQLite capture cycle", () => {
       db,
       transport: new LinearTransport({ fixtureDir: fixtures }),
       env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767226200", FM_LINEAR_MAX_PAGES: "1" },
-    })).rejects.toThrow("HTTP 500 during issues");
+    })).rejects.toThrow("cannot reconstruct state for ABC-1 at comment revision");
 
     expect(db.cursor("linear.comments.page.ABC")).toBeNull();
+    expect(db.cursor("linear.full.ABC")).toBeNull();
     expect(db.listEvents()).toHaveLength(0);
     db.close();
   });
@@ -98,6 +108,59 @@ describe("SQLite capture cycle", () => {
     expect(db.cursor("linear.comments")).toBe("2026-01-01T00:05:00Z");
     expect(db.cursor("linear.comments.page.ABC")).toBe("");
     expect(db.listEvents()).toHaveLength(2);
+    db.close();
+  });
+
+  test("resumed comments use full history to classify their revision state", async () => {
+    const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const comment = (id: string, updatedAt: string, body: string, author: string) => ({
+      id, createdAt: updatedAt, updatedAt, body, user: { displayName: author },
+      issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null }, parent: null,
+    });
+    const issue = {
+      identifier: "ABC-1", title: "Ship", createdAt: "2025-12-01T00:00:00Z", updatedAt: "2026-01-01T00:05:00Z",
+      state: { name: "Approve Deliverable" }, assignee: { displayName: "Firstmate" }, creator: { displayName: "Captain" }, labels: { nodes: [] },
+      history: { pageInfo: { hasNextPage: false }, nodes: [{
+        id: "deliverable-gate", createdAt: "2026-01-01T00:04:00Z", actor: { displayName: "Captain" },
+        fromState: { name: "Approve Plan" }, toState: { name: "Approve Deliverable" },
+      }] },
+    };
+    await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" }, comments: {
+        pageInfo: { hasNextPage: true, endCursor: "older-comments" },
+        nodes: [comment("newer-self", "2026-01-01T00:05:00Z", "working", "Firstmate")],
+      },
+    } }));
+    await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify({ data: { issues: { pageInfo: { hasNextPage: false }, nodes: [issue] } } }));
+    await Bun.write(join(fixtures, "03-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" }, comments: {
+        pageInfo: { hasNextPage: false }, nodes: [comment("older-approval", "2026-01-01T00:03:00Z", "approved", "Captain")],
+      },
+    } }));
+    await Bun.write(join(fixtures, "04-issues.json"), JSON.stringify({ data: { issues: { pageInfo: { hasNextPage: false }, nodes: [issue] } } }));
+    const log = join(root, "calls.log");
+    const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+    const transport = new LinearTransport({ fixtureDir: fixtures, fixtureLog: log });
+
+    await captureCycle({
+      config, db, transport,
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767226200", FM_LINEAR_MAX_PAGES: "1" },
+    });
+    await captureCycle({
+      config, db, transport,
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767226260", FM_LINEAR_MAX_PAGES: "1" },
+    });
+
+    const approval = db.listEvents().find((event) => event.type === "comment");
+    expect(approval).toMatchObject({ token: "plan-approved", disposition: "waiting-for-core" });
+    expect(JSON.parse(db.jobs().find((job) => job.key.includes(approval!.id))!.payload)).toMatchObject({
+      state: "Building", expected_state: "Approve Plan",
+    });
+    const issueCalls = (await Bun.file(log).text()).trim().split("\n")
+      .filter((line) => line.startsWith("issues\t"))
+      .map((line) => JSON.parse(line.split("\t")[1]!));
+    expect(issueCalls[1].query).not.toContain("updatedAt:{gte:");
     db.close();
   });
 

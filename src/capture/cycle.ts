@@ -138,6 +138,7 @@ export async function captureCycle(options: {
     previous: string | null;
     completed: boolean;
     highWater: string | null;
+    requiresFullHistory: boolean;
   }>();
   let viewer: string | null = null;
   for (const team of options.config.teams) {
@@ -169,6 +170,7 @@ export async function captureCycle(options: {
       previous: cursor,
       completed: result.resumeAfter === null,
       highWater: highWater ?? cursor,
+      requiresFullHistory: resume !== null || result.resumeAfter !== null,
     });
   }
   const self = viewer || env.FM_LINEAR_SELF_NAME?.trim() || "firstmate";
@@ -176,13 +178,16 @@ export async function captureCycle(options: {
   const allEvents: LedgerEvent[] = [];
   const allHistory: LinearHistory[] = [];
   const issueMax: Record<string, string | null> = {};
+  const fullScanMarkers = new Map<string, string>();
 
   for (const team of options.config.teams) {
     const cursorName = `linear.issues.${team.key}`;
     const storedCursor = options.db.cursor(cursorName);
     const cursor = storedCursor && parseIso(storedCursor) !== null ? storedCursor : null;
     const lastFull = options.db.cursor(`linear.full.${team.key}`);
-    const fullDue = !lastFull || nowEpoch(env) - (parseIso(lastFull) ?? 0) >= 900;
+    const fullDue = commentCheckpoints.get(team.key)?.requiresFullHistory === true
+      || !lastFull
+      || nowEpoch(env) - (parseIso(lastFull) ?? 0) >= 900;
     const eventCutoff = forceSince ?? (cursor ? overlapTimestamp(cursor) : bootstrapCutoff);
     const teamComments = commentsByTeam.get(team.key)?.comments ?? [];
     const commentCutoff = minIso(teamComments
@@ -214,7 +219,7 @@ export async function captureCycle(options: {
     allEvents.push(...deriveHistory(managedHistory, seen, observedAt, eventCutoff, self, bootstrapCutoff !== null));
     allEvents.push(...deriveIssueCreation(managedIssues, seen, observedAt, eventCutoff, self, bootstrapCutoff !== null));
     issueMax[team.key] = maxIso(result.issues.map((issue) => issue.updatedAt));
-    if (fullDue) options.db.setCursor(`linear.full.${team.key}`, observedAt, observedAt);
+    if (fullDue) fullScanMarkers.set(team.key, observedAt);
   }
 
   for (const team of options.config.teams) {
@@ -280,20 +285,23 @@ export async function captureCycle(options: {
   if (commentsMax && commentsComplete) {
     if (validLegacyCommentsCursor && compareIso(commentsMax, validLegacyCommentsCursor) === -1) throw new Error("comments cursor would move backwards");
   }
+  for (const team of options.config.teams) {
+    const value = issueMax[team.key];
+    if (!value) continue;
+    const previous = options.db.cursor(`linear.issues.${team.key}`);
+    if (previous && compareIso(value, previous) === -1) throw new Error(`${team.key} issue cursor would move backwards`);
+  }
   options.db.transaction(() => {
     for (const checkpoint of commentCheckpoints.values()) {
       options.db.setCursor(checkpoint.resumeName, checkpoint.resumeValue, observedAt);
       if (checkpoint.completed && checkpoint.highWater) options.db.setCursor(checkpoint.cursorName, checkpoint.highWater, observedAt);
     }
     if (commentsMax && commentsComplete) options.db.setCursor("linear.comments", commentsMax, observedAt);
+    for (const [teamKey, marker] of fullScanMarkers) options.db.setCursor(`linear.full.${teamKey}`, marker, observedAt);
+    for (const team of options.config.teams) {
+      const value = issueMax[team.key];
+      if (value) options.db.setCursor(`linear.issues.${team.key}`, value, observedAt);
+    }
   });
-  for (const team of options.config.teams) {
-    const value = issueMax[team.key];
-    if (!value) continue;
-    const name = `linear.issues.${team.key}`;
-    const previous = options.db.cursor(name);
-    if (previous && compareIso(value, previous) === -1) throw new Error(`${team.key} issue cursor would move backwards`);
-    options.db.setCursor(name, value, observedAt);
-  }
   return { captured, ignored, waiting, jobs, commentsMax, issuesMax: issueMax };
 }
