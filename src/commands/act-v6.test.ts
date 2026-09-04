@@ -64,7 +64,12 @@ describe("v6 act read gate", () => {
     const comment = after.jobs().find((job) => job.kind === "linear.comment")!;
     expect(JSON.parse(comment.payload).body).toContain("Next: pr-green by 30m");
     after.finishJob(comment.id, "linear-comment-1", "2026-01-01T00:03:00Z");
-    expect(after.promise(pending.id)).toMatchObject({ state: "open", reply_comment_id: "linear-comment-1" });
+    expect(after.promise(pending.id)).toMatchObject({
+      state: "open",
+      reply_comment_id: "linear-comment-1",
+      created_at: "2026-01-01T00:03:00Z",
+      deadline_at: "2026-01-01T00:33:00Z",
+    });
     expect(after.promise(previous.id)).toMatchObject({ state: "superseded", superseded_by: pending.id });
     after.close();
   });

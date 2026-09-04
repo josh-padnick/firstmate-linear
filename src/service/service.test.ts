@@ -69,9 +69,9 @@ describe("service activation", () => {
     const job = db.enqueue({ key: "reply", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "Update", actor: "core" } }, "2026-01-01T12:00:00Z");
     const promise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "comment", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: job.id, created_at: "2026-01-01T12:00:00Z" });
     const result = await serviceCycle({ db, config, env, transport: new (await import("../transport.ts")).LinearTransport({ fixtureDir: fixtures }) });
-    expect(result.stalls).toBe(1);
-    expect(db.promise(promise.id)?.state).toBe("overdue");
-    expect(db.listEvents(["waiting-for-core"])).toHaveLength(1);
+    expect(result.stalls).toBe(0);
+    expect(db.promise(promise.id)).toMatchObject({ state: "open", deadline_at: "2026-01-01T13:01:00Z" });
+    expect(db.listEvents(["waiting-for-core"])).toHaveLength(0);
     db.close();
   });
 });

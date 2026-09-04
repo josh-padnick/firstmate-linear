@@ -447,11 +447,24 @@ export class StateDatabase {
     this.raw.query("UPDATE jobs SET state='done',native_id=COALESCE(?,native_id),done_at=?,last_error=NULL WHERE id=?")
       .run(nativeId, at, id);
     if (nativeId) {
-      const pending = this.raw.query("SELECT id,issue FROM promises WHERE reply_job_id=? AND state='pending'").get(id) as { id: string; issue: string } | null;
+      const pending = this.raw.query("SELECT id,issue,created_at,deadline_at FROM promises WHERE reply_job_id=? AND state='pending'").get(id) as {
+        id: string;
+        issue: string;
+        created_at: string;
+        deadline_at: string;
+      } | null;
       if (pending) {
+        const stagedAt = parseIso(pending.created_at);
+        const stagedDeadline = parseIso(pending.deadline_at);
+        const deliveredAt = parseIso(at);
+        if (stagedAt === null || stagedDeadline === null || deliveredAt === null || stagedDeadline <= stagedAt) {
+          throw new Error(`invalid staged promise window: ${pending.id}`);
+        }
+        const deliveredDeadline = formatIso(deliveredAt + stagedDeadline - stagedAt);
         this.raw.query("UPDATE promises SET state='superseded',superseded_by=? WHERE issue=? AND state IN ('open','overdue') AND id<>?")
           .run(pending.id, pending.issue, pending.id);
-        this.raw.query("UPDATE promises SET state='open',reply_comment_id=? WHERE id=? AND state='pending'").run(nativeId, pending.id);
+        this.raw.query("UPDATE promises SET state='open',reply_comment_id=?,created_at=?,deadline_at=? WHERE id=? AND state='pending'")
+          .run(nativeId, at, deliveredDeadline, pending.id);
       } else {
         this.raw.query("UPDATE promises SET reply_comment_id=? WHERE reply_job_id=?").run(nativeId, id);
       }

@@ -69,6 +69,7 @@ Captain-authored board transitions without a newer fleet signal are reported and
 
 Promises are staged with their reply jobs and become active only after Linear confirms the reply comment.
 A terminal reply failure marks its staged promise failed, while a confirmed newer reply supersedes the prior active promise.
+The promise window starts when Linear confirms the declaring reply, preserving the requested duration even after delivery retries.
 Promise reconciliation ignores earlier progress and the reply comment itself, and it requires a real transition for an expected board state.
 
 ## Failure behavior

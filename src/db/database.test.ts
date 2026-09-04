@@ -207,6 +207,23 @@ describe("state database", () => {
     db.close();
   });
 
+  test("promise activation starts its original duration at successful reply delivery", () => {
+    const db = database();
+    const job = db.enqueue({ key: "reply-delayed", kind: "linear.comment", target: "ABC-1", payload: {} }, "2026-01-01T12:00:00Z");
+    const promise = db.stagePromise({
+      issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green",
+      deadline_at: "2026-01-01T12:30:00Z", reply_job_id: job.id, created_at: "2026-01-01T12:00:00Z",
+    });
+    db.finishJob(job.id, "comment:delivered", "2026-01-01T12:20:00Z");
+    expect(db.promise(promise.id)).toMatchObject({
+      state: "open",
+      reply_comment_id: "comment:delivered",
+      created_at: "2026-01-01T12:20:00Z",
+      deadline_at: "2026-01-01T12:50:00Z",
+    });
+    db.close();
+  });
+
   test("report consumption follows insertion order when a late event has an old source timestamp", () => {
     const db = database();
     db.capture(event("event:first"));
