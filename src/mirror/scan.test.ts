@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
 import { parseStatusLine, scanFleet } from "./scan.ts";
@@ -54,6 +54,21 @@ describe("fleet scanner", () => {
     const observations = scanFleet(home, db).observations;
     expect(observations.filter((item) => item.verb === "model-resolved")).toHaveLength(1);
     expect(observations.filter((item) => item.source === "status")).toHaveLength(1);
+    db.close();
+  });
+
+  test("replacing a status file resets its cursor", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: old\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    scanFleet(home, db);
+    unlinkSync(path);
+    writeFileSync(path, "needs-decision: choose a direction\nworking: replacement is longer\n");
+
+    const observations = scanFleet(home, db).observations;
+    expect(observations).toContainEqual(expect.objectContaining({ verb: "needs-decision", note: "choose a direction" }));
     db.close();
   });
 });

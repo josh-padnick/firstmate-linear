@@ -85,12 +85,19 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
   return outcome();
 }
 
-async function createComment(job: Job, body: JobPayload, transport: LinearTransport): Promise<JobOutcome> {
+async function createComment(job: Job, body: JobPayload, transport: LinearTransport, db?: StateDatabase): Promise<JobOutcome> {
+  const stillWaiting = (): boolean => {
+    if (typeof body.waiting_event_id !== "string") return true;
+    if (!db) throw new Error("guarded comment requires the state database");
+    return db.event(body.waiting_event_id)?.disposition === "waiting-for-core";
+  };
+  if (!stillWaiting()) return {};
   const issue = requiredString(body.issue ?? job.target, "issue");
   const text = requiredString(body.body, "body");
   const id = nativeUuid(job.key);
   const resolved = value(await transport.call("job-resolve-comment-issue", { query: RESOLVE_ISSUE, variables: { issue } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
+  if (!stillWaiting()) return {};
   const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue: resolved.issue.id, body: text } });
   if (result.ok) {
     if (!(result.value.data as any)?.commentCreate?.success) throw new Error(`comment creation was not successful: ${issue}`);
@@ -221,7 +228,7 @@ export async function executeJob(job: Job, options: {
   const body = payload(job);
   switch (job.kind) {
     case "linear.issue-state": return updateIssueState(job, body, options.transport, options.config);
-    case "linear.comment": return createComment(job, body, options.transport);
+    case "linear.comment": return createComment(job, body, options.transport, options.db);
     case "linear.attachment": return createAttachment(job, body, options.transport);
     case "relay": return relay(job, body, options.env ?? process.env);
     case "core.ack": {

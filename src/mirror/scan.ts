@@ -26,12 +26,15 @@ export function parseStatusLine(line: string): { verb: string; key: string; note
   return { verb: match[1], key: match[2] ?? nested?.[1] ?? "default", note: nested?.[2] ?? note };
 }
 
-function readNewLines(db: StateDatabase, path: string): { rows: Array<{ line: string; offset: number }>; cursorName: string; cursorValue: string } | null {
+function readNewLines(db: StateDatabase, path: string, identity: string): { rows: Array<{ line: string; offset: number }>; cursorName: string; cursorValue: string } | null {
   const name = `status:${path}`;
   const raw = db.cursor(name);
   let offset = 0;
   if (raw) {
-    try { offset = Number((JSON.parse(raw) as { offset?: number }).offset ?? 0); } catch { offset = 0; }
+    try {
+      const cursor = JSON.parse(raw) as { offset?: number; identity?: string };
+      if (cursor.identity === identity) offset = Number(cursor.offset ?? 0);
+    } catch { offset = 0; }
   }
   const content = readFileSync(path);
   if (offset < 0 || offset > content.length) offset = 0;
@@ -45,7 +48,7 @@ function readNewLines(db: StateDatabase, path: string): { rows: Array<{ line: st
     rows.push({ line, offset: offset + consumed });
     consumed += Buffer.byteLength(line) + 1;
   }
-  return { rows, cursorName: name, cursorValue: JSON.stringify({ offset: offset + lastNewline + 1 }) };
+  return { rows, cursorName: name, cursorValue: JSON.stringify({ offset: offset + lastNewline + 1, identity }) };
 }
 
 function importLegacyLinks(home: string, db: StateDatabase): void {
@@ -76,8 +79,8 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
       db.linkTask({ ...link, worktree: meta.worktree || link.worktree, harness: meta.harness || link.harness });
       const model = meta.delegate === "devin" ? "devin" : meta.model || "unknown";
       const observation: Observation = {
-        id: `obs:${sha256(`${task}:${link.issue}:${link.spawned_at}:${meta.spawn_gen ?? "spawn"}:model:${model}`)}`,
-        source: "summary", task, task_spawned_at: link.spawned_at, issue: link.issue, verb: "model-resolved", key: "model",
+        id: `obs:${sha256(`${task}:${link.issue}:${link.lifecycle_id}:${meta.spawn_gen ?? "spawn"}:model:${model}`)}`,
+        source: "summary", task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "model-resolved", key: "model",
         note: `model=${model}`, observed_at: nowIso(env),
       };
       if (db.observe(observation)) observations.push(observation);
@@ -89,7 +92,8 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
     if (!links.length) continue;
     const path = join(state, name);
     const stat = statSync(path);
-    const batch = readNewLines(db, path);
+    const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}:${links.map((link) => link.lifecycle_id).sort().join(",")}`;
+    const batch = readNewLines(db, path, identity);
     if (!batch) continue;
     const inserted: Observation[] = [];
     db.transaction(() => {
@@ -98,8 +102,8 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
         if (!parsed) continue;
         for (const link of links) {
           const observation: Observation = {
-            id: `obs:${sha256(`${path}:${link.issue}:${link.spawned_at}:${stat.ino}:${row.offset}:${row.line}`)}`,
-            source: "status", task, task_spawned_at: link.spawned_at, issue: link.issue, verb: parsed.verb,
+            id: `obs:${sha256(`${path}:${link.issue}:${link.lifecycle_id}:${stat.ino}:${row.offset}:${row.line}`)}`,
+            source: "status", task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: parsed.verb,
             key: parsed.key, note: parsed.note, observed_at: nowIso(env),
           };
           if (db.observe(observation)) inserted.push(observation);
@@ -116,7 +120,7 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
       for (const child of summary.active_children ?? []) {
         if (!child.id || !child.state) continue;
         for (const link of db.taskLinks(undefined, true).filter((item) => item.task === child.id)) {
-          const observation: Observation = { id: `obs:${sha256(`${summary.generated}:${child.id}:${link.issue}:${link.spawned_at}:${child.state}`)}`, source: "summary", task: child.id, task_spawned_at: link.spawned_at, issue: link.issue, verb: child.state, key: "summary", note: null, observed_at: summary.generated ?? nowIso(env) };
+          const observation: Observation = { id: `obs:${sha256(`${summary.generated}:${child.id}:${link.issue}:${link.lifecycle_id}:${child.state}`)}`, source: "summary", task: child.id, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: child.state, key: "summary", note: null, observed_at: summary.generated ?? nowIso(env) };
           if (db.observe(observation)) observations.push(observation);
         }
       }

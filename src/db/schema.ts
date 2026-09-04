@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -74,14 +74,14 @@ CREATE TABLE IF NOT EXISTS issue_snapshots (
 CREATE INDEX IF NOT EXISTS issue_snapshots_latest_idx ON issue_snapshots(issue, observed_at DESC);
 
 CREATE TABLE IF NOT EXISTS task_links (
+  lifecycle_id TEXT PRIMARY KEY,
   task TEXT NOT NULL,
   issue TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('primary', 'support')),
   worktree TEXT,
   harness TEXT,
   spawned_at TEXT NOT NULL,
-  torn_down_at TEXT,
-  PRIMARY KEY (task, issue, spawned_at)
+  torn_down_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS task_links_issue_idx ON task_links(issue, role, torn_down_at);
@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS observations (
   source TEXT NOT NULL CHECK (source IN ('status', 'summary', 'pr')),
   task TEXT,
   task_spawned_at TEXT,
+  task_lifecycle_id TEXT,
   issue TEXT NOT NULL,
   verb TEXT NOT NULL,
   key TEXT NOT NULL,
@@ -179,4 +180,30 @@ CREATE INDEX task_links_issue_idx ON task_links(issue, role, torn_down_at);
 
 export const MIGRATE_TO_V6_SQL = `
 ALTER TABLE observations ADD COLUMN task_spawned_at TEXT;
+`;
+
+export const MIGRATE_TO_V7_SQL = `
+ALTER TABLE task_links RENAME TO task_links_v6;
+DROP INDEX task_links_issue_idx;
+CREATE TABLE task_links (
+  lifecycle_id TEXT PRIMARY KEY,
+  task TEXT NOT NULL,
+  issue TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('primary', 'support')),
+  worktree TEXT,
+  harness TEXT,
+  spawned_at TEXT NOT NULL,
+  torn_down_at TEXT
+);
+INSERT INTO task_links(lifecycle_id,task,issue,role,worktree,harness,spawned_at,torn_down_at)
+SELECT 'link:' || lower(hex(randomblob(16))),task,issue,role,worktree,harness,spawned_at,torn_down_at FROM task_links_v6;
+DROP TABLE task_links_v6;
+CREATE INDEX task_links_issue_idx ON task_links(issue, role, torn_down_at);
+ALTER TABLE observations ADD COLUMN task_lifecycle_id TEXT;
+UPDATE observations SET task_lifecycle_id=(
+  SELECT lifecycle_id FROM task_links
+  WHERE task_links.task=observations.task
+    AND task_links.issue=observations.issue
+    AND task_links.spawned_at=observations.task_spawned_at
+) WHERE task_spawned_at IS NOT NULL;
 `;

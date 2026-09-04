@@ -121,9 +121,9 @@ export async function serviceCycle(options: {
       key: finding.code, note: finding.detail, observed_at: nowIso(env),
     });
   }
-  const before = await processJobs({ db: options.db, config: options.config, env, transport });
   const stalls = reconcileStalls(resolveHome(env), options.db, options.config, env);
   const escalations = applyEscalations(options.db, options.config, env);
+  const before = await processJobs({ db: options.db, config: options.config, env, transport });
   const after = await processJobs({ db: options.db, config: options.config, env, transport });
   return {
     captured: capture.captured,

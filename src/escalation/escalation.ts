@@ -1,6 +1,6 @@
 import type { WorkflowConfig } from "../config/schema.ts";
 import type { NewJob, StateDatabase } from "../db/database.ts";
-import { nowEpoch, parseIso } from "../time.ts";
+import { nowEpoch, nowIso, parseIso } from "../time.ts";
 
 const TOKEN_DEADLINES: Record<string, number> = {
   "start-now": 5 * 60,
@@ -47,7 +47,7 @@ export function planEscalations(db: StateDatabase, config: WorkflowConfig, env: 
       eventId: event.id, issue: event.issue, ageSeconds: age,
       job: {
         key, kind: "linear.comment", target: event.issue,
-        payload: { issue: event.issue, body },
+        payload: { issue: event.issue, body, waiting_event_id: event.id },
       },
     });
   }
@@ -58,7 +58,7 @@ export function applyEscalations(db: StateDatabase, config: WorkflowConfig, env:
   const plan = planEscalations(db, config, env);
   if (config.features.escalation !== "on") return 0;
   return db.transaction(() => {
-    for (const item of plan) db.enqueue(item.job);
+    for (const item of plan) db.enqueue(item.job, nowIso(env));
     return plan.length;
   });
 }

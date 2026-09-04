@@ -157,39 +157,42 @@ function emitStall(db: StateDatabase, options: {
   progress: Progress | null;
   at: string;
 }): { id: string; captured: boolean } {
-  const id = `linear:${sha256(`stalled:${options.issue}:${options.reasonKey}`)}`;
-  const prior = openStall(db, options.issue);
-  if (prior) {
-    let priorReason = "";
-    try { priorReason = (JSON.parse(prior.raw_ref) as { reason_key?: string }).reason_key ?? ""; } catch { /* different reason */ }
-    if (priorReason === options.reasonKey) return { id, captured: false };
-    db.setDisposition(prior.id, "ignored", "superseded by a changed stall reason", options.at);
-  }
-  const note = `${options.note} - run fm-linear inbox show ${id}`;
-  const captured = db.capture({
-    id,
-    team: options.team,
-    issue: options.issue,
-    type: "stalled",
-    token: "stalled",
-    author: "fm-linear",
-    body_sha: null,
-    created_at: options.at,
-    captured_at: options.at,
-    disposition: "waiting-for-core",
-    note,
-    raw_ref: JSON.stringify({
-      kind: options.kind,
-      reason_key: options.reasonKey,
-      escalation_key: `stall:${sha256(`${options.issue}:${options.seriesKey}`)}`,
-      stalled_at: options.stalledAt,
-      expected: options.expected ?? null,
-      deadline_at: options.deadlineAt ?? null,
-      last_progress: options.progress,
-      required: options.required,
-    }),
+  return db.transaction(() => {
+    const id = `linear:${sha256(`stalled:${options.issue}:${options.reasonKey}`)}`;
+    const prior = openStall(db, options.issue);
+    if (prior) {
+      let priorReason = "";
+      try { priorReason = (JSON.parse(prior.raw_ref) as { reason_key?: string }).reason_key ?? ""; } catch { /* different reason */ }
+      if (priorReason === options.reasonKey) return { id, captured: false };
+      db.setDisposition(prior.id, "ignored", "superseded by a changed stall reason", options.at);
+    }
+    const note = `${options.note} - run fm-linear inbox show ${id}`;
+    const captured = db.capture({
+      id,
+      team: options.team,
+      issue: options.issue,
+      type: "stalled",
+      token: "stalled",
+      author: "fm-linear",
+      body_sha: null,
+      created_at: options.at,
+      captured_at: options.at,
+      disposition: "waiting-for-core",
+      note,
+      raw_ref: JSON.stringify({
+        kind: options.kind,
+        reason_key: options.reasonKey,
+        escalation_key: `stall:${sha256(`${options.issue}:${options.seriesKey}`)}`,
+        stalled_at: options.stalledAt,
+        expected: options.expected ?? null,
+        deadline_at: options.deadlineAt ?? null,
+        last_progress: options.progress,
+        required: options.required,
+      }),
+    });
+    if (prior && prior.id !== id) db.rebindWaitingEventJobs(prior.id, id);
+    return { id, captured };
   });
-  return { id, captured };
 }
 
 export function reconcileStalls(home: string, db: StateDatabase, config: WorkflowConfig, env: NodeJS.ProcessEnv = process.env): StallResult {

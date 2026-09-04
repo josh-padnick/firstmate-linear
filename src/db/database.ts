@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
 export type EventDisposition =
   | "captured"
@@ -94,6 +94,7 @@ export type IssueSnapshot = {
 };
 
 export type TaskLink = {
+  lifecycle_id: string;
   task: string;
   issue: string;
   role: "primary" | "support";
@@ -103,11 +104,14 @@ export type TaskLink = {
   torn_down_at: string | null;
 };
 
+export type NewTaskLink = Omit<TaskLink, "lifecycle_id"> & { lifecycle_id?: string };
+
 export type Observation = {
   id: string;
   source: "status" | "summary" | "pr";
   task: string | null;
   task_spawned_at?: string | null;
+  task_lifecycle_id?: string | null;
   issue: string;
   verb: string;
   key: string;
@@ -117,6 +121,7 @@ export type Observation = {
 
 export function observationBelongsToTaskLink(observation: Observation, link: TaskLink): boolean {
   if (observation.issue !== link.issue || observation.task !== link.task) return false;
+  if (observation.task_lifecycle_id && observation.task_lifecycle_id !== link.lifecycle_id) return false;
   if (observation.task_spawned_at && observation.task_spawned_at !== link.spawned_at) return false;
   const afterSpawn = compareIso(observation.observed_at, link.spawned_at);
   if (afterSpawn === null || afterSpawn < 0) return false;
@@ -172,8 +177,9 @@ export class StateDatabase {
         db.exec(SCHEMA_SQL);
         if (from === 1) db.exec(MIGRATE_TO_V2_SQL);
         if (from === 3) db.exec(MIGRATE_TO_V4_SQL);
-        if (from > 0 && from < 5) db.exec(MIGRATE_TO_V5_SQL);
+        if (from > 0 && from < 5 && !tableHasColumn(db, "task_links", "lifecycle_id")) db.exec(MIGRATE_TO_V5_SQL);
         if (from > 0 && from < 6 && !tableHasColumn(db, "observations", "task_spawned_at")) db.exec(MIGRATE_TO_V6_SQL);
+        if (from > 0 && from < 7 && !tableHasColumn(db, "task_links", "lifecycle_id")) db.exec(MIGRATE_TO_V7_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -468,6 +474,16 @@ export class StateDatabase {
     return this.raw.query("SELECT * FROM jobs WHERE key=?").get(job.key) as Job;
   }
 
+  rebindWaitingEventJobs(fromEventId: string, toEventId: string): void {
+    const rows = this.raw.query("SELECT id,payload FROM jobs WHERE state IN ('pending','retry','running')").all() as Array<{ id: string; payload: string }>;
+    for (const row of rows) {
+      let payload: Record<string, unknown>;
+      try { payload = JSON.parse(row.payload) as Record<string, unknown>; } catch { continue; }
+      if (payload.waiting_event_id !== fromEventId) continue;
+      this.raw.query("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify({ ...payload, waiting_event_id: toEventId }), row.id);
+    }
+  }
+
   claimDueJobs(limit = 20, at = nowIso()): Job[] {
     const epoch = parseIso(at);
     if (epoch === null) throw new Error(`invalid job claim time: ${at}`);
@@ -556,17 +572,17 @@ export class StateDatabase {
     return rows.map((row) => ({ ...row, labels: JSON.parse(row.labels) as string[] }));
   }
 
-  linkTask(value: TaskLink): void {
+  linkTask(value: NewTaskLink): void {
     this.transaction(() => {
       if (!value.torn_down_at) {
         const active = this.raw.query(`SELECT * FROM task_links WHERE task=? AND issue=? AND torn_down_at IS NULL
           ORDER BY spawned_at LIMIT 1`).get(value.task, value.issue) as TaskLink | null;
         if (active) {
           if (active.role === value.role) {
-            this.raw.query("UPDATE task_links SET worktree=?,harness=? WHERE task=? AND issue=? AND spawned_at=?")
-              .run(value.worktree, value.harness, active.task, active.issue, active.spawned_at);
-            this.raw.query("DELETE FROM task_links WHERE task=? AND issue=? AND torn_down_at IS NULL AND spawned_at<>?")
-              .run(active.task, active.issue, active.spawned_at);
+            this.raw.query("UPDATE task_links SET worktree=?,harness=? WHERE lifecycle_id=?")
+              .run(value.worktree, value.harness, active.lifecycle_id);
+            this.raw.query("DELETE FROM task_links WHERE task=? AND issue=? AND torn_down_at IS NULL AND lifecycle_id<>?")
+              .run(active.task, active.issue, active.lifecycle_id);
             return;
           }
           if (compareIso(value.spawned_at, active.spawned_at) !== 1) {
@@ -576,11 +592,11 @@ export class StateDatabase {
             .run(value.spawned_at, value.task, value.issue);
         }
       }
-      this.raw.query(`INSERT INTO task_links(task,issue,role,worktree,harness,spawned_at,torn_down_at)
-        VALUES(?,?,?,?,?,?,?) ON CONFLICT(task,issue,spawned_at) DO UPDATE SET
-        role=excluded.role,worktree=excluded.worktree,harness=excluded.harness,
-        torn_down_at=excluded.torn_down_at`).run(
-          value.task, value.issue, value.role, value.worktree, value.harness,
+      this.raw.query(`INSERT INTO task_links(lifecycle_id,task,issue,role,worktree,harness,spawned_at,torn_down_at)
+        VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(lifecycle_id) DO UPDATE SET
+        task=excluded.task,issue=excluded.issue,role=excluded.role,worktree=excluded.worktree,
+        harness=excluded.harness,spawned_at=excluded.spawned_at,torn_down_at=excluded.torn_down_at`).run(
+          value.lifecycle_id ?? `link:${uuid()}`, value.task, value.issue, value.role, value.worktree, value.harness,
           value.spawned_at, value.torn_down_at,
         );
     });
@@ -599,19 +615,21 @@ export class StateDatabase {
     }
     if (activeOnly) clauses.push("torn_down_at IS NULL");
     const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
-    return this.raw.query(`SELECT * FROM task_links${where} ORDER BY spawned_at,task`).all(...args) as TaskLink[];
+    return this.raw.query(`SELECT * FROM task_links${where} ORDER BY spawned_at,lifecycle_id,task`).all(...args) as TaskLink[];
   }
 
   observe(value: Observation): boolean {
-    const taskSpawnedAt = value.task_spawned_at ?? (value.task
-      ? (this.raw.query(`SELECT spawned_at FROM task_links
+    const activeLink = value.task && (!value.task_spawned_at || !value.task_lifecycle_id)
+      ? this.raw.query(`SELECT spawned_at,lifecycle_id FROM task_links
           WHERE task=? AND issue=? AND torn_down_at IS NULL ORDER BY spawned_at DESC LIMIT 1`)
-        .get(value.task, value.issue) as { spawned_at: string } | null)?.spawned_at ?? null
-      : null);
+        .get(value.task, value.issue) as { spawned_at: string; lifecycle_id: string } | null
+      : null;
+    const taskSpawnedAt = value.task_spawned_at ?? activeLink?.spawned_at ?? null;
+    const taskLifecycleId = value.task_lifecycle_id ?? activeLink?.lifecycle_id ?? null;
     const result = this.raw.query(`INSERT OR IGNORE INTO observations(
-      id,source,task,task_spawned_at,issue,verb,key,note,observed_at
-    ) VALUES(?,?,?,?,?,?,?,?,?)`).run(
-      value.id, value.source, value.task, taskSpawnedAt, value.issue, value.verb,
+      id,source,task,task_spawned_at,task_lifecycle_id,issue,verb,key,note,observed_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?)`).run(
+      value.id, value.source, value.task, taskSpawnedAt, taskLifecycleId, value.issue, value.verb,
       value.key, value.note, value.observed_at,
     );
     return result.changes === 1;

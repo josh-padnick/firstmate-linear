@@ -70,6 +70,20 @@ describe("state database", () => {
     db.close();
   });
 
+  test("closing and relinking within one second creates a distinct lifecycle", () => {
+    const db = database();
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.observe({ id: "old", source: "status", task: "worker", issue: "ABC-1", verb: "done", key: "default", note: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.closeTask("worker", "2026-01-01T00:00:00Z");
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+
+    const links = db.taskLinks("ABC-1");
+    expect(links).toHaveLength(2);
+    expect(new Set(links.map((link) => link.lifecycle_id)).size).toBe(2);
+    expect(links.filter((link) => link.torn_down_at === null)).toHaveLength(1);
+    db.close();
+  });
+
   test("capture and its deterministic jobs commit together", () => {
     const db = database();
     expect(db.capture(event("event:1"), [{ key: "event:1:relay", kind: "relay", target: "ABC-1", payload: { event: "event:1" } }])).toBe(true);
@@ -245,6 +259,31 @@ describe("state database", () => {
     migrated.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
     migrated.observe({ id: "observed", source: "status", task: "worker", issue: "ABC-1", verb: "working", key: "default", note: null, observed_at: "2026-01-01T00:01:00Z" });
     expect(migrated.observations("ABC-1")[0]?.task_spawned_at).toBe("2026-01-01T00:00:00Z");
+    migrated.close();
+  });
+
+  test("v6 migration assigns durable lifecycle identities", () => {
+    const root = mkdtempSync(join(tmpdir(), "fm-linear-db-")); roots.push(root);
+    const path = join(root, "state.db");
+    const legacy = new Database(path, { create: true });
+    legacy.exec(`CREATE TABLE task_links (
+      task TEXT NOT NULL, issue TEXT NOT NULL, role TEXT NOT NULL, worktree TEXT, harness TEXT,
+      spawned_at TEXT NOT NULL, torn_down_at TEXT, PRIMARY KEY (task, issue, spawned_at)
+    );
+    CREATE INDEX task_links_issue_idx ON task_links(issue, role, torn_down_at);
+    CREATE TABLE observations (
+      id TEXT PRIMARY KEY, source TEXT NOT NULL, task TEXT, task_spawned_at TEXT,
+      issue TEXT NOT NULL, verb TEXT NOT NULL, key TEXT NOT NULL, note TEXT, observed_at TEXT NOT NULL
+    );
+    INSERT INTO task_links VALUES ('worker','ABC-1','primary',NULL,NULL,'2026-01-01T00:00:00Z',NULL);
+    INSERT INTO observations VALUES ('observed','status','worker','2026-01-01T00:00:00Z','ABC-1','working','default',NULL,'2026-01-01T00:01:00Z');
+    PRAGMA user_version = 6;`);
+    legacy.close();
+
+    const migrated = new StateDatabase(path, join(root, "backups"));
+    const link = migrated.taskLinks("ABC-1")[0]!;
+    expect(link.lifecycle_id).toStartWith("link:");
+    expect(migrated.observations("ABC-1")[0]?.task_lifecycle_id).toBe(link.lifecycle_id);
     migrated.close();
   });
 

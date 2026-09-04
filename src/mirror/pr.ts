@@ -79,25 +79,25 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
     try {
       const snapshot = inspect(url);
       const base = expectedBase(link, values);
-      const lifecycle = `${link.task}:${link.issue}:${link.spawned_at}`;
+      const lifecycle = `${link.task}:${link.issue}:${link.lifecycle_id}`;
       record(db, {
         id: `obs:${sha256(`${lifecycle}:${url}:reported`)}`, source: "pr", task: link.task,
-        task_spawned_at: link.spawned_at, issue: link.issue, verb: "pr-reported", key: "pr", note: url, observed_at: nowIso(env),
+        task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-reported", key: "pr", note: url, observed_at: nowIso(env),
       }, observations);
       if (snapshot.state === "MERGED" && base && snapshot.baseRefName === base) {
         record(db, {
           id: `obs:${sha256(`${lifecycle}:${url}:${snapshot.headRefOid}:merged:${snapshot.baseRefName}`)}`, source: "pr", task: link.task,
-          task_spawned_at: link.spawned_at, issue: link.issue, verb: "pr-merged", key: "pr", note: url, observed_at: nowIso(env),
+          task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-merged", key: "pr", note: url, observed_at: nowIso(env),
         }, observations);
         continue;
       }
       if (snapshot.state === "MERGED" && !base) {
-        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base unverified`, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-unverified`, observations);
+        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base unverified`, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-unverified`, observations);
         findings.push({ code: "PR_BASE_UNKNOWN", issue: link.issue, detail: `cannot verify expected base for ${url}` });
         continue;
       }
       if (snapshot.state === "MERGED" && snapshot.baseRefName !== base) {
-        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base=${snapshot.baseRefName} expected=${base}`, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-mismatch:${snapshot.baseRefName}`, observations);
+        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base=${snapshot.baseRefName} expected=${base}`, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-mismatch:${snapshot.baseRefName}`, observations);
         findings.push({ code: "PR_BASE_MISMATCH", issue: link.issue, detail: `${url} merged into ${snapshot.baseRefName}, expected ${base}` });
         continue;
       }
@@ -106,7 +106,7 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
         && snapshot.requiredChecks.every((check) => ["pass", "success", "skipping"].includes(check.state.toLowerCase()));
       recordPrState(db, {
         id: "", source: "pr", task: link.task,
-        task_spawned_at: link.spawned_at, issue: link.issue, verb: green ? "pr-green" : "pr-withdrawn", key: "pr",
+        task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: green ? "pr-green" : "pr-withdrawn", key: "pr",
         note: green ? `${url} head=${snapshot.headRefOid}` : `${url} current=${snapshot.headRefOid} expected=${expectedHead ?? "missing"}`,
         observed_at: nowIso(env),
       }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:${green ? "green" : "not-green"}`, observations);
