@@ -67,6 +67,10 @@ A merge becomes done only when the target matches the expected base from task me
 Every mutation is conditional on the last observed issue state and carries a causal event or observation in its deterministic key.
 Captain-authored board transitions without a newer fleet signal are reported and never repaired.
 
+Promises are staged with their reply jobs and become active only after Linear confirms the reply comment.
+A terminal reply failure marks its staged promise failed, while a confirmed newer reply supersedes the prior active promise.
+Promise reconciliation ignores earlier progress and the reply comment itself, and it requires a real transition for an expected board state.
+
 ## Failure behavior
 
 Capture, classification, and initial jobs share a transaction.
@@ -75,6 +79,7 @@ Periodic full snapshots retain the incremental event overlap bound, so resyncs d
 Native Linear comment IDs let the worker verify an ambiguous success without posting twice.
 
 Jobs retry with exponential backoff, deterministic jitter, server `Retry-After`, and a bounded dead-letter transition.
+Claimed jobs carry a five-minute lease, so a service restart can recover work left in the running state without duplicating a confirmed side effect.
 Escalation rungs have deterministic keys, so repeated cycles cannot flood a thread.
 
 On a service gap longer than two poll intervals, the first cycle performs normal capture and reconciliation and records a `resumed` event for Firstmate.

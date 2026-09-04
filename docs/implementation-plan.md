@@ -20,7 +20,7 @@ Retry all side effects through the outbox and escalate overdue events at capped 
 
 ## Phase 3: mirror and review
 
-Tail fleet records, fold keyed task signals, inspect SHA-bound pull-request checks, mirror conditional state and model labels, preserve captain drags, report missing links, validate review walkthroughs, and enforce 15-minute and 45-minute handoff deadlines.
+Tail fleet records, fold keyed task signals, inspect SHA-bound pull-request checks, mirror conditional state and model labels, preserve captain drags, report missing links, validate review walkthroughs, and enforce configured progress and promise deadlines.
 
 ## Phase 4: public and multi-team
 

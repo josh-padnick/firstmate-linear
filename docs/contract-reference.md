@@ -26,6 +26,7 @@ A completed walkthrough must retain those sections and contain no unresolved tem
 
 `deadlines.progress` maps Firstmate-owned Linear status names to service-side inactivity durations.
 The default deadlines are 30 minutes for `Plan In Progress`, 45 minutes for `Building`, 60 minutes for `Validating Code`, 4 hours for `Waiting`, and 15 minutes for `Needs Firstmate Decision`.
+Each default also follows the corresponding status when a team renames it, and an explicit status-name entry overrides that default.
 `deadlines.stalled.mention` controls the one-time in-thread captain mention for an unhandled stalled event and defaults to 30 minutes.
 
 `promises.required_on_firstmate_owned` defaults to `true`.
