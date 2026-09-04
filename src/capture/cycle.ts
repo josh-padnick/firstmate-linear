@@ -3,6 +3,7 @@ import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase, type IssueSnapshot } from "../db/database.ts";
 import { loadKey, resolveHome } from "../env.ts";
 import { sha256 } from "../hash.ts";
+import { identityMatches } from "../identity.ts";
 import { isManagedIssue } from "../managed.ts";
 import { compareIso, formatIso, nowEpoch, nowIso, overlapTimestamp, parseIso } from "../time.ts";
 import { LinearTransport } from "../transport.ts";
@@ -77,7 +78,7 @@ function teamFromIssue(issue: string): string {
   return issue.includes("-") ? issue.slice(0, issue.indexOf("-")).toUpperCase() : "";
 }
 
-function snapshot(issue: LinearIssue, agentLabels: Record<string, string>, observedAt: string, isManaged: boolean): IssueSnapshot {
+function snapshot(issue: LinearIssue, agentLabels: Record<string, string>, observedAt: string, isManaged: boolean, captain: string): IssueSnapshot {
   const labels = (issue.labels?.nodes ?? []).map((item) => item.name ?? "").filter(Boolean);
   const knownLabels = new Set(Object.values(agentLabels));
   const history = [...(issue.history?.nodes ?? [])].sort((a, b) => -(compareIso(a.createdAt, b.createdAt) ?? 0) || b.id.localeCompare(a.id));
@@ -87,7 +88,7 @@ function snapshot(issue: LinearIssue, agentLabels: Record<string, string>, obser
     assignee: issue.assignee?.displayName ?? null,
     labels,
     agent_label: labels.find((label) => knownLabels.has(label)) ?? null,
-    last_actor: history[0]?.actor?.displayName ?? null,
+    last_actor: identityMatches(history[0]?.actor?.displayName, captain) ? captain : history[0]?.actor?.displayName ?? null,
     last_signal: null,
     managed: isManaged,
     observed_at: observedAt,
@@ -165,7 +166,7 @@ export async function captureCycle(options: {
     for (const issue of result.issues) {
       const isManaged = managedIds.has(issue.identifier);
       if (isManaged || options.db.latestSnapshot(issue.identifier)) {
-        options.db.snapshot(snapshot(issue, team.agent_labels, observedAt, isManaged));
+        options.db.snapshot(snapshot(issue, team.agent_labels, observedAt, isManaged, options.config.captain.display_name));
       }
     }
     allEvents.push(...deriveHistory(managedHistory, seen, observedAt, eventCutoff, self, bootstrapCutoff !== null));
@@ -189,6 +190,7 @@ export async function captureCycle(options: {
   allEvents.sort((a, b) => (compareIso(a.created_at, b.created_at) ?? 0) || a.dedupe_key.localeCompare(b.dedupe_key));
   for (const legacy of allEvents) {
     const event = toClassifiable(legacy);
+    if (identityMatches(event.author, options.config.captain.display_name)) event.author = options.config.captain.display_name;
     const currentSnapshot = options.db.latestSnapshot(event.issue);
     const revision = snapshotAtRevision(
       currentSnapshot,

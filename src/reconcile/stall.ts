@@ -126,7 +126,11 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
   }
   if (expected.startsWith("board:")) {
     const state = expected.slice("board:".length);
-    const transition = observations.find((item) => item.source === "linear" && item.verb === "board-transition" && item.key === state);
+    const unambiguousAfter = boundary?.unambiguous_after;
+    const transition = observations.find((item) => item.source === "linear"
+      && item.verb === "board-transition"
+      && item.key === state
+      && (!unambiguousAfter || atOrAfter(item.observed_at, unambiguousAfter)));
     return transition ? { id: transition.id, kind: "board", at: transition.observed_at, detail: `board ${state}` } : null;
   }
   if (["pr-reported", "pr-green", "pr-merged"].includes(expected)) {

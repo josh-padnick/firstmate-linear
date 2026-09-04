@@ -70,6 +70,9 @@ export type PromiseSourceWatermarks = Record<string, {
   pr?: { reported: string | null; state: string | null; stateKnown: boolean };
   observation_rowid?: number;
   primary_lifecycle_ids?: string[];
+  request_observation_rowid?: number;
+  request_primary_lifecycle_ids?: string[];
+  unambiguous_after?: string;
 }>;
 
 export type PromiseRecord = {
@@ -578,6 +581,12 @@ export class StateDatabase {
 
   setPendingPromiseSourceWatermarks(id: string, sourceWatermarks: PromiseSourceWatermarks): boolean {
     const result = this.raw.query("UPDATE promises SET source_watermarks=? WHERE id=? AND state='pending' AND source_watermarks IS NULL")
+      .run(JSON.stringify(sourceWatermarks), id);
+    return result.changes === 1;
+  }
+
+  replacePendingPromiseSourceWatermarks(id: string, sourceWatermarks: PromiseSourceWatermarks): boolean {
+    const result = this.raw.query("UPDATE promises SET source_watermarks=? WHERE id=? AND state='pending'")
       .run(JSON.stringify(sourceWatermarks), id);
     return result.changes === 1;
   }

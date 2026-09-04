@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runTask } from "../commands/task.ts";
@@ -137,6 +138,43 @@ describe("PR signals", () => {
     expect(states).toHaveLength(1);
     expect(states[0]).toEqual(expect.objectContaining({ verb: "pr-green", note: `${url} head=head2` }));
     expect(db.taskLinks("ABC-1")[0]?.meta_generation).toBe("gen:g2");
+    db.close();
+  });
+
+  test("a task boundary retries when active worktree base changes", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    const firstWorktree = join(home, "first");
+    const secondWorktree = join(home, "second");
+    const worktrees: Array<[string, string]> = [[firstWorktree, "main"], [secondWorktree, "release"]];
+    for (const [worktree, branch] of worktrees) {
+      expect(spawnSync("git", ["init", "-q", worktree]).status).toBe(0);
+      expect(spawnSync("git", ["-C", worktree, "symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/${branch}`]).status).toBe(0);
+    }
+    const url = "https://github.com/acme/repo/pull/1";
+    writeFileSync(join(home, "state", "task.meta"), `spawn_gen=g1\npr=${url}\npr_head=head1\n`);
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1", "--role", "support", "--worktree", firstWorktree], env)).toBe(0);
+    let inspections = 0;
+    let changed = false;
+
+    expect(runTask(["link", "task", "ABC-1", "--role", "primary", "--worktree", secondWorktree, "--spawned-at", "2026-01-01T00:01:00Z"], env, {
+      inspectPr: () => {
+        inspections += 1;
+        return { state: "MERGED", headRefOid: "head1", baseRefName: inspections === 1 ? "main" : "release", requiredChecks: [] };
+      },
+      beforeBoundaryCommit: () => {
+        if (changed) return;
+        changed = true;
+        const concurrent = StateDatabase.open(env);
+        concurrent.linkTask({ task: "task", issue: "ABC-1", role: "support", worktree: secondWorktree, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+        concurrent.close();
+      },
+    })).toBe(0);
+
+    const db = StateDatabase.open(env);
+    expect(inspections).toBe(2);
+    expect(db.observations("ABC-1").filter((item) => item.verb === "pr-merged")).toHaveLength(1);
+    expect(db.taskLinks("ABC-1", true)[0]?.worktree).toBe(secondWorktree);
     db.close();
   });
 

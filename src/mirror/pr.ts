@@ -140,6 +140,19 @@ function sameMetadata(left: PrMetadata, right: PrMetadata): boolean {
     && left.blocked === right.blocked;
 }
 
+function prLinkIdentity(link: TaskLink): string {
+  return JSON.stringify({
+    lifecycleId: link.lifecycle_id,
+    task: link.task,
+    issue: link.issue,
+    role: link.role,
+    worktree: link.worktree,
+    harness: link.harness,
+    spawnedAt: link.spawned_at,
+    blockedMetaGeneration: link.blocked_meta_generation,
+  });
+}
+
 function recordPreparedLinks(db: StateDatabase, prepared: PreparedPrLink[], observedAt: string): PrScanResult {
   const observations: Observation[] = [];
   const findings: Array<{ code: string; issue: string; detail: string }> = [];
@@ -202,15 +215,15 @@ function prepareLinks(home: string, db: StateDatabase, links: TaskLink[], inspec
     item.snapshot = snapshots.get(key) ?? null;
   }
   const observedAt = nowIso(env);
-  const linkIds = links.map((link) => link.lifecycle_id).sort().join("\0");
+  const linkState = links.map(prLinkIdentity).sort().join("\0");
   const sourcesValid = () => prepared.every((item) => sameMetadata(item.metadata, prMetadata(home, item.link)));
   return {
     observedAt,
     findings,
     sourcesValid,
     valid: () => {
-      const currentIds = db.taskLinks(undefined, true).filter((link) => links.some((item) => item.task === link.task)).map((link) => link.lifecycle_id).sort().join("\0");
-      return currentIds === linkIds && sourcesValid();
+      const currentState = db.taskLinks(undefined, true).filter((link) => links.some((item) => item.task === link.task)).map(prLinkIdentity).sort().join("\0");
+      return currentState === linkState && sourcesValid();
     },
     record: (at = observedAt) => findings.length ? { observations: [], findings } : recordPreparedLinks(db, prepared, at),
   };

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
-import { LinearTransport } from "../transport.ts";
+import { LinearTransport, redactFixture } from "../transport.ts";
 import { planMirror } from "../mirror/plan.ts";
 import { captureCycle } from "./cycle.ts";
 
@@ -29,6 +29,37 @@ const config: WorkflowConfig = {
 };
 
 describe("SQLite capture cycle", () => {
+  test("redacted recordings retain production approval classification", async () => {
+    const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const comments = { data: {
+      viewer: { displayName: "Firstmate" },
+      comments: { pageInfo: { hasNextPage: false }, nodes: [{
+        id: "comment-1", createdAt: "2026-01-01T00:01:00Z", updatedAt: "2026-01-01T00:01:00Z",
+        body: "approved", user: { displayName: "Captain" },
+        issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: { name: "Runtime" } }, parent: null,
+      }] },
+    } };
+    const issues = { data: { issues: { pageInfo: { hasNextPage: false }, nodes: [{
+      identifier: "ABC-1", title: "Ship", description: "", createdAt: "2025-12-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:01:00Z", state: { name: "Approve Deliverable" },
+      assignee: { displayName: "Firstmate" }, project: { name: "Runtime" }, creator: { displayName: "Captain" }, labels: { nodes: [{ name: "Agent: Codex" }] },
+      history: { pageInfo: { hasNextPage: false }, nodes: [] },
+    }] } } };
+    await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify(redactFixture(comments)));
+    await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify(redactFixture(issues)));
+    const replayConfig: WorkflowConfig = { ...config, teams: config.teams.map((team) => ({ ...team, projects: ["Runtime"] })) };
+    const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+
+    const result = await captureCycle({ config: replayConfig, db, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225720" } });
+
+    expect(result.captured).toBe(1);
+    expect(db.listEvents()[0]).toMatchObject({ author: "Captain", token: "approval" });
+    expect(db.jobs()[0]?.kind).toBe("linear.issue-state");
+    expect(db.latestSnapshot("ABC-1")).toMatchObject({ state: "Approve Deliverable", managed: true });
+    db.close();
+  });
+
   test("captures, classifies, snapshots, and queues a gate job in one cycle", async () => {
     const root = mkdtempSync("/private/tmp/fml-capture-");
     roots.push(root);

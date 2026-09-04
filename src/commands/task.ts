@@ -11,7 +11,16 @@ class BoundaryRejected extends Error {}
 
 function linkState(db: StateDatabase, task: string): string {
   return db.taskLinks().filter((link) => link.task === task)
-    .map((link) => [link.lifecycle_id, link.issue, link.role, link.torn_down_at]).sort().join("\0");
+    .map((link) => JSON.stringify({
+      lifecycleId: link.lifecycle_id,
+      issue: link.issue,
+      role: link.role,
+      worktree: link.worktree,
+      harness: link.harness,
+      spawnedAt: link.spawned_at,
+      tornDownAt: link.torn_down_at,
+      blockedMetaGeneration: link.blocked_meta_generation,
+    })).sort().join("\0");
 }
 
 export function runTask(args: string[], env: NodeJS.ProcessEnv = process.env, dependencies: { inspectPr?: PrInspect; beforeBoundaryCommit?: (attempt: number) => void } = {}): number {

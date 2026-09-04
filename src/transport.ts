@@ -3,8 +3,10 @@
 
 import { appendFileSync, copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isExactApproval } from "./classify/classify.ts";
 import { classifyFailure, type Classification, type GraphqlError } from "./errors.ts";
 import { sha256 } from "./hash.ts";
+import { redactedIdentity } from "./identity.ts";
 
 export const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
 export const DEFAULT_HTTP_TIMEOUT_SECONDS = 20;
@@ -66,16 +68,19 @@ function fail(
 
 export function redactFixture(value: unknown): unknown {
   const identifiers = new Map<string, string>();
-  const visit = (current: unknown, key = ""): unknown => {
-    if (Array.isArray(current)) return current.map((item) => visit(item, key));
+  const visit = (current: unknown, key = "", parents: string[] = []): unknown => {
+    if (Array.isArray(current)) return current.map((item) => visit(item, key, parents));
     if (current && typeof current === "object") {
-      return Object.fromEntries(Object.entries(current).map(([childKey, child]) => [childKey, visit(child, childKey)]));
+      return Object.fromEntries(Object.entries(current).map(([childKey, child]) => [childKey, visit(child, childKey, [...parents, key])]));
     }
     if (typeof current !== "string") return current;
+    if (/^body$/i.test(key) && isExactApproval(current)) return "approved";
     if (/^(?:body|description|text|content|title)$/i.test(key)) return "[redacted]";
     if (/email/i.test(key)) return "redacted@example.invalid";
     if (/url/i.test(key)) return "https://example.invalid/redacted";
-    if (/displayName|name/i.test(key)) return `[redacted-${sha256(current).slice(0, 8)}]`;
+    if (/^(?:token|secret|apiKey)$/i.test(key)) return "[redacted]";
+    const personalContainer = parents.some((parent) => /^(?:viewer|assignee|actor|author|creator|member|members|subscriber|subscribers|user|users)$/i.test(parent));
+    if (/^displayName$/i.test(key) || (/^name$/i.test(key) && personalContainer)) return redactedIdentity(current);
     if (key === "identifier" && /^[A-Za-z][A-Za-z0-9]*-[0-9]+$/.test(current)) return current;
     if (/^(?:id|identifier|.*Id)$/i.test(key)) {
       const prior = identifiers.get(current);

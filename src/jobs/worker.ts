@@ -7,7 +7,7 @@ import { sha256 } from "../hash.ts";
 import { isManagedIssue } from "../managed.ts";
 import { statusCursorValue, statusFileState } from "../mirror/generation.ts";
 import { capturePrSourceWatermarks, type PrInspect } from "../mirror/pr.ts";
-import { nowEpoch, nowIso } from "../time.ts";
+import { formatIso, nowEpoch, nowIso } from "../time.ts";
 import { LinearTransport, type TransportResult } from "../transport.ts";
 
 const RESOLVE_STATE = `query($issue:String!){viewer{id displayName} issue(id:$issue){id state{id name} team{states{nodes{id name}} members{nodes{id displayName}}}}}`;
@@ -94,13 +94,24 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
   return { ...outcome(), transitionedState: target };
 }
 
-function promiseSourceWatermarks(db: StateDatabase, issue: string, expectedEvent: string, env: NodeJS.ProcessEnv, initial: PromiseSourceWatermarks): PromiseSourceWatermarks {
+function promiseSourceWatermarks(
+  db: StateDatabase,
+  issue: string,
+  expectedEvent: string,
+  env: NodeJS.ProcessEnv,
+  initial: PromiseSourceWatermarks,
+  requestBoundary?: PromiseSourceWatermarks,
+): PromiseSourceWatermarks {
   const state = resolveStateDir(resolveHome(env), env);
+  const request = requestBoundary?.__boundary__;
   const watermarks: PromiseSourceWatermarks = {
     ...initial,
     __boundary__: {
       observation_rowid: db.observationRowid(issue),
       primary_lifecycle_ids: db.taskLinks(issue).filter((item) => item.role === "primary").map((item) => item.lifecycle_id),
+      request_observation_rowid: request?.observation_rowid,
+      request_primary_lifecycle_ids: request?.primary_lifecycle_ids,
+      unambiguous_after: requestBoundary ? formatIso(nowEpoch(env) + 1) : undefined,
     },
   };
   if (expectedEvent.startsWith("status:")) {
@@ -122,7 +133,7 @@ async function createComment(
   body: JobPayload,
   transport: LinearTransport,
   db?: StateDatabase,
-  prepareDelivery?: () => void,
+  captureDeliveryBoundary?: (phase: "request" | "confirmed") => void,
 ): Promise<JobOutcome> {
   const stillWaiting = (): boolean => {
     if (typeof body.waiting_event_id !== "string") return true;
@@ -136,17 +147,21 @@ async function createComment(
   const resolved = value(await transport.call("job-resolve-comment-issue", { query: RESOLVE_ISSUE, variables: { issue } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
   if (!stillWaiting()) return { skipped: "waiting event is no longer open" };
-  prepareDelivery?.();
+  captureDeliveryBoundary?.("request");
   const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue: resolved.issue.id, body: text } });
   if (result.ok) {
     if (!(result.value.data as any)?.commentCreate?.success) throw new Error(`comment creation was not successful: ${issue}`);
+    captureDeliveryBoundary?.("confirmed");
     return { nativeId: id };
   }
   if (result.error.classification.class !== "already-satisfied" && result.error.classification.class !== "retryable") {
     throw new Error(result.error.message);
   }
   const verify = await transport.call("job-comment-verify", { query: VERIFY_COMMENT, variables: { id } });
-  if (verify.ok && (verify.value.data as any)?.comment?.id === id) return { nativeId: id };
+  if (verify.ok && (verify.value.data as any)?.comment?.id === id) {
+    captureDeliveryBoundary?.("confirmed");
+    return { nativeId: id };
+  }
   throw new Error(result.error.message);
 }
 
@@ -263,7 +278,7 @@ export async function executeJob(job: Job, options: {
   config: WorkflowConfig;
   transport: LinearTransport;
   env?: NodeJS.ProcessEnv;
-  prepareCommentDelivery?: () => void;
+  captureCommentDeliveryBoundary?: (phase: "request" | "confirmed") => void;
 }): Promise<JobOutcome> {
   const body = payload(job);
   if (job.kind === "linear.comment" && typeof body.waiting_event_id === "string") {
@@ -285,7 +300,7 @@ export async function executeJob(job: Job, options: {
   }
   switch (job.kind) {
     case "linear.issue-state": return updateIssueState(job, body, options.transport, options.config);
-    case "linear.comment": return createComment(job, body, options.transport, options.db, options.prepareCommentDelivery);
+    case "linear.comment": return createComment(job, body, options.transport, options.db, options.captureCommentDeliveryBoundary);
     case "linear.attachment": return createAttachment(job, body, options.transport);
     case "relay": return relay(job, body, options.env ?? process.env);
     case "core.ack": {
@@ -311,19 +326,24 @@ function preparePromiseSourceBoundary(
   job: Job,
   env: NodeJS.ProcessEnv,
   inspectPr?: PrInspect,
+  confirmed = false,
 ): void {
   const pending = db.promises(job.target, ["pending"]).find((item) => item.reply_job_id === job.id);
-  if (!pending || pending.source_watermarks !== null) return;
+  if (!pending || (!confirmed && pending.source_watermarks !== null)) return;
+  let requestBoundary: PromiseSourceWatermarks | undefined;
+  if (confirmed && pending.source_watermarks) {
+    try { requestBoundary = JSON.parse(pending.source_watermarks) as PromiseSourceWatermarks; }
+    catch { throw new Error(`invalid promise source boundary: ${pending.id}`); }
+  }
   const prWatermarks = pending.expected_event.startsWith("pr-")
     ? capturePrSourceWatermarks(resolveHome(env), db, job.target, inspectPr)
     : {};
   db.transaction(() => {
     const current = db.promise(pending.id);
-    if (!current || current.state !== "pending" || current.source_watermarks !== null) return;
-    db.setPendingPromiseSourceWatermarks(
-      current.id,
-      promiseSourceWatermarks(db, job.target, current.expected_event, env, prWatermarks),
-    );
+    if (!current || current.state !== "pending" || (!confirmed && current.source_watermarks !== null)) return;
+    const watermarks = promiseSourceWatermarks(db, job.target, current.expected_event, env, prWatermarks, requestBoundary);
+    if (confirmed) db.replacePendingPromiseSourceWatermarks(current.id, watermarks);
+    else db.setPendingPromiseSourceWatermarks(current.id, watermarks);
   });
 }
 
@@ -347,7 +367,7 @@ export async function processJobs(options: {
         config: options.config,
         transport: options.transport,
         env,
-        prepareCommentDelivery: () => preparePromiseSourceBoundary(options.db, job, env, options.inspectPr),
+        captureCommentDeliveryBoundary: (phase) => preparePromiseSourceBoundary(options.db, job, env, options.inspectPr, phase === "confirmed"),
       });
       if (result.skipped) {
         options.db.skipJob(job.id, result.skipped, nowIso(env));

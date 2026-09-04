@@ -129,12 +129,17 @@ describe("fixture transport", () => {
   });
 
   test("recording redacts identity and content while preserving stable references", () => {
-    const redacted = redactFixture({ data: { issue: { id: "secret-id", identifier: "ABC-123", title: "Secret title", assignee: { id: "secret-id", email: "person@example.com" } } } }) as any;
+    const redacted = redactFixture({ data: { viewer: { displayName: "Firstmate" }, issue: { id: "secret-id", identifier: "ABC-123", title: "Secret title", state: { name: "Approve Plan" }, project: { name: "Runtime" }, labels: { nodes: [{ name: "Agent: Codex" }] }, assignee: { id: "secret-id", displayName: "Firstmate", email: "person@example.com" } } } }) as any;
     expect(redacted.data.issue.id).toStartWith("redacted-");
     expect(redacted.data.issue.identifier).toBe("ABC-123");
     expect(redacted.data.issue.assignee.id).toBe(redacted.data.issue.id);
     expect(redacted.data.issue.title).toBe("[redacted]");
     expect(redacted.data.issue.assignee.email).toBe("redacted@example.invalid");
+    expect(redacted.data.viewer.displayName).toBe(redacted.data.issue.assignee.displayName);
+    expect(redacted.data.viewer.displayName).not.toBe("Firstmate");
+    expect(redacted.data.issue.state.name).toBe("Approve Plan");
+    expect(redacted.data.issue.project.name).toBe("Runtime");
+    expect(redacted.data.issue.labels.nodes[0].name).toBe("Agent: Codex");
   });
 
   test("recorded issue identifiers remain routable when replayed", async () => {

@@ -133,7 +133,7 @@ describe("job worker", () => {
     db.close();
   });
 
-  test("promise keeps same-second status produced after comment delivery", async () => {
+  test("promise rejects status from the ambiguous delivery interval", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures); mkdirSync(join(root, "state"));
     await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
@@ -157,7 +157,11 @@ describe("job worker", () => {
     scanFleet(root, db, env);
     reconcileStalls(root, db, config, env);
 
-    expect(db.promise(promise.id)).toMatchObject({ state: "kept", created_at: "2026-01-01T12:20:00Z" });
+    expect(db.promise(promise.id)).toMatchObject({ state: "open", created_at: "2026-01-01T12:20:00Z" });
+    appendFileSync(statusPath, "done: confirmed after delivery\n");
+    scanFleet(root, db, env);
+    reconcileStalls(root, db, config, env);
+    expect(db.promise(promise.id)?.state).toBe("kept");
     db.close();
   });
 
@@ -188,8 +192,8 @@ describe("job worker", () => {
     await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env });
     reconcileStalls(root, db, config, env);
     expect(db.promise(boardPromise.id)?.state).toBe("open");
-    db.observe({ id: "obs:done-after", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Done", note: null, observed_at: deliveredAt });
-    reconcileStalls(root, db, config, env);
+    db.observe({ id: "obs:done-after", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Done", note: null, observed_at: "2026-01-01T12:20:01Z" });
+    reconcileStalls(root, db, config, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:20:01Z") / 1000) });
     expect(db.promise(boardPromise.id)?.state).toBe("kept");
 
     const commentJob = db.enqueue({ key: "comment:comment-identity", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "I will comment again", actor: "core" } }, deliveredAt);
