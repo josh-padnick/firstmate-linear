@@ -91,7 +91,15 @@ export function runInboxV6(args: string[], env: NodeJS.ProcessEnv = process.env)
         process.stderr.write("fm-linear inbox: receipt does not authorize that event\n");
         return 1;
       }
-      db.handleWithReceipt(event.id, receiptId, config.captain.display_name, note);
+      try {
+        db.handleWithReceipt(event.id, receiptId, config.captain.display_name, note);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const staleId = /^stale receipt: newer captain event (\S+)/.exec(message)?.[1];
+        const newer = staleId ? db.event(staleId) : null;
+        process.stderr.write(`fm-linear inbox: ${message}${newer ? `\n${renderEvent(newer)}\nthen: run fm-linear inbox show ${newer.id} to issue a fresh receipt` : ""}\n`);
+        return 1;
+      }
       process.stdout.write(`fm-linear inbox: handled ${event.id}\n`);
       return 0;
     }

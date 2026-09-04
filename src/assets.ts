@@ -6,6 +6,7 @@ import reportTemplate from "../examples/report.example.md" with { type: "text" }
 import reviewTemplate from "../examples/review-walkthrough.example.html" with { type: "text" };
 import extensionManifest from "../extension/firstmate-extension.json" with { type: "text" };
 import extensionEntrypoint from "../extension/bin/fm-linear-extension" with { type: "text" };
+import extensionPackage from "../extension/package.json" with { type: "text" };
 
 export const ASSETS = {
   captainSnippet: captainSnippet as unknown as string,
@@ -16,4 +17,5 @@ export const ASSETS = {
   reviewTemplate: reviewTemplate as unknown as string,
   extensionManifest: extensionManifest as unknown as string,
   extensionEntrypoint: extensionEntrypoint as unknown as string,
+  extensionPackage: extensionPackage as unknown as string,
 } as const;

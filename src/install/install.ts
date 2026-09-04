@@ -129,6 +129,7 @@ function outputField(output: string, name: string): string | null {
 function installExtension(root: string, env: NodeJS.ProcessEnv, persist: (ownership: ExtensionOwnership) => void): ExtensionOwnership {
   const packageRoot = join(root, "extension", "1.0.0");
   mkdirSync(join(packageRoot, "bin"), { recursive: true });
+  atomicWriteFile(join(packageRoot, "package.json"), ASSETS.extensionPackage, 0o644);
   atomicWriteFile(join(packageRoot, "firstmate-extension.json"), ASSETS.extensionManifest, 0o644);
   atomicWriteFile(join(packageRoot, "bin", "fm-linear-extension"), ASSETS.extensionEntrypoint, 0o755);
   const home = resolveHome(env);

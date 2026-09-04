@@ -185,4 +185,42 @@ describe("fleet scanner", () => {
     expect(scanFleet(home, db, firstEnv).observations).toContainEqual(expect.objectContaining({ verb: "working", note: "new" }));
     db.close();
   });
+
+  test("a replacement present before relink starts at its beginning", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: old lifecycle\n");
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
+    let db = StateDatabase.open(env);
+    scanFleet(home, db, env);
+    db.close();
+    expect(runTask(["close", "task"], env)).toBe(0);
+    unlinkSync(path);
+    writeFileSync(path, "working: new lifecycle\n");
+    expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
+    db = StateDatabase.open(env);
+
+    expect(scanFleet(home, db, env).observations).toContainEqual(expect.objectContaining({ verb: "working", note: "new lifecycle" }));
+    db.close();
+  });
+
+  test("a reset incarnation retains status written before close", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: original\n");
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
+    let db = StateDatabase.open(env);
+    scanFleet(home, db, env);
+    writeFileSync(path, "working: replacement\n");
+    scanFleet(home, db, env);
+    db.close();
+    writeFileSync(path, "working: replacement\ndone: before close\n");
+    expect(runTask(["close", "task"], env)).toBe(0);
+    db = StateDatabase.open(env);
+
+    expect(scanFleet(home, db, env).observations).toContainEqual(expect.objectContaining({ verb: "done", note: "before close" }));
+    db.close();
+  });
 });

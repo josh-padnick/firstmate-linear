@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import type { Observation, StateDatabase, TaskLink } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { nowIso } from "../time.ts";
-import { fileIncarnation, sidecarGeneration } from "./generation.ts";
+import { sidecarGeneration, statusFileState } from "./generation.ts";
 
 export type ScanFinding = { code: string; task: string; detail: string };
 export type ScanResult = { observations: Observation[]; findings: ScanFinding[] };
@@ -27,32 +27,10 @@ export function parseStatusLine(line: string): { verb: string; key: string; note
   return { verb: match[1], key: match[2] ?? nested?.[1] ?? "default", note: nested?.[2] ?? note };
 }
 
-function readNewLines(db: StateDatabase, path: string, physicalIdentity: string, consumeToEnd = false): { rows: Array<{ line: string; offset: number }>; cursorName: string; cursorValue: string; incarnationIdentity: string } {
+function readNewLines(db: StateDatabase, path: string, consumeToEnd = false): { rows: Array<{ line: string; offset: number }>; cursorName: string; cursorValue: string; incarnationIdentity: string } {
   const name = `status:${path}`;
-  const raw = db.cursor(name);
-  const content = readFileSync(path);
-  let offset = 0;
-  let incarnationIdentity = physicalIdentity;
-  if (raw) {
-    try {
-      const cursor = JSON.parse(raw) as { offset?: number; file_identity?: string; physical_identity?: string; prefix_sha?: string; identity?: string };
-      const candidate = Number(cursor.offset ?? 0);
-      const validOffset = Number.isInteger(candidate) && candidate >= 0 && candidate <= content.length;
-      const modern = typeof cursor.file_identity === "string" || typeof cursor.prefix_sha === "string";
-      const legacyIdentityMatches = typeof cursor.identity !== "string"
-        || cursor.identity === physicalIdentity
-        || cursor.identity.startsWith(`${physicalIdentity}:`);
-      const cursorPhysicalIdentity = cursor.physical_identity ?? cursor.file_identity;
-      const modernMatches = cursorPhysicalIdentity === physicalIdentity
-        && cursor.prefix_sha === sha256(content.subarray(0, candidate));
-      if (validOffset && ((!modern && legacyIdentityMatches) || modernMatches)) {
-        offset = candidate;
-        incarnationIdentity = cursor.file_identity ?? physicalIdentity;
-      } else if (modern && cursorPhysicalIdentity === physicalIdentity) {
-        incarnationIdentity = `${physicalIdentity}:reset:${sha256(content)}`;
-      }
-    } catch { offset = 0; }
-  }
+  const state = statusFileState(path, db.cursor(name))!;
+  const { content, offset, physicalIdentity, incarnationIdentity } = state;
   const remaining = content.subarray(offset);
   const lastNewline = remaining.lastIndexOf(10);
   const completeLength = lastNewline < 0 ? 0 : lastNewline + 1;
@@ -110,8 +88,7 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
     const links = db.taskLinks().filter((link) => link.task === task);
     const activeLinks = links.filter((link) => link.torn_down_at === null);
     const path = join(state, name);
-    const physicalIdentity = fileIncarnation(path)!;
-    const batch = readNewLines(db, path, physicalIdentity, activeLinks.length === 0 && links.length === 0);
+    const batch = readNewLines(db, path, activeLinks.length === 0 && links.length === 0);
     const fileIdentity = batch.incarnationIdentity;
     const inserted: Observation[] = [];
     db.transaction(() => {

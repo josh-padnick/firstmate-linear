@@ -90,6 +90,23 @@ describe("PR signals", () => {
     db.close();
   });
 
+  test("a role change blocks the sidecar generation present at the boundary", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    const metaPath = join(home, "state", "task.meta");
+    writeFileSync(metaPath, "spawn_gen=old\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1", "--role", "support"], env)).toBe(0);
+    writeFileSync(metaPath, "spawn_gen=current\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    expect(runTask(["link", "task", "ABC-1", "--role", "primary", "--spawned-at", "2026-01-01T00:01:00Z"], env)).toBe(0);
+    const db = StateDatabase.open(env);
+    const inspect = () => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] });
+
+    expect(scanPullRequests(home, db, inspect).observations).toHaveLength(0);
+    writeFileSync(metaPath, "spawn_gen=next\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    expect(scanPullRequests(home, db, inspect).observations.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
+    db.close();
+  });
+
   test("one task linked to multiple issues records every PR state", () => {
     const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
     writeFileSync(join(home, "state", "task.meta"), "pr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");

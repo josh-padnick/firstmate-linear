@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import { install } from "../src/install/install.ts";
 
 const roots: string[] = [];
 
@@ -28,6 +29,41 @@ async function invoke(operation: string, input: Record<string, unknown>): Promis
 }
 
 describe("Firstmate extension adapter", () => {
+  test("the installed extension executes as an ES module", async () => {
+    const root = mkdtempSync("/private/tmp/fml-extension-install-");
+    roots.push(root);
+    const home = join(root, "home");
+    const firstmate = join(root, "firstmate");
+    mkdirSync(join(firstmate, "bin"), { recursive: true });
+    for (const command of ["fm-extension.sh", "fm-procevent.sh"]) {
+      const path = join(firstmate, "bin", command);
+      writeFileSync(path, "#!/bin/sh\nexit 0\n");
+      chmodSync(path, 0o755);
+    }
+    const runtime = join(root, "runtime");
+    install({ harnesses: [], bind: true, env: {
+      FM_HOME: home,
+      FM_ROOT_OVERRIDE: firstmate,
+      FM_LINEAR_INSTALL_ROOT: runtime,
+      FM_LINEAR_LAUNCH_AGENTS_DIR: join(root, "agents"),
+      FM_LINEAR_SKIP_LAUNCHCTL: "1",
+      FM_LINEAR_REAL_LINEAR_AXI: "/usr/bin/true",
+    } });
+    const process = Bun.spawn(["node", "--no-experimental-detect-module", join(runtime, "extension", "1.0.0", "bin", "fm-linear-extension"), "handshake"], {
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    process.stdin.write(JSON.stringify({
+      schema: "firstmate.extension-handshake-request.v1",
+      request_id: `sha256:${"a".repeat(64)}`,
+      extension_id: "dev.firstmate.linear",
+      extension_version: "1.0.0",
+    }));
+    process.stdin.end();
+
+    expect(await process.exited).toBe(0);
+    expect(await new Response(process.stdout).json()).toMatchObject({ schema: "firstmate.extension-handshake-response.v1", extension_id: "dev.firstmate.linear" });
+  });
+
   test("carries the source socket into captured content for later result operations", async () => {
     const root = mkdtempSync("/private/tmp/fml-extension-");
     roots.push(root);
