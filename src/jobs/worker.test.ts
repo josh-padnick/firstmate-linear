@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { classifyEvent } from "../classify/classify.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
-import { LinearTransport } from "../transport.ts";
+import { LinearTransport, type GraphqlPayload, type TransportResult } from "../transport.ts";
 import { scanFleet } from "../mirror/scan.ts";
 import { scanPullRequests } from "../mirror/pr.ts";
 import { reconcileStalls } from "../reconcile/stall.ts";
@@ -129,6 +129,34 @@ describe("job worker", () => {
     scanFleet(root, db, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
     reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
     expect(db.promise(promise.id)?.state).toBe("kept");
+    db.close();
+  });
+
+  test("promise keeps same-second status produced after comment delivery", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures); mkdirSync(join(root, "state"));
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
+    const statusPath = join(root, "state", "worker.status");
+    writeFileSync(statusPath, "");
+    class DeliveryProgressTransport extends LinearTransport {
+      override async call(operation: string, request: GraphqlPayload): Promise<TransportResult> {
+        const result = await super.call(operation, request);
+        if (operation === "job-comment" && result.ok) appendFileSync(statusPath, "done: after delivery\n");
+        return result;
+      }
+    }
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
+    const job = db.enqueue({ key: "comment:same-second-promise", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "I will finish", actor: "core" } }, "2026-01-01T12:00:00Z");
+    const promise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "status:done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: job.id, created_at: "2026-01-01T12:00:00Z" });
+    const env = { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:20:00Z") / 1000) };
+
+    await processJobs({ db, config, transport: new DeliveryProgressTransport({ fixtureDir: fixtures }), env });
+    scanFleet(root, db, env);
+    reconcileStalls(root, db, config, env);
+
+    expect(db.promise(promise.id)).toMatchObject({ state: "kept", created_at: "2026-01-01T12:20:00Z" });
     db.close();
   });
 

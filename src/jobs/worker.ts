@@ -111,7 +111,13 @@ function promiseSourceWatermarks(db: StateDatabase, issue: string, expectedEvent
   return watermarks;
 }
 
-async function createComment(job: Job, body: JobPayload, transport: LinearTransport, db?: StateDatabase): Promise<JobOutcome> {
+async function createComment(
+  job: Job,
+  body: JobPayload,
+  transport: LinearTransport,
+  db?: StateDatabase,
+  prepareDelivery?: () => void,
+): Promise<JobOutcome> {
   const stillWaiting = (): boolean => {
     if (typeof body.waiting_event_id !== "string") return true;
     if (!db) throw new Error("guarded comment requires the state database");
@@ -124,6 +130,7 @@ async function createComment(job: Job, body: JobPayload, transport: LinearTransp
   const resolved = value(await transport.call("job-resolve-comment-issue", { query: RESOLVE_ISSUE, variables: { issue } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
   if (!stillWaiting()) return { skipped: "waiting event is no longer open" };
+  prepareDelivery?.();
   const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue: resolved.issue.id, body: text } });
   if (result.ok) {
     if (!(result.value.data as any)?.commentCreate?.success) throw new Error(`comment creation was not successful: ${issue}`);
@@ -250,6 +257,7 @@ export async function executeJob(job: Job, options: {
   config: WorkflowConfig;
   transport: LinearTransport;
   env?: NodeJS.ProcessEnv;
+  prepareCommentDelivery?: () => void;
 }): Promise<JobOutcome> {
   const body = payload(job);
   if (body.requires_managed === true) {
@@ -265,7 +273,7 @@ export async function executeJob(job: Job, options: {
   }
   switch (job.kind) {
     case "linear.issue-state": return updateIssueState(job, body, options.transport, options.config);
-    case "linear.comment": return createComment(job, body, options.transport, options.db);
+    case "linear.comment": return createComment(job, body, options.transport, options.db, options.prepareCommentDelivery);
     case "linear.attachment": return createAttachment(job, body, options.transport);
     case "relay": return relay(job, body, options.env ?? process.env);
     case "core.ack": {
@@ -286,6 +294,27 @@ export function nextAttempt(job: Job, env: NodeJS.ProcessEnv = process.env, retr
   return new Date((nowEpoch(env) + delay) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+function preparePromiseSourceBoundary(
+  db: StateDatabase,
+  job: Job,
+  env: NodeJS.ProcessEnv,
+  inspectPr?: PrInspect,
+): void {
+  const pending = db.promises(job.target, ["pending"]).find((item) => item.reply_job_id === job.id);
+  if (!pending || pending.source_watermarks !== null) return;
+  const prWatermarks = pending.expected_event.startsWith("pr-")
+    ? capturePrSourceWatermarks(resolveHome(env), db, job.target, inspectPr)
+    : {};
+  db.transaction(() => {
+    const current = db.promise(pending.id);
+    if (!current || current.state !== "pending" || current.source_watermarks !== null) return;
+    db.setPendingPromiseSourceWatermarks(
+      current.id,
+      promiseSourceWatermarks(db, job.target, current.expected_event, env, prWatermarks),
+    );
+  });
+}
+
 export async function processJobs(options: {
   db: StateDatabase;
   config: WorkflowConfig;
@@ -301,18 +330,18 @@ export async function processJobs(options: {
   let dead = 0;
   for (const job of options.db.claimDueJobs(20, nowIso(env))) {
     try {
-      const result = await executeJob(job, { db: options.db, config: options.config, transport: options.transport, env });
+      const result = await executeJob(job, {
+        db: options.db,
+        config: options.config,
+        transport: options.transport,
+        env,
+        prepareCommentDelivery: () => preparePromiseSourceBoundary(options.db, job, env, options.inspectPr),
+      });
       if (result.skipped) {
         options.db.skipJob(job.id, result.skipped, nowIso(env));
         done += 1;
         continue;
       }
-      const pendingPromise = result.nativeId
-        ? options.db.promises(job.target, ["pending"]).find((item) => item.reply_job_id === job.id)
-        : undefined;
-      const prWatermarks = pendingPromise?.expected_event.startsWith("pr-")
-        ? capturePrSourceWatermarks(resolveHome(env), options.db, job.target, options.inspectPr)
-        : {};
       options.db.transaction(() => {
         for (const followup of result.followups ?? []) options.db.enqueue(followup, nowIso(env));
         const completedAt = nowIso(env);
@@ -341,10 +370,7 @@ export async function processJobs(options: {
             note: null, observed_at: completedAt,
           });
         }
-        const sourceWatermarks = pendingPromise
-          ? promiseSourceWatermarks(options.db, job.target, pendingPromise.expected_event, env, prWatermarks)
-          : null;
-        options.db.finishJob(job.id, result.nativeId ?? null, completedAt, sourceWatermarks);
+        options.db.finishJob(job.id, result.nativeId ?? null, completedAt);
       });
       done += 1;
     } catch (error) {

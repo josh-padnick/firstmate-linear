@@ -561,12 +561,18 @@ export class StateDatabase {
         const deliveredDeadline = formatIso(deliveredAt + stagedDeadline - stagedAt);
         this.raw.query("UPDATE promises SET state='superseded',superseded_by=? WHERE issue=? AND state IN ('open','overdue') AND id<>?")
           .run(pending.id, pending.issue, pending.id);
-        this.raw.query("UPDATE promises SET state='open',reply_comment_id=?,created_at=?,deadline_at=?,source_watermarks=? WHERE id=? AND state='pending'")
+        this.raw.query("UPDATE promises SET state='open',reply_comment_id=?,created_at=?,deadline_at=?,source_watermarks=COALESCE(source_watermarks,?) WHERE id=? AND state='pending'")
           .run(nativeId, at, deliveredDeadline, sourceWatermarks ? JSON.stringify(sourceWatermarks) : null, pending.id);
       } else {
         this.raw.query("UPDATE promises SET reply_comment_id=? WHERE reply_job_id=?").run(nativeId, id);
       }
     });
+  }
+
+  setPendingPromiseSourceWatermarks(id: string, sourceWatermarks: PromiseSourceWatermarks): boolean {
+    const result = this.raw.query("UPDATE promises SET source_watermarks=? WHERE id=? AND state='pending' AND source_watermarks IS NULL")
+      .run(JSON.stringify(sourceWatermarks), id);
+    return result.changes === 1;
   }
 
   skipJob(id: string, reason: string, at = nowIso()): void {

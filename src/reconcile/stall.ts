@@ -103,8 +103,12 @@ function matchingPrObservation(db: StateDatabase, promise: PromiseRecord, observ
 }
 
 function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progress | null {
-  const observations = db.observations(promise.issue, promise.created_at);
   const expected = promise.expected_event;
+  const watermarkBacked = promise.source_watermarks !== null
+    && (expected.startsWith("status:") || ["pr-reported", "pr-green", "pr-merged"].includes(expected));
+  const observations = watermarkBacked
+    ? db.observations(promise.issue).filter((item) => atOrAfter(item.observed_at, promise.created_at))
+    : db.observations(promise.issue, promise.created_at);
   if (expected.startsWith("status:")) {
     const verb = expected.slice("status:".length);
     const found = observations.find((item) => item.source === "status"
