@@ -65,9 +65,10 @@ export function discoverLocalSteers(home: string, db: StateDatabase): number {
     for (const record of records) {
       const path = join(directory, record);
       const sentAt = statSync(path).mtime.toISOString().replace(/\.\d{3}Z$/, "Z");
-      const issue = db.taskLinks(undefined, true).find((link) => link.task === task)?.issue ?? null;
+      const link = db.taskLinks(undefined, true).find((item) => item.task === task) ?? null;
+      const issue = link?.issue ?? null;
       const before = db.steers().length;
-      db.recordSteer({ issue, home: "local", task, record_path: path, message: recordMessage(path), sent_at: sentAt });
+      db.recordSteer({ issue, home: "local", task, record_path: path, message: recordMessage(path), lifecycle_id: link?.lifecycle_id ?? null, sent_at: sentAt });
       if (db.steers().length > before) found += 1;
     }
   }
@@ -82,10 +83,15 @@ export function reconcileSteers(home: string, db: StateDatabase, config: Workflo
   let redelivered = 0;
   let stalled = 0;
   for (const steer of db.steers(true)) {
+    if (steer.lifecycle_id && !db.taskLinks(steer.issue ?? undefined, true)
+      .some((link) => link.lifecycle_id === steer.lifecycle_id && link.task === steer.task)) {
+      db.acknowledgeSteer(steer.id, at);
+      continue;
+    }
     const evidence = recipientEvidence(db, steer);
     let remoteEvidence = false;
     if (steer.home !== "local") {
-      const checkedKey = `steer-remote-checked:${steer.home}`;
+      const checkedKey = `steer-remote-checked:${steer.id}`;
       const lastChecked = parseIso(db.serviceState(checkedKey) ?? "") ?? 0;
       if (now - lastChecked >= config.deadlines.steer.remote_check) {
         const probe = remoteProbe(steer, home, env);
@@ -115,7 +121,7 @@ export function reconcileSteers(home: string, db: StateDatabase, config: Workflo
         key: `${steer.id}:redeliver`, kind: "fleet.send", target: steer.task,
         payload: {
           task: steer.task, issue: steer.issue ?? "SYSTEM-0", home: steer.home, record_path: steer.record_path,
-          delivery_id: steer.delivery_id,
+          delivery_id: steer.delivery_id, lifecycle_id: steer.lifecycle_id,
           message: steer.message ?? `An earlier fm-linear steer is still unacknowledged. Read ${steer.record_path} and act on it.`,
         },
       }, at);

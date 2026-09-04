@@ -480,11 +480,15 @@ describe("job worker", () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const inbox = join(root, "state", "worker.inbox"); mkdirSync(inbox, { recursive: true });
     const record = join(inbox, "001.msg"); writeFileSync(record, "schema=fm-task-inbox.v1\n--\nReport status");
+    const bin = join(root, "bin"); mkdirSync(bin, { recursive: true });
+    const calls = join(root, "local-calls");
+    writeFileSync(join(bin, "fm-send.sh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${calls}"\n`); chmodSync(join(bin, "fm-send.sh"), 0o755);
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
     db.enqueue({ key: "redeliver", kind: "fleet.send", target: "worker", payload: { task: "worker", issue: "ABC-1", home: "local", record_path: record, message: "Report status" } }, "2026-01-01T00:00:00Z");
 
     expect((await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
     expect(db.steers()).toContainEqual(expect.objectContaining({ record_path: record, message: "Report status" }));
+    expect(readFileSync(calls, "utf8").trim()).toMatch(/^worker --fire-and-forget [a-f0-9]{16} Report status$/);
     expect(readFileSync(record, "utf8")).toContain("Report status");
     db.close();
   });

@@ -166,6 +166,14 @@ export function classifyEvent(
 
   const currentGate = gate(team, snapshot?.role);
   const body = event.body ?? "";
+  if (currentGate === "merge-gate" && ["approved", "lgtm"].includes(normalizedComment(body))) {
+    return {
+      token: "comment",
+      disposition: "waiting-for-core",
+      jobs: [],
+      note: "required: ask whether the captain intended merge authorization",
+    };
+  }
   if (currentGate && isExactGatePhrase(body, config.gates[currentGate].phrases)) {
     if (currentGate === "merge-gate") return mergeAuthorization(event, currentGate);
     const configuredNext = config.gates[currentGate].next;
@@ -181,14 +189,6 @@ export function classifyEvent(
       note: null,
       gate: currentGate,
       next: resolution.role,
-    };
-  }
-  if (currentGate === "merge-gate" && normalizedComment(body) === "approved") {
-    return {
-      token: "comment",
-      disposition: "waiting-for-core",
-      jobs: [],
-      note: "required: ask whether the captain intended merge authorization",
     };
   }
   if (currentGate) {

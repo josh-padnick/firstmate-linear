@@ -13,7 +13,7 @@ import { LinearTransport } from "../transport.ts";
 import { createSocketServer } from "./socket.ts";
 import { scanFleet } from "../mirror/scan.ts";
 import { applyMirrorPlan, planMirror } from "../mirror/plan.ts";
-import { scanPullRequests } from "../mirror/pr.ts";
+import { inspectPr, scanPullRequests } from "../mirror/pr.ts";
 import { applyEscalations } from "../escalation/escalation.ts";
 import { applyReviewDeadlines, planReviewDeadlines } from "../review/reconcile.ts";
 import { sha256 } from "../hash.ts";
@@ -132,7 +132,12 @@ export async function serviceCycle(options: {
     catch (error) { throw new LinearPollFailure(error); }
   }
   const scan = scanFleet(resolveHome(env), options.db, env);
-  const pr = env.FM_LINEAR_SKIP_GH ? { observations: [], findings: [] } : scanPullRequests(resolveHome(env), options.db, undefined, env);
+  const pr = env.FM_LINEAR_SKIP_GH ? { observations: [], findings: [] } : scanPullRequests(
+    resolveHome(env),
+    options.db,
+    (url) => inspectPr(url, undefined, options.config.validation),
+    env,
+  );
   const mirror = planMirror(options.db, options.config, [...scan.observations, ...pr.observations]);
   const verdicts = reconcileVerdicts(options.db, options.config, pr.observations, env);
   const mirrorActions = applyMirrorPlan(options.db, options.config, mirror);

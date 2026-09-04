@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import type { ValidationSource } from "../config/schema.ts";
 import { type Observation, observationBelongsToTaskLink, type PromiseSourceWatermarks, type StateDatabase, type TaskLink } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { nowIso } from "../time.ts";
@@ -84,7 +85,11 @@ export function capturePrSourceWatermarks(home: string, db: StateDatabase, issue
   return watermarks;
 }
 
-export function inspectPr(url: string, run: CommandRunner = runCommand): PrSnapshot {
+export function inspectPr(
+  url: string,
+  run: CommandRunner = runCommand,
+  validation?: { source: ValidationSource; check_name: string; gate_check_name?: string },
+): PrSnapshot {
   const view = run("gh", ["pr", "view", url, "--json", "state,mergedAt,baseRefName,headRefOid,statusCheckRollup,files,additions,deletions,autoMergeRequest,labels,reviews"], { encoding: "utf8", timeout: 20_000 });
   if (view.status !== 0) throw new Error((view.stderr || view.stdout || view.error?.message || "gh pr view failed").trim());
   const checks = run("gh", ["pr", "checks", url, "--required", "--json", "name,state,bucket"], { encoding: "utf8", timeout: 20_000 });
@@ -95,10 +100,15 @@ export function inspectPr(url: string, run: CommandRunner = runCommand): PrSnaps
   } catch { throw new Error("gh pr checks returned malformed JSON"); }
   const data = JSON.parse(view.stdout) as any;
   const checksRollup = data.statusCheckRollup ?? [];
-  const summaryCheck = checksRollup.find((item: any) => /\bverdict=/.test(item.output?.summary ?? item.summary ?? ""));
+  const summaryCheck = checksRollup.find((item: any) => /\bverdict=/.test(item.output?.summary ?? item.summary ?? "")
+    && (!validation || validation.source !== "check" || (item.name ?? item.context) === validation.check_name));
   const summary = summaryCheck?.output?.summary ?? summaryCheck?.summary;
   const reviewBody = [...(data.reviews ?? [])].reverse().map((item: any) => item.body ?? "").find((item: string) => /\bverdict=/.test(item));
-  const text = typeof summary === "string" ? summary : typeof reviewBody === "string" ? reviewBody : "";
+  const selectedText = validation?.source === "labels" ? ""
+    : validation?.source === "review" ? reviewBody
+      : validation?.source === "check" ? summary
+        : typeof summary === "string" ? summary : reviewBody;
+  const text = typeof selectedText === "string" ? selectedText : "";
   const match = /\bverdict=(auto-mergeable|needs-human|changes-requested)\s+risk=(low|medium|high)\s+reason=([^\n]+)/.exec(text);
   const verdictLabel = (data.labels ?? []).map((item: any) => item.name).find((name: string) => /^verdict:/.test(name));
   const riskLabel = (data.labels ?? []).map((item: any) => item.name).find((name: string) => /^risk:/.test(name));
@@ -109,22 +119,30 @@ export function inspectPr(url: string, run: CommandRunner = runCommand): PrSnaps
   const checkConclusions = Object.fromEntries(checksRollup
     .filter((item: any) => typeof (item.name ?? item.context) === "string")
     .map((item: any) => [item.name ?? item.context, String(item.conclusion ?? item.state ?? "")]));
-  const verdict = match ? {
+  const gateCheckName = validation?.gate_check_name ?? "fleet-merge-gate";
+  const parsedVerdict = match ? {
     verdict: match[1] as "auto-mergeable" | "needs-human" | "changes-requested",
     risk: match[2] as "low" | "medium" | "high",
     reason: match[3]!.trim(),
-    gateConclusion: checksRollup.find((item: any) => (item.name ?? item.context) === "fleet-merge-gate")?.conclusion ?? null,
+    gateConclusion: checksRollup.find((item: any) => (item.name ?? item.context) === gateCheckName)?.conclusion ?? null,
     checkName: summaryCheck?.name ?? summaryCheck?.context,
     checkConclusions,
-    source: typeof summary === "string" ? "check" as const : "review" as const,
+    source: validation?.source ?? (typeof summary === "string" ? "check" as const : "review" as const),
   } : allowedVerdicts.includes(labeledVerdict) ? {
     verdict: labeledVerdict as "auto-mergeable" | "needs-human" | "changes-requested",
     risk: allowedRisks.includes(labeledRisk) ? labeledRisk as "low" | "medium" | "high" : null,
     reason: "published as PR labels",
-    gateConclusion: checksRollup.find((item: any) => (item.name ?? item.context) === "fleet-merge-gate")?.conclusion ?? null,
+    gateConclusion: checksRollup.find((item: any) => (item.name ?? item.context) === gateCheckName)?.conclusion ?? null,
     checkConclusions,
     source: "labels" as const,
   } : undefined;
+  const verdict = validation?.source === "labels"
+    ? (parsedVerdict?.source === "labels" ? parsedVerdict : undefined)
+    : validation?.source === "review"
+      ? (parsedVerdict?.source === "review" ? parsedVerdict : undefined)
+      : validation?.source === "check"
+        ? (parsedVerdict?.source === "check" ? parsedVerdict : undefined)
+        : parsedVerdict;
   return {
     state: data.mergedAt ? "MERGED" : data.state,
     headRefOid: data.headRefOid,

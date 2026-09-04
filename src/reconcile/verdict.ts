@@ -46,8 +46,19 @@ export function reconcileVerdicts(db: StateDatabase, config: WorkflowConfig, obs
   let handled = 0;
   let stalled = 0;
   const at = nowIso(env);
-  for (const observation of observations.filter((item) => item.source === "pr" && item.verb === "verdict")) {
+  const candidates = new Map<string, Observation>();
+  for (const observation of [...db.observations(), ...observations]
+    .filter((item) => item.source === "pr" && item.verb === "verdict")) {
+    const detail = parseDetail(observation);
+    if (!detail || (detail.source && detail.source !== config.validation.source)) continue;
+    if (detail.source === "check" && detail.checkName && detail.checkName !== config.validation.check_name) continue;
+    const prior = candidates.get(observation.issue);
+    if (!prior || observation.observed_at >= prior.observed_at) candidates.set(observation.issue, observation);
+  }
+  for (const observation of candidates.values()) {
     if (db.latestSnapshot(observation.issue)?.role !== "validating") continue;
+    const handledKey = `verdict-handled:${observation.id}`;
+    if (db.serviceState(handledKey)) continue;
     const team = config.teams.find((item) => item.key === observation.issue.split("-")[0]);
     const detail = parseDetail(observation);
     if (!team || !detail) continue;
@@ -56,7 +67,7 @@ export function reconcileVerdicts(db: StateDatabase, config: WorkflowConfig, obs
     const policy = detail.verdict === "auto-mergeable" ? policyReason(config, detail) : null;
     const verdict = policy ? "needs-human" : detail.verdict;
     const reason = policy ?? detail.reason;
-    const gateConclusion = detail.checkConclusions?.[config.validation.gate_check_name] ?? detail.gateConclusion ?? "";
+    const gateConclusion = detail.checkConclusions?.[config.validation.gate_check_name] ?? "";
     const gateGreen = gateConclusion.toLowerCase() === "success";
     if (policy) db.raw.query("UPDATE pr_events SET policy_downgrade=1,reason=? WHERE id=?").run(reason, observation.id);
     if (detail.autoMergeArmed && gateGreen && policy) {
@@ -73,6 +84,19 @@ export function reconcileVerdicts(db: StateDatabase, config: WorkflowConfig, obs
           key: `${observation.id}:promise:pr-merged`, kind: "promise.implicit", target: observation.issue,
           payload: { issue: observation.issue, source_event_id: observation.id, expected_event: "pr-merged", deadline: "merge" },
         }, at);
+        db.setServiceState(handledKey, at, at);
+        handled += 1;
+        continue;
+      }
+      if (!gateGreen) {
+        const id = `linear:${sha256(`verdict-gate-wait:${observation.id}`)}`;
+        db.capture({
+          id, team: team.key, issue: observation.issue, type: "verdict", token: "verdict", author: "fm-linear",
+          body_sha: null, created_at: at, captured_at: at, disposition: "waiting-for-core",
+          note: `validation found ${detail.url} auto-mergeable, but ${config.validation.gate_check_name} is not successful`,
+          raw_ref: JSON.stringify({ kind: "verdict-gate-wait", ...detail, required: `make ${config.validation.gate_check_name} successful before merge authorization` }),
+        });
+        db.setServiceState(handledKey, at, at);
         handled += 1;
         continue;
       }
@@ -86,18 +110,30 @@ export function reconcileVerdicts(db: StateDatabase, config: WorkflowConfig, obs
         key: `${id}:promise:pr-merged`, kind: "promise.implicit", target: observation.issue,
         payload: { issue: observation.issue, source_event_id: id, expected_event: "pr-merged", deadline: "merge" },
       }]);
+      db.setServiceState(handledKey, at, at);
       handled += 1;
       continue;
     }
     if (verdict === "needs-human") {
       const target = team.roles["merge-gate"] ? "merge-gate" : team.roles["review-gate"] ? "review-gate" : null;
-      if (target) db.enqueueReconciliation({
-        key: `${observation.id}:verdict:${target}`, kind: "linear.issue-role", target: observation.issue,
-        payload: {
-          issue: observation.issue, role: target, expected_role: "validating", actor: "service", requires_managed: true,
-          comment: `validated, green on ${detail.headSha}, risk ${detail.risk ?? "n/a"}; needs your merge word because ${reason}.`,
-        },
-      }, at);
+      if (target) {
+        db.enqueueReconciliation({
+          key: `${observation.id}:verdict:${target}`, kind: "linear.issue-role", target: observation.issue,
+          payload: {
+            issue: observation.issue, role: target, expected_role: "validating", actor: "service", requires_managed: true,
+            comment: `validated, green on ${detail.headSha}, risk ${detail.risk ?? "n/a"}; needs your merge word because ${reason}.`,
+          },
+        }, at);
+      } else {
+        const id = `linear:${sha256(`verdict-needs-human:${observation.id}`)}`;
+        db.capture({
+          id, team: team.key, issue: observation.issue, type: "verdict", token: "verdict", author: "fm-linear",
+          body_sha: null, created_at: at, captured_at: at, disposition: "waiting-for-core",
+          note: `validation needs human review for ${detail.url}: ${reason}`,
+          raw_ref: JSON.stringify({ kind: "verdict-needs-human", ...detail, required: `review the validation verdict for ${detail.url}` }),
+        });
+      }
+      db.setServiceState(handledKey, at, at);
       handled += 1;
       continue;
     }
@@ -120,6 +156,7 @@ export function reconcileVerdicts(db: StateDatabase, config: WorkflowConfig, obs
         raw_ref: JSON.stringify({ kind: "verdict", required: `dispatch a worker to address validation findings for ${detail.url}` }),
       })) stalled += 1;
     }
+    db.setServiceState(handledKey, at, at);
     handled += 1;
   }
   return { handled, stalled };

@@ -36,6 +36,13 @@ describe("status-scoped gate classification", () => {
     expect(result.note).toContain("ask whether");
   });
 
+  test("configured generic approval never authorizes the merge gate", () => {
+    const configured = { ...config, gates: { ...config.gates, "merge-gate": { ...config.gates["merge-gate"], phrases: ["approved", "lgtm"] } } };
+    for (const body of ["approved", "LGTM."]) {
+      expect(classifyEvent({ ...comment, body }, configured, snapshot("merge-gate"))).toMatchObject({ token: "comment", jobs: [] });
+    }
+  });
+
   test("a minimal review gate authorizes merge without moving the board", () => {
     const minimal = testWorkflowConfig({ roles: {
       building: "In Progress",

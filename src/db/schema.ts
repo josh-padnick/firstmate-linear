@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS steers (
   record_path TEXT NOT NULL,
   message TEXT,
   delivery_id TEXT,
+  lifecycle_id TEXT,
   sent_at TEXT NOT NULL,
   acked_at TEXT,
   redelivered_at TEXT,
@@ -402,4 +403,8 @@ ALTER TABLE steers ADD COLUMN message TEXT;
 
 export const MIGRATE_TO_V16_SQL = `
 ALTER TABLE steers ADD COLUMN delivery_id TEXT;
+`;
+
+export const MIGRATE_TO_V17_SQL = `
+ALTER TABLE steers ADD COLUMN lifecycle_id TEXT;
 `;

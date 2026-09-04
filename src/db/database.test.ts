@@ -330,6 +330,22 @@ describe("state database", () => {
     migrated.close();
   });
 
+  test("v16 migration adds steer lifecycle identity", () => {
+    const db = database();
+    const path = db.path;
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("ALTER TABLE steers DROP COLUMN lifecycle_id; PRAGMA user_version = 16;");
+    legacy.close();
+
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.recordSteer({
+      issue: "ABC-1", home: "local", task: "worker", record_path: "/local/001.msg",
+      lifecycle_id: "link:one", sent_at: "2026-01-01T00:00:00Z",
+    }).lifecycle_id).toBe("link:one");
+    migrated.close();
+  });
+
   test("running jobs are reclaimed only after their lease expires", () => {
     const db = database();
     db.enqueue({ key: "leased", kind: "linear.comment", target: "ABC-1", payload: {} }, "2026-01-01T00:00:00Z");

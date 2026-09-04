@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowConfig, WorkflowRole } from "../config/schema.ts";
 import { roleForState, stateNameForRole } from "../config/load.ts";
@@ -37,7 +36,7 @@ export type JobOutcome = {
   followups?: Array<{ key: string; kind: string; target: string; payload: unknown }>;
   transitionedRole?: WorkflowRole;
   skipped?: string;
-  steer?: { home: string; task: string; recordPath: string; message: string; issue: string | null; deliveryId: string | null };
+  steer?: { home: string; task: string; recordPath: string; message: string; issue: string | null; deliveryId: string | null; lifecycleId: string | null };
 };
 
 function payload(job: Job): JobPayload {
@@ -236,17 +235,13 @@ function sendToTask(job: Job, body: JobPayload, db: StateDatabase, env: NodeJS.P
     ? `Captain replied on ${issue}. Read the authoritative thread with: linear-axi issue view ${issue}`
     : requiredString(body.message, "message");
   const home = resolveHome(env);
-  const linkHome = db.taskLinks(issue, true).find((link) => link.task === task)?.host ?? null;
+  const activeLink = db.taskLinks(issue, true).find((link) => link.task === task) ?? null;
+  const linkHome = activeLink?.host ?? null;
   const recipientHome = typeof body.home === "string" && body.home.trim() ? body.home.trim() : linkHome ?? "local";
   const existingRecord = typeof body.record_path === "string" && body.record_path ? body.record_path : null;
-  const deliveryId = recipientHome !== "local" && !decisionKey
+  const deliveryId = !decisionKey
     ? (typeof body.delivery_id === "string" && body.delivery_id ? body.delivery_id : sha256(job.key).slice(0, 16))
     : null;
-  const handledRecord = existingRecord ? join(existingRecord.slice(0, existingRecord.lastIndexOf("/")), "handled", existingRecord.slice(existingRecord.lastIndexOf("/") + 1)) : null;
-  if (existingRecord && ((recipientHome === "local" && (existsSync(existingRecord) || Boolean(handledRecord && existsSync(handledRecord))))
-    || (recipientHome !== "local" && !deliveryId))) {
-    return { nativeId: task, steer: { home: recipientHome, task, recordPath: existingRecord, message, issue, deliveryId } };
-  }
   const delivery = deliveryId ? ["--fire-and-forget", deliveryId] : [];
   const args = [task, ...(decisionKey ? ["--resolve-key", decisionKey] : []), ...delivery, message];
   const result = spawnSync(join(home, "bin", "fm-send.sh"), args, {
@@ -258,7 +253,7 @@ function sendToTask(job: Job, body: JobPayload, db: StateDatabase, env: NodeJS.P
   const recordPath = typeof body.record_path === "string" && body.record_path
     ? body.record_path
     : reportedPath ?? (recipientHome === "local" ? join(home, "state", `${task}.inbox`, `${job.id}.record`) : join("state", `${task}.inbox`, `${job.id}.record`));
-  return { nativeId: task, steer: { home: recipientHome, task, recordPath, message, issue, deliveryId } };
+  return { nativeId: task, steer: { home: recipientHome, task, recordPath, message, issue, deliveryId, lifecycleId: activeLink?.lifecycle_id ?? null } };
 }
 
 function acknowledgeCore(job: Job, body: JobPayload, db: StateDatabase, env: NodeJS.ProcessEnv): JobOutcome {
@@ -503,7 +498,7 @@ export async function processJobs(options: {
           options.db.recordSteer({
             issue: result.steer.issue, home: result.steer.home, task: result.steer.task,
             record_path: result.steer.recordPath, message: result.steer.message,
-            delivery_id: result.steer.deliveryId, sent_at: completedAt,
+            delivery_id: result.steer.deliveryId, lifecycle_id: result.steer.lifecycleId, sent_at: completedAt,
           });
         }
         if (result.transitionedRole) {

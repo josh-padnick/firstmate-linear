@@ -47,3 +47,28 @@ test("remote recipient activity acknowledges through the remote probe interval",
   expect(db.steers().find((item) => item.id === steer.id)?.acked_at).not.toBeNull();
   db.close();
 });
+
+test("remote probes are throttled per steer", () => {
+  const home = mkdtempSync("/private/tmp/fml-steer-"); roots.push(home);
+  const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+  db.recordSteer({ issue: "ABC-1", home: "mini", task: "first", record_path: "/remote/state/first.inbox/one.json", sent_at: "2026-01-01T12:00:00Z" });
+  db.recordSteer({ issue: "ABC-2", home: "mini", task: "second", record_path: "/remote/state/second.inbox/two.json", sent_at: "2026-01-01T12:00:00Z" });
+  const probed: string[] = [];
+  const probe = (steer: { task: string }) => { probed.push(steer.task); return steer.task === "second" ? "acknowledged" as const : "unacknowledged" as const; };
+  expect(reconcileSteers(home, db, testWorkflowConfig(), { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:01:00Z") / 1000) }, new Set(), probe).acked).toBe(1);
+  expect(probed).toEqual(["first", "second"]);
+  db.close();
+});
+
+test("redelivery does not cross a replacement task lifecycle", () => {
+  const home = mkdtempSync("/private/tmp/fml-steer-"); roots.push(home);
+  const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+  db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T11:00:00Z", torn_down_at: null });
+  const lifecycle = db.taskLinks("ABC-1", true)[0]!.lifecycle_id;
+  db.recordSteer({ issue: "ABC-1", home: "local", task: "worker", record_path: join(home, "missing.msg"), lifecycle_id: lifecycle, sent_at: "2026-01-01T12:00:00Z" });
+  db.closeTask("worker", "2026-01-01T12:01:00Z");
+  db.linkTask({ task: "worker", issue: "ABC-2", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:02:00Z", torn_down_at: null });
+  expect(reconcileSteers(home, db, testWorkflowConfig(), { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:04:00Z") / 1000) }).redelivered).toBe(0);
+  expect(db.jobs()).toHaveLength(0);
+  db.close();
+});

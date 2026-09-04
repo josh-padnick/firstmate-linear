@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
 import { testWorkflowConfig } from "../testing/config.ts";
@@ -33,15 +34,20 @@ test("sustained host starvation emits once and clears only after a healthy windo
   db.close();
 });
 
-test("the remote host probe collects only the four smoke-detector fields", () => {
+test("the remote host probe emits a normalized smoke-detector sample", () => {
+  const root = mkdtempSync("/private/tmp/fml-host-probe-"); roots.push(root);
+  const bin = join(root, "bin"); mkdirSync(bin);
+  writeFileSync(join(bin, "vm_stat"), "#!/bin/sh\nprintf 'Mach Virtual Memory Statistics: (page size of 4096 bytes)\\nPages free: 256.\\nPages inactive: 512.\\n'\n");
+  writeFileSync(join(bin, "ps"), "#!/bin/sh\nprintf 'COMMAND\\nnode worker.js\\nnode worker.js\\npython service.py\\n'\n");
+  chmodSync(join(bin, "vm_stat"), 0o755); chmodSync(join(bin, "ps"), 0o755);
   const script = remoteSampleScript();
-  const encoded = /b64decode\('([^']+)'\)/.exec(script)?.[1] ?? "";
-  const program = Buffer.from(encoded, "base64").toString("utf8");
-  expect(program).toContain("load1");
-  expect(program).toContain("cores");
-  expect(program).toContain("free_mb");
-  expect(program).toContain("top_processes");
-  expect(program).not.toContain("kill");
+  const result = spawnSync("sh", ["-c", script], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+  expect(result.status).toBe(0);
+  const sample = JSON.parse(result.stdout);
+  expect(Object.keys(sample).sort()).toEqual(["cores", "free_mb", "load1", "top_processes"]);
+  expect(sample).toMatchObject({ free_mb: 3, top_processes: ["2 node worker.js", "1 python service.py"] });
+  expect(sample.cores).toBeGreaterThan(0);
+  expect(Number.isFinite(sample.load1)).toBe(true);
 });
 
 test("remote host sampling uses the structured registry host", () => {

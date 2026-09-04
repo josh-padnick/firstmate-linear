@@ -23,12 +23,12 @@ function observation(detail: Record<string, unknown>): Observation {
   };
 }
 
-test("auto-mergeable verdict creates a merge wake and promise without a board move", () => {
+test("auto-mergeable verdict waits visibly until the configured gate check succeeds", () => {
   const { db } = setup();
   const config = testWorkflowConfig({ validationMode: "verdict" });
   expect(reconcileVerdicts(db, config, [observation({ verdict: "auto-mergeable" })]).handled).toBe(1);
-  expect(db.listEvents(["waiting-for-core"])[0]?.note).toContain("required: merge");
-  expect(db.jobs().map((job) => job.kind)).toEqual(["promise.implicit"]);
+  expect(db.listEvents(["waiting-for-core"])[0]?.note).toContain("is not successful");
+  expect(db.jobs()).toHaveLength(0);
   db.close();
 });
 
@@ -54,9 +54,32 @@ test("changes-requested relays findings to a live primary task and returns to bu
 test("hands-off auto merge stays silent only when the configured gate check is green", () => {
   const { db } = setup();
   const config = testWorkflowConfig({ validationMode: "verdict" });
-  reconcileVerdicts(db, config, [observation({ verdict: "auto-mergeable", autoMergeArmed: true, gateConclusion: "success" })]);
+  reconcileVerdicts(db, config, [observation({ verdict: "auto-mergeable", autoMergeArmed: true, checkConclusions: { "fleet-merge-gate": "success" } })]);
   expect(db.listEvents(["waiting-for-core"])).toHaveLength(0);
   expect(db.jobs().map((job) => job.kind)).toEqual(["promise.implicit"]);
+  db.close();
+});
+
+test("a durable verdict is consumed after the issue reaches validating", () => {
+  const { db } = setup();
+  db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:02:00Z" });
+  const item = observation({ verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" } });
+  db.observe(item);
+  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [item]).handled).toBe(0);
+  db.snapshot({ issue: "ABC-1", role: "validating", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:03:00Z" });
+  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), []).handled).toBe(1);
+  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), []).handled).toBe(0);
+  db.close();
+});
+
+test("needs-human remains visible when no captain gate is mapped", () => {
+  const { db } = setup();
+  const config = testWorkflowConfig({ validationMode: "verdict", roles: {
+    building: "Building", validating: "Validating", done: "Done", canceled: "Canceled",
+  } });
+  expect(reconcileVerdicts(db, config, [observation({ verdict: "needs-human", reason: "security review" })]).handled).toBe(1);
+  expect(db.listEvents(["waiting-for-core"])[0]?.note).toContain("security review");
+  expect(db.latestSnapshot("ABC-1")?.role).toBe("validating");
   db.close();
 });
 

@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, MIGRATE_TO_V11_SQL, MIGRATE_TO_V12_SQL, MIGRATE_TO_V13_SQL, MIGRATE_TO_V14_SQL, MIGRATE_TO_V15_SQL, MIGRATE_TO_V16_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, MIGRATE_TO_V11_SQL, MIGRATE_TO_V12_SQL, MIGRATE_TO_V13_SQL, MIGRATE_TO_V14_SQL, MIGRATE_TO_V15_SQL, MIGRATE_TO_V16_SQL, MIGRATE_TO_V17_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 import type { WorkflowRole } from "../config/schema.ts";
 
 export type EventDisposition =
@@ -164,6 +164,7 @@ export type SteerRecord = {
   record_path: string;
   message: string | null;
   delivery_id: string | null;
+  lifecycle_id: string | null;
   sent_at: string;
   acked_at: string | null;
   redelivered_at: string | null;
@@ -264,6 +265,7 @@ export class StateDatabase {
         if (from > 0 && from < 14 && !tableHasColumn(db, "task_links", "host")) db.exec(MIGRATE_TO_V14_SQL);
         if (from > 0 && from < 15 && !tableHasColumn(db, "steers", "message")) db.exec(MIGRATE_TO_V15_SQL);
         if (from > 0 && from < 16 && !tableHasColumn(db, "steers", "delivery_id")) db.exec(MIGRATE_TO_V16_SQL);
+        if (from > 0 && from < 17 && !tableHasColumn(db, "steers", "lifecycle_id")) db.exec(MIGRATE_TO_V17_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -843,12 +845,13 @@ export class StateDatabase {
       .run(id);
   }
 
-  recordSteer(value: Omit<SteerRecord, "id" | "message" | "delivery_id" | "acked_at" | "redelivered_at" | "stalled_event_id" | "waiting_on_host"> & { message?: string | null; delivery_id?: string | null }): SteerRecord {
+  recordSteer(value: Omit<SteerRecord, "id" | "message" | "delivery_id" | "lifecycle_id" | "acked_at" | "redelivered_at" | "stalled_event_id" | "waiting_on_host"> & { message?: string | null; delivery_id?: string | null; lifecycle_id?: string | null }): SteerRecord {
     const id = `steer:${sha256(`${value.home}:${value.task}:${value.record_path}`)}`;
-    this.raw.query(`INSERT INTO steers(id,issue,home,task,record_path,message,delivery_id,sent_at)
-      VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
-        message=COALESCE(steers.message,excluded.message),delivery_id=COALESCE(steers.delivery_id,excluded.delivery_id)`)
-      .run(id, value.issue, value.home, value.task, value.record_path, value.message ?? null, value.delivery_id ?? null, value.sent_at);
+    this.raw.query(`INSERT INTO steers(id,issue,home,task,record_path,message,delivery_id,lifecycle_id,sent_at)
+      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+        message=COALESCE(steers.message,excluded.message),delivery_id=COALESCE(steers.delivery_id,excluded.delivery_id),
+        lifecycle_id=COALESCE(steers.lifecycle_id,excluded.lifecycle_id)`)
+      .run(id, value.issue, value.home, value.task, value.record_path, value.message ?? null, value.delivery_id ?? null, value.lifecycle_id ?? null, value.sent_at);
     return this.raw.query("SELECT * FROM steers WHERE id=?").get(id) as SteerRecord;
   }
 
