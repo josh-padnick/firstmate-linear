@@ -91,7 +91,7 @@ export function runInboxV6(args: string[], env: NodeJS.ProcessEnv = process.env)
         process.stderr.write("fm-linear inbox: receipt does not authorize that event\n");
         return 1;
       }
-      db.handleWithReceipt(event.id, receiptId, note);
+      db.handleWithReceipt(event.id, receiptId, config.captain.display_name, note);
       process.stdout.write(`fm-linear inbox: handled ${event.id}\n`);
       return 0;
     }

@@ -133,7 +133,7 @@ describe("job worker", () => {
     db.nextForCore("request:ack", 0);
     db.bindDeliverySequence("event:ack", 9);
     const receipt = db.issueReceipt(["event:ack"]);
-    db.handleWithReceipt("event:ack", receipt, "handled", "2026-01-01T00:00:02Z");
+    db.handleWithReceipt("event:ack", receipt, "Captain", "handled", "2026-01-01T00:00:02Z");
     const env = { FM_HOME: root, FM_ROOT_OVERRIDE: firstmate, FM_LINEAR_NOW_EPOCH: "1767225603" };
     const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env });
     expect(result.done).toBe(1);

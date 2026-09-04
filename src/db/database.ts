@@ -384,7 +384,7 @@ export class StateDatabase {
     if (result.changes !== 1) throw new Error(`receipt missing or already consumed: ${id}`);
   }
 
-  handleWithReceipt(eventId: string, receiptId: string, note: string | null, at = nowIso()): void {
+  handleWithReceipt(eventId: string, receiptId: string, captain: string, note: string | null, at = nowIso()): void {
     this.transaction(() => {
       const receipt = this.receipt(receiptId);
       if (!receipt || receipt.consumed_at || !receipt.event_ids.includes(eventId)) {
@@ -392,7 +392,7 @@ export class StateDatabase {
       }
       const authorized = this.event(eventId);
       if (!authorized) throw new Error(`event not found: ${eventId}`);
-      this.assertReceiptFresh(authorized.issue, authorized.author, receipt);
+      this.assertReceiptFresh(authorized.issue, captain, receipt);
       const result = this.raw.query("UPDATE events SET disposition='handled-by-core',disposition_at=?,note=COALESCE(?,note) WHERE id=? AND disposition='waiting-for-core'")
         .run(at, note, eventId);
       if (result.changes !== 1) throw new Error(`event is not awaiting core handling: ${eventId}`);

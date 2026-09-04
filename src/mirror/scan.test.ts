@@ -57,6 +57,19 @@ describe("fleet scanner", () => {
     db.close();
   });
 
+  test("relinking does not replay an unchanged status file", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    writeFileSync(join(home, "state", "task.status"), "done: old lifecycle\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    scanFleet(home, db);
+    db.closeTask("task", "2026-01-01T00:01:00Z");
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:02:00Z", torn_down_at: null });
+
+    expect(scanFleet(home, db).observations.filter((item) => item.source === "status")).toHaveLength(0);
+    db.close();
+  });
+
   test("replacing a status file resets its cursor", () => {
     const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
     const path = join(home, "state", "task.status");
@@ -65,6 +78,20 @@ describe("fleet scanner", () => {
     db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
     scanFleet(home, db);
     unlinkSync(path);
+    writeFileSync(path, "needs-decision: choose a direction\nworking: replacement is longer\n");
+
+    const observations = scanFleet(home, db).observations;
+    expect(observations).toContainEqual(expect.objectContaining({ verb: "needs-decision", note: "choose a direction" }));
+    db.close();
+  });
+
+  test("an in-place status replacement resets its cursor", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const path = join(home, "state", "task.status");
+    writeFileSync(path, "working: old\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    scanFleet(home, db);
     writeFileSync(path, "needs-decision: choose a direction\nworking: replacement is longer\n");
 
     const observations = scanFleet(home, db).observations;

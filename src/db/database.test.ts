@@ -141,7 +141,7 @@ describe("state database", () => {
     const db = database();
     db.capture(event("event:early"));
     const receipt = db.issueReceipt(["event:early"]);
-    db.handleWithReceipt("event:early", receipt, "handled");
+    db.handleWithReceipt("event:early", receipt, "captain", "handled");
     expect(db.jobs()).toHaveLength(0);
     expect(db.nextForCore("request:later", 0)).toBeNull();
     db.close();
@@ -166,7 +166,7 @@ describe("state database", () => {
     db.capture(event("event:delayed"));
     db.nextForCore("request:delayed", 0);
     const receipt = db.issueReceipt(["event:delayed"]);
-    db.handleWithReceipt("event:delayed", receipt, "done");
+    db.handleWithReceipt("event:delayed", receipt, "captain", "done");
     expect(db.jobs()).toHaveLength(0);
     db.bindDeliverySequence("event:delayed", 9);
     expect(db.jobs()).toHaveLength(1);
@@ -180,7 +180,7 @@ describe("state database", () => {
     const receipt = db.issueReceipt(["event:read"], "2026-01-01T00:00:02Z");
     db.capture({ ...event("event:late"), created_at: "2025-01-01T00:00:00Z", captured_at: "2026-01-01T00:00:02Z" });
     expect(() => db.actWithReceipt({ receiptId: receipt, issue: "ABC-1", captain: "captain", jobs: [], note: "done" })).toThrow("stale receipt");
-    expect(() => db.handleWithReceipt("event:read", receipt, "done")).toThrow("stale receipt");
+    expect(() => db.handleWithReceipt("event:read", receipt, "captain", "done")).toThrow("stale receipt");
     expect(db.event("event:read")?.disposition).toBe("waiting-for-core");
     db.close();
   });
@@ -191,7 +191,7 @@ describe("state database", () => {
     db.capture({ ...event("event:new"), created_at: "2026-01-01T00:00:02Z" });
     const receipt = db.issueReceipt(["event:old"]);
     expect(() => db.actWithReceipt({ receiptId: receipt, issue: "ABC-1", captain: "captain", jobs: [], note: "done" })).toThrow("event:new must be read first");
-    expect(() => db.handleWithReceipt("event:old", receipt, "done")).toThrow("event:new must be read first");
+    expect(() => db.handleWithReceipt("event:old", receipt, "captain", "done")).toThrow("event:new must be read first");
     expect(db.receipt(receipt)?.consumed_at).toBeNull();
     db.close();
   });

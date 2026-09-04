@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase, type Observation } from "../db/database.ts";
-import { planMirror } from "./plan.ts";
+import { applyMirrorPlan, planMirror } from "./plan.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -133,6 +133,27 @@ describe("mirror plan", () => {
     db.observe(done);
     const state = planMirror(db, config, [done]).actions.find((action) => action.job.kind === "linear.issue-state");
     expect(state?.job.payload).toMatchObject({ state: "Done" });
+    db.close();
+  });
+
+  test("a completed mirror job is revived when drift returns", () => {
+    const root = mkdtempSync("/private/tmp/fml-plan-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    const enabled = structuredClone(config);
+    enabled.features.mirror = "on";
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.linkTask({ task: "primary", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const done: Observation = { id: "done-repeat", source: "status", task: "primary", issue: "ABC-1", verb: "done", key: "default", note: null, observed_at: "2026-01-01T00:01:00Z" };
+    db.observe(done);
+    const first = planMirror(db, enabled, [done]);
+    applyMirrorPlan(db, enabled, first);
+    const job = db.jobs().find((item) => item.kind === "linear.issue-state")!;
+    db.finishJob(job.id, "issue-id", "2026-01-01T00:02:00Z");
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "service", last_signal: null, observed_at: "2026-01-01T00:03:00Z" });
+
+    applyMirrorPlan(db, enabled, planMirror(db, enabled, []));
+
+    expect(db.jobs().find((item) => item.id === job.id)).toMatchObject({ state: "pending", attempts: 0, done_at: null });
     db.close();
   });
 

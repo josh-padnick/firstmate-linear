@@ -114,7 +114,7 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
 export function applyMirrorPlan(db: StateDatabase, config: WorkflowConfig, plan: { actions: MirrorAction[] }): number {
   if (config.features.mirror !== "on") return 0;
   return db.transaction(() => {
-    for (const action of plan.actions) db.enqueue(action.job);
+    for (const action of plan.actions) db.enqueueReconciliation(action.job);
     return plan.actions.length;
   });
 }

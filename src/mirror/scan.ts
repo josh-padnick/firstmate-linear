@@ -26,18 +26,21 @@ export function parseStatusLine(line: string): { verb: string; key: string; note
   return { verb: match[1], key: match[2] ?? nested?.[1] ?? "default", note: nested?.[2] ?? note };
 }
 
-function readNewLines(db: StateDatabase, path: string, identity: string): { rows: Array<{ line: string; offset: number }>; cursorName: string; cursorValue: string } | null {
+function readNewLines(db: StateDatabase, path: string, fileIdentity: string): { rows: Array<{ line: string; offset: number }>; cursorName: string; cursorValue: string } | null {
   const name = `status:${path}`;
   const raw = db.cursor(name);
+  const content = readFileSync(path);
   let offset = 0;
   if (raw) {
     try {
-      const cursor = JSON.parse(raw) as { offset?: number; identity?: string };
-      if (cursor.identity === identity) offset = Number(cursor.offset ?? 0);
+      const cursor = JSON.parse(raw) as { offset?: number; file_identity?: string; prefix_sha?: string };
+      const candidate = Number(cursor.offset ?? 0);
+      if (cursor.file_identity === fileIdentity
+        && candidate >= 0
+        && candidate <= content.length
+        && cursor.prefix_sha === sha256(content.subarray(0, candidate))) offset = candidate;
     } catch { offset = 0; }
   }
-  const content = readFileSync(path);
-  if (offset < 0 || offset > content.length) offset = 0;
   const remaining = content.subarray(offset);
   const lastNewline = remaining.lastIndexOf(10);
   if (lastNewline < 0) return null;
@@ -48,7 +51,8 @@ function readNewLines(db: StateDatabase, path: string, identity: string): { rows
     rows.push({ line, offset: offset + consumed });
     consumed += Buffer.byteLength(line) + 1;
   }
-  return { rows, cursorName: name, cursorValue: JSON.stringify({ offset: offset + lastNewline + 1, identity }) };
+  const nextOffset = offset + lastNewline + 1;
+  return { rows, cursorName: name, cursorValue: JSON.stringify({ offset: nextOffset, file_identity: fileIdentity, prefix_sha: sha256(content.subarray(0, nextOffset)) }) };
 }
 
 function importLegacyLinks(home: string, db: StateDatabase): void {
@@ -92,8 +96,8 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
     if (!links.length) continue;
     const path = join(state, name);
     const stat = statSync(path);
-    const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}:${links.map((link) => link.lifecycle_id).sort().join(",")}`;
-    const batch = readNewLines(db, path, identity);
+    const fileIdentity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+    const batch = readNewLines(db, path, fileIdentity);
     if (!batch) continue;
     const inserted: Observation[] = [];
     db.transaction(() => {
