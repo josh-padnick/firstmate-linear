@@ -51,17 +51,21 @@ describe("v6 act read gate", () => {
     const { env, receipt } = setup();
     const db = StateDatabase.open(env);
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
+    const previous = db.createPromise({ issue: "ABC-1", source_event_id: "event:previous", expected_event: "status:done", deadline_at: "2026-01-01T00:20:00Z", reply_job_id: "job:previous", created_at: "2026-01-01T00:01:00Z" });
     db.close();
     env.FM_LINEAR_NOW_EPOCH = String(Date.parse("2026-01-01T00:02:00Z") / 1000);
 
     expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Validation is running", "--next", "pr-green", "--by", "30m"], env)).toBe(0);
 
     const after = StateDatabase.open(env);
-    expect(after.promises("ABC-1")[0]).toMatchObject({ expected_event: "pr-green", deadline_at: "2026-01-01T00:32:00Z", state: "open" });
+    const pending = after.promises("ABC-1").find((item) => item.expected_event === "pr-green")!;
+    expect(pending).toMatchObject({ deadline_at: "2026-01-01T00:32:00Z", state: "pending" });
+    expect(after.promise(previous.id)?.state).toBe("open");
     const comment = after.jobs().find((job) => job.kind === "linear.comment")!;
     expect(JSON.parse(comment.payload).body).toContain("Next: pr-green by 30m");
     after.finishJob(comment.id, "linear-comment-1", "2026-01-01T00:03:00Z");
-    expect(after.promises("ABC-1")[0]?.reply_comment_id).toBe("linear-comment-1");
+    expect(after.promise(pending.id)).toMatchObject({ state: "open", reply_comment_id: "linear-comment-1" });
+    expect(after.promise(previous.id)).toMatchObject({ state: "superseded", superseded_by: pending.id });
     after.close();
   });
 

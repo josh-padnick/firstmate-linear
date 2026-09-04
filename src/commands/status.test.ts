@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { spyOn } from "bun:test";
 import { StateDatabase } from "../db/database.ts";
 import { renderEvent } from "./inbox-v6.ts";
-import { buildIssueStatus, isCaptainStatusQuery } from "./status.ts";
+import { buildIssueStatus, isCaptainStatusQuery, runStatus } from "./status.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -36,5 +37,21 @@ describe("issue status context", () => {
       receipt_id: null, raw_ref: JSON.stringify({ required: "inspect validation and send a nudge" }),
     };
     expect(renderEvent(event)).toContain("required: inspect validation and send a nudge");
+  });
+
+  test("the issue status command reads busy state from Firstmate home", () => {
+    const root = mkdtempSync("/private/tmp/fml-status-"); roots.push(root);
+    const runtimeState = join(root, "runtime");
+    mkdirSync(join(root, "state"), { recursive: true });
+    const env = { FM_HOME: root, FM_STATE_OVERRIDE: runtimeState };
+    const db = StateDatabase.open(env);
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
+    db.close();
+    writeFileSync(join(root, "state", "worker.busy-state"), "v1 gen=g1.1.1 seq=1 state=busy source=test event=turn ts=1\n");
+    let output = "";
+    const write = spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => { output += String(chunk); return true; });
+    try { expect(runStatus(["--issue", "ABC-1"], env)).toBe(0); }
+    finally { write.mockRestore(); }
+    expect(output).toContain("worker (primary, busy)");
   });
 });

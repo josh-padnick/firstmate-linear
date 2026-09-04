@@ -53,7 +53,7 @@ export function runStatus(args: string[], env: NodeJS.ProcessEnv = process.env):
       const issue = optionValue(args, "--issue")?.trim();
       if (!issue) throw new Error("--issue requires an issue identifier");
       const db = StateDatabase.open(env);
-      try { process.stdout.write(`${buildIssueStatus(runtimePaths(env).root, db, issue)}\n`); }
+      try { process.stdout.write(`${buildIssueStatus(runtimePaths(env).home, db, issue)}\n`); }
       finally { db.close(); }
       return 0;
     }

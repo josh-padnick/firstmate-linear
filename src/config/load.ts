@@ -139,10 +139,26 @@ export function parseConfig(raw: unknown, path: string): WorkflowConfig {
       review_walkthrough: templatePath(templates.review_walkthrough, "review-walkthrough.html", path, ".templates.review_walkthrough"),
     },
     deadlines: {
-      progress: Object.fromEntries(Object.entries(DEFAULT_PROGRESS_DEADLINES).map(([status, fallback]) => [
-        status,
-        duration(progress[status], path, `.deadlines.progress.${status}`, fallback),
-      ])),
+      progress: (() => {
+        const effective = { ...DEFAULT_PROGRESS_DEADLINES };
+        const defaultsByKey: Partial<Record<StatusKey, number>> = {
+          plan_in_progress: DEFAULT_PROGRESS_DEADLINES[DEFAULT_STATUSES.plan_in_progress],
+          building: DEFAULT_PROGRESS_DEADLINES[DEFAULT_STATUSES.building],
+          validating_code: DEFAULT_PROGRESS_DEADLINES[DEFAULT_STATUSES.validating_code],
+          waiting: DEFAULT_PROGRESS_DEADLINES[DEFAULT_STATUSES.waiting],
+          needs_firstmate_decision: DEFAULT_PROGRESS_DEADLINES[DEFAULT_STATUSES.needs_firstmate_decision],
+        };
+        for (const team of teams) {
+          for (const [key, fallback] of Object.entries(defaultsByKey) as Array<[StatusKey, number]>) {
+            const status = team.statuses[key];
+            effective[status] = effective[status] === undefined ? fallback : Math.min(effective[status]!, fallback);
+          }
+        }
+        for (const [status, value] of Object.entries(progress)) {
+          effective[status] = duration(value, path, `.deadlines.progress.${status}`, effective[status] ?? 1);
+        }
+        return effective;
+      })(),
       stalled: { mention: duration(stalled.mention, path, ".deadlines.stalled.mention", 30 * 60) },
     },
     promises: {

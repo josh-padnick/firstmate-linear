@@ -178,6 +178,35 @@ describe("state database", () => {
     migrated.close();
   });
 
+  test("v3 migration preserves active promises and adds delivery states", () => {
+    const db = database();
+    const path = db.path;
+    const promise = db.createPromise({
+      issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green",
+      deadline_at: "2026-01-01T00:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T00:00:00Z",
+    });
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("PRAGMA user_version = 3;");
+    legacy.close();
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.promise(promise.id)?.state).toBe("open");
+    expect(migrated.stagePromise({
+      issue: "ABC-2", source_event_id: "event:two", expected_event: "comment",
+      deadline_at: "2026-01-01T01:00:00Z", reply_job_id: "job:reply-two", created_at: "2026-01-01T00:30:00Z",
+    }).state).toBe("pending");
+    migrated.close();
+  });
+
+  test("running jobs are reclaimed only after their lease expires", () => {
+    const db = database();
+    db.enqueue({ key: "leased", kind: "linear.comment", target: "ABC-1", payload: {} }, "2026-01-01T00:00:00Z");
+    expect(db.claimDueJobs(20, "2026-01-01T00:00:00Z")).toHaveLength(1);
+    expect(db.claimDueJobs(20, "2026-01-01T00:04:59Z")).toHaveLength(0);
+    expect(db.claimDueJobs(20, "2026-01-01T00:05:00Z")).toMatchObject([{ state: "running", attempts: 2 }]);
+    db.close();
+  });
+
   test("report consumption follows insertion order when a late event has an old source timestamp", () => {
     const db = database();
     db.capture(event("event:first"));

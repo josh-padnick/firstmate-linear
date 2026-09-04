@@ -44,7 +44,11 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
   }
   if (expected.startsWith("board:")) {
     const state = expected.slice("board:".length);
-    const found = db.snapshots(promise.issue).find((item) => atOrAfter(item.observed_at, promise.created_at) && item.state === state);
+    const snapshots = db.snapshots(promise.issue);
+    const found = snapshots.find((item, index) => index > 0
+      && atOrAfter(item.observed_at, promise.created_at)
+      && item.state === state
+      && snapshots[index - 1]!.state !== state);
     return found ? { id: `snapshot:${promise.issue}:${found.observed_at}`, kind: "board", at: found.observed_at, detail: `board ${state}` } : null;
   }
   if (["pr-reported", "pr-green", "pr-merged"].includes(expected)) {
@@ -52,7 +56,7 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
     return found ? { id: found.id, kind: "pr", at: found.observed_at, detail: expected } : null;
   }
   if (expected === "comment") {
-    const found = observations.find((item) => item.verb === "firstmate-comment");
+    const found = observations.find((item) => item.verb === "firstmate-comment" && item.key !== promise.reply_comment_id);
     return found ? { id: found.id, kind: "comment", at: found.observed_at, detail: "firstmate comment" } : null;
   }
   if (expected === "dispatch") {

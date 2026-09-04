@@ -53,4 +53,12 @@ describe("v6 config", () => {
     expect(config.deadlines?.stalled.mention).toBe(9 * 60);
     expect(config.promises).toEqual({ required_on_firstmate_owned: false, vocabulary: ["pr-green", "none"] });
   });
+
+  test("progress deadlines follow custom workflow status names", () => {
+    const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
+    const path = join(root, "config.yaml");
+    writeFileSync(path, `${yaml().replace("      building: Building", "      building: In Progress")}deadlines:\n  progress: { In Progress: 7m }\n`);
+    const config = loadConfigFile(path);
+    expect(config.deadlines?.progress["In Progress"]).toBe(7 * 60);
+  });
 });

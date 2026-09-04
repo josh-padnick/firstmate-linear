@@ -4,8 +4,8 @@ import { Database } from "bun:sqlite";
 import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
-import { compareIso, nowIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
 export type EventDisposition =
   | "captured"
@@ -63,7 +63,7 @@ export type NewJob = {
   nextAttemptAt?: string;
 };
 
-export type PromiseState = "open" | "kept" | "overdue" | "superseded";
+export type PromiseState = "pending" | "open" | "kept" | "overdue" | "superseded" | "failed";
 
 export type PromiseRecord = {
   id: string;
@@ -153,6 +153,7 @@ export class StateDatabase {
       try {
         db.exec(SCHEMA_SQL);
         if (from === 1) db.exec(MIGRATE_TO_V2_SQL);
+        if (from === 3) db.exec(MIGRATE_TO_V4_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -376,7 +377,7 @@ export class StateDatabase {
       if (options.promise) {
         const reply = enqueued.find((job) => job.kind === "linear.comment");
         if (!reply) throw new Error("a promise requires a captain-facing reply job");
-        this.createPromise({ ...options.promise, source_event_id: relevant.at(-1)!.id, reply_job_id: reply.id });
+        this.stagePromise({ ...options.promise, source_event_id: relevant.at(-1)!.id, reply_job_id: reply.id });
       }
       for (const event of relevant) {
         this.raw.query("UPDATE events SET disposition='handled-by-core',disposition_at=?,note=? WHERE id=?")
@@ -429,25 +430,38 @@ export class StateDatabase {
   }
 
   claimDueJobs(limit = 20, at = nowIso()): Job[] {
+    const epoch = parseIso(at);
+    if (epoch === null) throw new Error(`invalid job claim time: ${at}`);
+    const leaseUntil = formatIso(epoch + 5 * 60);
     return this.transaction(() => {
-      const jobs = this.raw.query(`SELECT * FROM jobs WHERE state IN ('pending','retry')
+      const jobs = this.raw.query(`SELECT * FROM jobs WHERE state IN ('pending','retry','running')
         AND next_attempt_at<=? ORDER BY created_at LIMIT ?`).all(at, limit) as Job[];
       for (const job of jobs) {
-        this.raw.query("UPDATE jobs SET state='running',attempts=attempts+1 WHERE id=?").run(job.id);
+        this.raw.query("UPDATE jobs SET state='running',attempts=attempts+1,next_attempt_at=? WHERE id=?").run(leaseUntil, job.id);
       }
-      return jobs.map((job) => ({ ...job, state: "running", attempts: job.attempts + 1 }));
+      return jobs.map((job) => ({ ...job, state: "running", attempts: job.attempts + 1, next_attempt_at: leaseUntil }));
     });
   }
 
   finishJob(id: string, nativeId: string | null = null, at = nowIso()): void {
     this.raw.query("UPDATE jobs SET state='done',native_id=COALESCE(?,native_id),done_at=?,last_error=NULL WHERE id=?")
       .run(nativeId, at, id);
-    if (nativeId) this.raw.query("UPDATE promises SET reply_comment_id=? WHERE reply_job_id=?").run(nativeId, id);
+    if (nativeId) {
+      const pending = this.raw.query("SELECT id,issue FROM promises WHERE reply_job_id=? AND state='pending'").get(id) as { id: string; issue: string } | null;
+      if (pending) {
+        this.raw.query("UPDATE promises SET state='superseded',superseded_by=? WHERE issue=? AND state IN ('open','overdue') AND id<>?")
+          .run(pending.id, pending.issue, pending.id);
+        this.raw.query("UPDATE promises SET state='open',reply_comment_id=? WHERE id=? AND state='pending'").run(nativeId, pending.id);
+      } else {
+        this.raw.query("UPDATE promises SET reply_comment_id=? WHERE reply_job_id=?").run(nativeId, id);
+      }
+    }
   }
 
   retryJob(id: string, error: string, nextAttemptAt: string, dead = false): void {
     this.raw.query("UPDATE jobs SET state=?,last_error=?,next_attempt_at=? WHERE id=?")
       .run(dead ? "dead" : "retry", error.slice(0, 2000), nextAttemptAt, id);
+    if (dead) this.raw.query("UPDATE promises SET state='failed' WHERE reply_job_id=? AND state='pending'").run(id);
   }
 
   jobs(states?: JobState[]): Job[] {
@@ -554,6 +568,17 @@ export class StateDatabase {
     this.raw.query(`INSERT OR IGNORE INTO promises(
       id,issue,source_event_id,expected_event,deadline_at,reply_job_id,created_at,state
     ) VALUES(?,?,?,?,?,?,?,'open')`).run(
+      id, value.issue, value.source_event_id, value.expected_event, value.deadline_at,
+      value.reply_job_id, value.created_at,
+    );
+    return this.promise(id)!;
+  }
+
+  stagePromise(value: NewPromise): PromiseRecord {
+    const id = `promise:${sha256(`${value.issue}:${value.source_event_id}:${value.expected_event}:${value.deadline_at}:${value.reply_job_id}`)}`;
+    this.raw.query(`INSERT OR IGNORE INTO promises(
+      id,issue,source_event_id,expected_event,deadline_at,reply_job_id,created_at,state
+    ) VALUES(?,?,?,?,?,?,?,'pending')`).run(
       id, value.issue, value.source_event_id, value.expected_event, value.deadline_at,
       value.reply_job_id, value.created_at,
     );

@@ -88,6 +88,22 @@ describe("job worker", () => {
     db.close();
   });
 
+  test("a dead reply job fails its pending promise without superseding the active promise", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-comment.json"), JSON.stringify({ data: { commentCreate: { success: false, comment: null } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    const active = db.createPromise({ issue: "ABC-1", source_event_id: "event:active", expected_event: "pr-green", deadline_at: "2026-01-01T00:30:00Z", reply_job_id: "job:active", created_at: "2026-01-01T00:00:00Z" });
+    const job = db.enqueue({ key: "comment:dead", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "Hello", actor: "core" } }, "2026-01-01T00:00:00Z");
+    const pending = db.stagePromise({ issue: "ABC-1", source_event_id: "event:new", expected_event: "pr-merged", deadline_at: "2026-01-01T01:00:00Z", reply_job_id: job.id, created_at: "2026-01-01T00:00:00Z" });
+    const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" }, maxAttempts: 1 });
+    expect(result.dead).toBe(1);
+    expect(db.promise(pending.id)?.state).toBe("failed");
+    expect(db.promise(active.id)?.state).toBe("open");
+    db.close();
+  });
+
   test("an ambiguous attachment failure verifies the URL and does not duplicate", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);

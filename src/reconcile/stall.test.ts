@@ -96,6 +96,41 @@ describe("stall reconciliation", () => {
     db.close();
   });
 
+  test("a comment promise ignores its own reply and accepts a later comment", () => {
+    const { root, db } = setup();
+    const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "comment", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    db.raw.query("UPDATE promises SET reply_comment_id=? WHERE id=?").run("comment:reply", promise.id);
+    db.observe({ id: "obs:reply", source: "summary", task: null, issue: "ABC-1", verb: "firstmate-comment", key: "comment:reply", note: null, observed_at: "2026-01-01T12:01:00Z" });
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:02:00Z") / 1000) });
+    expect(db.promise(promise.id)?.state).toBe("open");
+    db.observe({ id: "obs:later", source: "summary", task: null, issue: "ABC-1", verb: "firstmate-comment", key: "comment:later", note: null, observed_at: "2026-01-01T12:03:00Z" });
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:04:00Z") / 1000) });
+    expect(db.promise(promise.id)).toMatchObject({ state: "kept", observation_id: "obs:later" });
+    db.close();
+  });
+
+  test("a board promise requires a post-promise state transition", () => {
+    const { root, db } = setup();
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T11:59:00Z" });
+    const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "board:Done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
+    db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:02:00Z" });
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:03:00Z") / 1000) });
+    expect(db.promise(promise.id)?.state).toBe("kept");
+    expect(db.promise(promise.id)?.observation_id).toContain("12:01:00Z");
+    db.close();
+  });
+
+  test("an unchanged post-promise board snapshot does not keep a promise", () => {
+    const { root, db } = setup();
+    db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T11:59:00Z" });
+    const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "board:Done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:02:00Z") / 1000) });
+    expect(db.promise(promise.id)?.state).toBe("open");
+    db.close();
+  });
+
   test("a busy primary worker suppresses the heartbeat while the same idle issue stalls", () => {
     const { root, db } = setup();
     mkdirSync(join(root, "state"));

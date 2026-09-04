@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS promises (
   reply_job_id TEXT NOT NULL,
   reply_comment_id TEXT,
   created_at TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('open', 'kept', 'overdue', 'superseded')),
+  state TEXT NOT NULL CHECK (state IN ('pending', 'open', 'kept', 'overdue', 'superseded', 'failed')),
   observation_id TEXT,
   superseded_by TEXT,
   stalled_event_id TEXT
@@ -134,4 +134,26 @@ CREATE INDEX IF NOT EXISTS promises_issue_state_idx ON promises(issue,state,crea
 export const MIGRATE_TO_V2_SQL = `
 ALTER TABLE receipts ADD COLUMN event_rowid INTEGER NOT NULL DEFAULT 0;
 UPDATE receipts SET consumed_at=COALESCE(consumed_at,issued_at);
+`;
+
+export const MIGRATE_TO_V4_SQL = `
+ALTER TABLE promises RENAME TO promises_v3;
+DROP INDEX promises_issue_state_idx;
+CREATE TABLE promises (
+  id TEXT PRIMARY KEY,
+  issue TEXT NOT NULL,
+  source_event_id TEXT NOT NULL,
+  expected_event TEXT NOT NULL,
+  deadline_at TEXT NOT NULL,
+  reply_job_id TEXT NOT NULL,
+  reply_comment_id TEXT,
+  created_at TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'open', 'kept', 'overdue', 'superseded', 'failed')),
+  observation_id TEXT,
+  superseded_by TEXT,
+  stalled_event_id TEXT
+);
+INSERT INTO promises SELECT * FROM promises_v3;
+DROP TABLE promises_v3;
+CREATE INDEX promises_issue_state_idx ON promises(issue,state,created_at);
 `;
