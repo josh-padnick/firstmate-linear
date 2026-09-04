@@ -81,11 +81,14 @@ If a newer captain comment arrives between reading and acting, the write is refu
 
 Captain-facing replies on Firstmate-owned issues must declare the next observable event and a deadline with `--next` and `--by`.
 Use `--next none` when no follow-up is expected.
-The service records the same promise shown in the reply's `Next:` line and emits one specific `stalled` event if it becomes overdue.
+The service records the same promise shown in the reply's `Next:` line and keeps one specific `stalled` event pending at a time if it becomes overdue.
+While the promise remains overdue, that event is refreshed at each missed promise interval.
 
 The service also checks deterministic progress heartbeats without periodically waking the model.
 It emits a `stalled` event only when a Firstmate-owned issue exceeds its configured status deadline and no linked primary task is busy.
 Run `fm-linear status --issue ENG-123` to inspect the last observed progress, open promises, and linked task states.
+When the captain asks `status`, `current status`, or `update` on a Firstmate-owned issue, `inbox show` gives the model those same observed facts as reply context.
+The service never generates the captain-facing answer itself.
 
 The exact normalized comments `approved` and `lgtm` are approvals only while an issue is in an approval status.
 Conditional text such as `Approved if you fix X` is feedback and returns ownership to Firstmate.

@@ -1,5 +1,5 @@
 import type { TeamConfig, WorkflowConfig } from "../config/schema.ts";
-import type { EventDisposition, IssueSnapshot, NewJob } from "../db/database.ts";
+import type { EventDisposition, NewIssueSnapshot, NewJob } from "../db/database.ts";
 
 export const TOKENS = [
   "start-now",
@@ -82,7 +82,7 @@ function gateJob(event: ClassifiableEvent, target: string, expectedState: string
 export function classifyEvent(
   event: ClassifiableEvent,
   config: WorkflowConfig,
-  snapshot: IssueSnapshot | null,
+  snapshot: NewIssueSnapshot | null,
 ): Classification {
   const team = teamFor(config, event.team);
   if (!team) return { token: "noise", disposition: "ignored", jobs: [], note: "unmanaged team" };

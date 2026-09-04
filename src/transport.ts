@@ -36,13 +36,15 @@ export type TransportResult =
   | { ok: true; value: TransportSuccess }
   | { ok: false; error: TransportFailure };
 
+type FetchImplementation = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
+
 export type TransportOptions = {
   apiKey?: string;
   fixtureDir?: string;
   fixtureLog?: string;
   recordDir?: string;
   timeoutSeconds?: number;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchImplementation;
 };
 
 function fail(
