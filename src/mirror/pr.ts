@@ -101,13 +101,12 @@ function recordPrState(db: StateDatabase, observation: Observation, link: TaskLi
 export function scanPullRequests(home: string, db: StateDatabase, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): { observations: Observation[]; findings: Array<{ code: string; issue: string; detail: string }> } {
   const observations: Observation[] = [];
   const findings: Array<{ code: string; issue: string; detail: string }> = [];
-  const activeTasks = new Set(db.taskLinks(undefined, true).map((link) => link.task));
   for (const link of db.taskLinks()) {
     const path = join(home, "state", `${link.task}.meta`);
     if (!existsSync(path)) continue;
     const generation = sidecarGeneration(path, "spawn_gen");
     if (generation && generation === link.blocked_meta_generation) continue;
-    if (link.torn_down_at && (activeTasks.has(link.task) || !generation || generation !== link.meta_generation)) continue;
+    if (link.torn_down_at && (!generation || generation !== link.meta_generation)) continue;
     const closeCursor = link.torn_down_at ? `pr-close:${link.lifecycle_id}` : null;
     if (closeCursor && db.cursor(closeCursor) === generation) continue;
     const values = meta(path);

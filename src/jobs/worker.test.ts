@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyEvent } from "../classify/classify.ts";
+import { runTask } from "../commands/task.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
 import { LinearTransport, type GraphqlPayload, type TransportResult } from "../transport.ts";
@@ -247,6 +248,34 @@ describe("job worker", () => {
     writeFileSync(metaPath, "spawn_gen=g1\npr=https://github.com/acme/repo/pull/1\npr_head=head2\npr_base=main\n");
     scanPullRequests(root, db, () => green("head2"), { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
     reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
+    expect(db.promise(promise.id)?.state).toBe("kept");
+    db.close();
+  });
+
+  test("PR progress survives close and relink before the next service scan", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures); mkdirSync(join(root, "state"));
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
+    writeFileSync(join(root, "state", "worker.meta"), "spawn_gen=g1\npr=https://github.com/acme/repo/pull/1\npr_head=head1\npr_base=main\n");
+    const env = { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:00:00Z") / 1000) };
+    expect(runTask(["link", "worker", "ABC-1"], env)).toBe(0);
+    let db = StateDatabase.open(env);
+    const originalLifecycle = db.taskLinks("ABC-1", true)[0]!.lifecycle_id;
+    const job = db.enqueue({ key: "comment:close-relink-pr", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "I will get CI green", actor: "core" } }, "2026-01-01T12:00:00Z");
+    const promise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: job.id, created_at: "2026-01-01T12:00:00Z" });
+    const snapshot = (state: string) => ({ state: "OPEN" as const, headRefOid: "head1", baseRefName: "main", requiredChecks: [{ name: "test", state }] });
+    await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), inspectPr: () => snapshot("fail"), env: { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:20:00Z") / 1000) } });
+    db.close();
+
+    expect(runTask(["close", "worker"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:21:00Z") / 1000) })).toBe(0);
+    expect(runTask(["link", "worker", "ABC-1"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) })).toBe(0);
+    db = StateDatabase.open(env);
+    const result = scanPullRequests(root, db, () => snapshot("pass"), { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:23:00Z") / 1000) });
+    reconcileStalls(root, db, config, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:23:00Z") / 1000) });
+
+    expect(result.observations).toContainEqual(expect.objectContaining({ verb: "pr-green", task_lifecycle_id: originalLifecycle }));
+    expect(result.observations.some((item) => item.task_lifecycle_id === db.taskLinks("ABC-1", true)[0]!.lifecycle_id)).toBe(false);
     expect(db.promise(promise.id)?.state).toBe("kept");
     db.close();
   });

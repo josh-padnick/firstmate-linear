@@ -99,7 +99,11 @@ describe("PR signals", () => {
     const db = StateDatabase.open(firstEnv);
     const inspect = () => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] });
 
-    expect(scanPullRequests(home, db, inspect).observations).toHaveLength(0);
+    const sealed = scanPullRequests(home, db, inspect).observations;
+    const [closed, active] = db.taskLinks();
+    expect(sealed.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
+    expect(sealed.every((item) => item.task_lifecycle_id === closed?.lifecycle_id)).toBe(true);
+    expect(db.observations("ABC-1").filter((item) => item.task_lifecycle_id === active?.lifecycle_id)).toHaveLength(0);
     writeFileSync(metaPath, "spawn_gen=new\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
     expect(scanPullRequests(home, db, inspect).observations.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
     db.close();
@@ -116,7 +120,11 @@ describe("PR signals", () => {
     const db = StateDatabase.open(env);
     const inspect = () => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] });
 
-    expect(scanPullRequests(home, db, inspect).observations).toHaveLength(0);
+    const sealed = scanPullRequests(home, db, inspect).observations;
+    const [support, primary] = db.taskLinks();
+    expect(sealed.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
+    expect(sealed.every((item) => item.task_lifecycle_id === support?.lifecycle_id)).toBe(true);
+    expect(db.observations("ABC-1").filter((item) => item.task_lifecycle_id === primary?.lifecycle_id)).toHaveLength(0);
     writeFileSync(metaPath, "spawn_gen=next\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
     expect(scanPullRequests(home, db, inspect).observations.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
     db.close();
