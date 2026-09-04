@@ -210,4 +210,26 @@ describe("installer", () => {
     expect(existsSync(binary)).toBe(false);
     expect(existsSync(join(agents, "com.firstmate.linear.plist"))).toBe(false);
   });
+
+  test("failed installation recovery never claims a pre-existing plist", () => {
+    const root = mkdtempSync("/private/tmp/fml-install-"); roots.push(root);
+    const home = join(root, "home");
+    const runtime = join(root, "runtime");
+    const agents = join(root, "agents");
+    const plist = join(agents, "com.firstmate.linear.plist");
+    mkdirSync(agents, { recursive: true });
+    writeFileSync(plist, "user-owned plist\n");
+    const env = {
+      FM_HOME: home,
+      FM_LINEAR_INSTALL_ROOT: runtime,
+      FM_LINEAR_LAUNCH_AGENTS_DIR: agents,
+      FM_LINEAR_SKIP_LAUNCHCTL: "1",
+      PATH: join(root, "empty-path"),
+    };
+    expect(() => install({ harnesses: [], bind: false, env })).toThrow("refusing to overwrite unowned installation path");
+    uninstall(env);
+    expect(readFileSync(plist, "utf8")).toBe("user-owned plist\n");
+    expect(existsSync(runtime)).toBe(false);
+    expect(existsSync(join(home, "state", "linear", "install.json"))).toBe(false);
+  });
 });

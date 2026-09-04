@@ -65,7 +65,9 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
     const reduced = primary.size > 0 && latestPrimary ? reduceTaskState(foldSignals(taskSignals)) : null;
     let cause = latestPrimary ?? latest;
     let target: string | null = null;
-    if (latestPrimary?.verb === "dispatch") {
+    if (reduced === "needs-decision") target = team.statuses.needs_decision;
+    else if (reduced === "blocked" || reduced === "failed") target = team.statuses.needs_firstmate_decision;
+    else if (latestPrimary?.verb === "dispatch") {
       const building = db.latestSnapshots().filter((item) => {
         const snapshotTeam = item.issue.slice(0, item.issue.indexOf("-")).toUpperCase();
         return snapshotTeam === team.key && item.state === team.statuses.building;
@@ -73,8 +75,6 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
       target = building >= laneCap ? team.statuses.waiting : team.statuses.building;
     } else if (latestPrimary?.verb === "dispatch-scout") target = team.statuses.plan_in_progress;
     else if (latestPrimary?.verb === "lane-cap") target = team.statuses.waiting;
-    else if (reduced === "needs-decision") target = team.statuses.needs_decision;
-    else if (reduced === "blocked" || reduced === "failed") target = team.statuses.needs_firstmate_decision;
     else if (reduced === "done") {
       target = team.statuses.done;
       cause = primaryObservations.filter((item) => item.verb === "pr-merged").at(-1) ?? cause;

@@ -156,4 +156,19 @@ describe("mirror plan", () => {
     expect(state?.job.payload).toMatchObject({ state: "Building" });
     db.close();
   });
+
+  test("blocking primary signals outrank later control verbs", () => {
+    for (const verb of ["dispatch", "dispatch-scout", "lane-cap"]) {
+      const root = mkdtempSync("/private/tmp/fml-plan-"); roots.push(root);
+      const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+      db.snapshot({ issue: "ABC-1", state: "Prioritized", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+      for (const task of ["controller", "failed"]) db.linkTask({ task, issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+      const failed: Observation = { id: `${verb}:failed`, source: "status", task: "failed", issue: "ABC-1", verb: "failed", key: "build", note: null, observed_at: "2026-01-01T00:01:00Z" };
+      const control: Observation = { id: `${verb}:control`, source: "summary", task: "controller", issue: "ABC-1", verb, key: "default", note: null, observed_at: "2026-01-01T00:02:00Z" };
+      db.observe(failed); db.observe(control);
+      const state = planMirror(db, config, [control]).actions.find((action) => action.job.kind === "linear.issue-state");
+      expect(state?.job.payload).toMatchObject({ state: "Needs Firstmate Decision" });
+      db.close();
+    }
+  });
 });

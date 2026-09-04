@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -236,6 +236,10 @@ function writeInstallRecord(path: string, record: InstallRecord): void {
   atomicWriteFile(path, `${JSON.stringify(record, null, 2)}\n`);
 }
 
+function requireOwnedOrAbsent(path: string, ownedPath: string | undefined): void {
+  if (existsSync(path) && ownedPath !== path) throw new Error(`refusing to overwrite unowned installation path: ${path}`);
+}
+
 export function install(options: { harnesses: string[]; bind: boolean; env?: NodeJS.ProcessEnv }): { binary: string; plist: string } {
   const harnesses = [...new Set(options.harnesses)];
   const invalidHarness = harnesses.find((harness) => !["claude", "codex", "grok"].includes(harness));
@@ -260,6 +264,10 @@ export function install(options: { harnesses: string[]; bind: boolean; env?: Nod
   const stagedExtension = options.bind
     ? prior?.extension ?? { packageRoot: join(root, "extension", "1.0.0"), bindOutput: "", registerOutput: "", bindingDigest: null, ownerToken: null }
     : prior?.extension ?? null;
+  requireOwnedOrAbsent(binaryPath, prior?.binary);
+  requireOwnedOrAbsent(linearAxiGuardPath, prior?.linearAxiGuard);
+  requireOwnedOrAbsent(plist, prior?.plist);
+  if (options.bind && stagedExtension) requireOwnedOrAbsent(stagedExtension.packageRoot, prior?.extension?.packageRoot);
   const record: InstallRecord = {
     schema: "fm-linear.install.v1",
     binary: binaryPath,
