@@ -112,6 +112,19 @@ describe("stall reconciliation", () => {
     db.close();
   });
 
+  test("a primary observation remains primary after an active role change", () => {
+    const { root, db } = setup();
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
+    const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    db.observe({ id: "obs:green", source: "pr", task: "worker", issue: "ABC-1", verb: "pr-green", key: "pr", note: null, observed_at: "2026-01-01T12:10:00Z" });
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "support", worktree: null, harness: null, spawned_at: "2026-01-01T12:20:00Z", torn_down_at: null });
+
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:31:00Z") / 1000) });
+
+    expect(db.promise(promise.id)).toMatchObject({ state: "kept", observation_id: "obs:green" });
+    db.close();
+  });
+
   test("a closed post-promise dispatch keeps a dispatch promise", () => {
     const { root, db } = setup();
     const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "dispatch", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });

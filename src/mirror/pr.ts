@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import type { Observation, StateDatabase, TaskLink } from "../db/database.ts";
+import { type Observation, observationBelongsToTaskLink, type StateDatabase, type TaskLink } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { nowIso } from "../time.ts";
 
@@ -55,9 +55,12 @@ function record(db: StateDatabase, observation: Observation, out: Observation[])
   if (db.observe(observation)) out.push(observation);
 }
 
-function recordPrState(db: StateDatabase, observation: Observation, identity: string, out: Observation[]): void {
+function recordPrState(db: StateDatabase, observation: Observation, link: TaskLink, identity: string, out: Observation[]): void {
   const previous = db.observations(observation.issue)
-    .filter((item) => item.source === "pr" && item.task === observation.task && item.key === "pr" && ["pr-green", "pr-withdrawn"].includes(item.verb))
+    .filter((item) => item.source === "pr"
+      && item.key === "pr"
+      && observationBelongsToTaskLink(item, link)
+      && ["pr-green", "pr-withdrawn"].includes(item.verb))
     .at(-1);
   if (previous?.verb === observation.verb && previous.note === observation.note) return;
   record(db, { ...observation, id: `obs:${sha256(`${identity}:${previous?.id ?? "initial"}`)}` }, out);
@@ -76,24 +79,25 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
     try {
       const snapshot = inspect(url);
       const base = expectedBase(link, values);
+      const lifecycle = `${link.task}:${link.issue}:${link.spawned_at}`;
       record(db, {
-        id: `obs:${sha256(`${link.task}:${link.issue}:${url}:reported`)}`, source: "pr", task: link.task,
+        id: `obs:${sha256(`${lifecycle}:${url}:reported`)}`, source: "pr", task: link.task,
         issue: link.issue, verb: "pr-reported", key: "pr", note: url, observed_at: nowIso(env),
       }, observations);
       if (snapshot.state === "MERGED" && base && snapshot.baseRefName === base) {
         record(db, {
-          id: `obs:${sha256(`${link.task}:${link.issue}:${url}:${snapshot.headRefOid}:merged:${snapshot.baseRefName}`)}`, source: "pr", task: link.task,
+          id: `obs:${sha256(`${lifecycle}:${url}:${snapshot.headRefOid}:merged:${snapshot.baseRefName}`)}`, source: "pr", task: link.task,
           issue: link.issue, verb: "pr-merged", key: "pr", note: url, observed_at: nowIso(env),
         }, observations);
         continue;
       }
       if (snapshot.state === "MERGED" && !base) {
-        recordPrState(db, { id: "", source: "pr", task: link.task, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base unverified`, observed_at: nowIso(env) }, `${link.task}:${link.issue}:${url}:${snapshot.headRefOid}:base-unverified`, observations);
+        recordPrState(db, { id: "", source: "pr", task: link.task, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base unverified`, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-unverified`, observations);
         findings.push({ code: "PR_BASE_UNKNOWN", issue: link.issue, detail: `cannot verify expected base for ${url}` });
         continue;
       }
       if (snapshot.state === "MERGED" && snapshot.baseRefName !== base) {
-        recordPrState(db, { id: "", source: "pr", task: link.task, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base=${snapshot.baseRefName} expected=${base}`, observed_at: nowIso(env) }, `${link.task}:${link.issue}:${url}:${snapshot.headRefOid}:base-mismatch:${snapshot.baseRefName}`, observations);
+        recordPrState(db, { id: "", source: "pr", task: link.task, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base=${snapshot.baseRefName} expected=${base}`, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-mismatch:${snapshot.baseRefName}`, observations);
         findings.push({ code: "PR_BASE_MISMATCH", issue: link.issue, detail: `${url} merged into ${snapshot.baseRefName}, expected ${base}` });
         continue;
       }
@@ -105,7 +109,7 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
         issue: link.issue, verb: green ? "pr-green" : "pr-withdrawn", key: "pr",
         note: green ? `${url} head=${snapshot.headRefOid}` : `${url} current=${snapshot.headRefOid} expected=${expectedHead ?? "missing"}`,
         observed_at: nowIso(env),
-      }, `${link.task}:${link.issue}:${url}:${snapshot.headRefOid}:${green ? "green" : "not-green"}`, observations);
+      }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:${green ? "green" : "not-green"}`, observations);
     } catch (error) {
       findings.push({ code: "PR_INSPECTION_FAILED", issue: link.issue, detail: error instanceof Error ? error.message : String(error) });
     }

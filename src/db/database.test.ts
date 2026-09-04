@@ -52,9 +52,21 @@ describe("state database", () => {
   test("relinking an active task updates one lifecycle interval", () => {
     const db = database();
     db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: "old", harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
-    db.linkTask({ task: "worker", issue: "ABC-1", role: "support", worktree: "new", harness: "codex", spawned_at: "2026-01-01T00:01:00Z", torn_down_at: null });
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: "new", harness: "codex", spawned_at: "2026-01-01T00:01:00Z", torn_down_at: null });
 
-    expect(db.taskLinks("ABC-1", true)).toEqual([expect.objectContaining({ role: "support", worktree: "new", harness: "codex", spawned_at: "2026-01-01T00:00:00Z" })]);
+    expect(db.taskLinks("ABC-1", true)).toEqual([expect.objectContaining({ role: "primary", worktree: "new", harness: "codex", spawned_at: "2026-01-01T00:00:00Z" })]);
+    db.close();
+  });
+
+  test("changing an active task role starts a new lifecycle interval", () => {
+    const db = database();
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: "tree", harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "support", worktree: "tree", harness: null, spawned_at: "2026-01-01T00:02:00Z", torn_down_at: null });
+
+    expect(db.taskLinks("ABC-1")).toEqual([
+      expect.objectContaining({ role: "primary", spawned_at: "2026-01-01T00:00:00Z", torn_down_at: "2026-01-01T00:02:00Z" }),
+      expect.objectContaining({ role: "support", spawned_at: "2026-01-01T00:02:00Z", torn_down_at: null }),
+    ]);
     db.close();
   });
 

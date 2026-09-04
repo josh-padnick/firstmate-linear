@@ -554,11 +554,18 @@ export class StateDatabase {
         const active = this.raw.query(`SELECT * FROM task_links WHERE task=? AND issue=? AND torn_down_at IS NULL
           ORDER BY spawned_at LIMIT 1`).get(value.task, value.issue) as TaskLink | null;
         if (active) {
-          this.raw.query("UPDATE task_links SET role=?,worktree=?,harness=? WHERE task=? AND issue=? AND spawned_at=?")
-            .run(value.role, value.worktree, value.harness, active.task, active.issue, active.spawned_at);
-          this.raw.query("DELETE FROM task_links WHERE task=? AND issue=? AND torn_down_at IS NULL AND spawned_at<>?")
-            .run(active.task, active.issue, active.spawned_at);
-          return;
+          if (active.role === value.role) {
+            this.raw.query("UPDATE task_links SET worktree=?,harness=? WHERE task=? AND issue=? AND spawned_at=?")
+              .run(value.worktree, value.harness, active.task, active.issue, active.spawned_at);
+            this.raw.query("DELETE FROM task_links WHERE task=? AND issue=? AND torn_down_at IS NULL AND spawned_at<>?")
+              .run(active.task, active.issue, active.spawned_at);
+            return;
+          }
+          if (compareIso(value.spawned_at, active.spawned_at) !== 1) {
+            throw new Error(`task role change requires a later lifecycle start: ${value.task} ${value.issue}`);
+          }
+          this.raw.query("UPDATE task_links SET torn_down_at=? WHERE task=? AND issue=? AND torn_down_at IS NULL")
+            .run(value.spawned_at, value.task, value.issue);
         }
       }
       this.raw.query(`INSERT INTO task_links(task,issue,role,worktree,harness,spawned_at,torn_down_at)
