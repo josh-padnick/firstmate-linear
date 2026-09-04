@@ -166,7 +166,7 @@ describe("job worker", () => {
     db.close();
   });
 
-  test("promise recovery preserves progress captured after authoritative delivery", async () => {
+  test("promise recovery rejects progress without authoritative occurrence time", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures); mkdirSync(join(root, "state"));
     await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
@@ -190,7 +190,11 @@ describe("job worker", () => {
     await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) } });
     reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
 
-    expect(db.promise(promise.id)).toMatchObject({ state: "kept", created_at: "2026-01-01T12:20:00Z", reply_comment_id: expectedId });
+    expect(db.promise(promise.id)).toMatchObject({ state: "open", created_at: "2026-01-01T12:20:00Z", reply_comment_id: expectedId });
+    appendFileSync(statusPath, "done: after conservative recovery boundary\n");
+    scanFleet(root, db, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:23:00Z") / 1000) });
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:23:00Z") / 1000) });
+    expect(db.promise(promise.id)?.state).toBe("kept");
     db.close();
   });
 

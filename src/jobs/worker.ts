@@ -349,10 +349,11 @@ function preparePromiseSourceBoundary(
     try { requestBoundary = JSON.parse(pending.source_watermarks) as PromiseSourceWatermarks; }
     catch { throw new Error(`invalid promise source boundary: ${pending.id}`); }
   }
-  if (phase === "recovered" && requestBoundary) {
+  const authoritativeObservationTime = pending.expected_event.startsWith("board:") || pending.expected_event === "comment";
+  if (phase === "recovered" && requestBoundary && deliveredAt && authoritativeObservationTime) {
     requestBoundary.__boundary__ = {
       ...requestBoundary.__boundary__,
-      unambiguous_after: deliveredAt ?? requestBoundary.__boundary__?.unambiguous_after,
+      unambiguous_after: deliveredAt,
     };
     db.replacePendingPromiseSourceWatermarks(pending.id, requestBoundary);
     return;
@@ -364,7 +365,7 @@ function preparePromiseSourceBoundary(
     const current = db.promise(pending.id);
     if (!current || current.state !== "pending" || (phase === "request" && current.source_watermarks !== null)) return;
     const watermarks = promiseSourceWatermarks(db, job.target, current.expected_event, env, prWatermarks, requestBoundary);
-    if (phase === "confirmed") db.replacePendingPromiseSourceWatermarks(current.id, watermarks);
+    if (phase !== "request") db.replacePendingPromiseSourceWatermarks(current.id, watermarks);
     else db.setPendingPromiseSourceWatermarks(current.id, watermarks);
   });
 }

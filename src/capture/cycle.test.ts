@@ -29,6 +29,78 @@ const config: WorkflowConfig = {
 };
 
 describe("SQLite capture cycle", () => {
+  test("a failed cycle does not commit its resumed comment checkpoint", async () => {
+    const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" }, comments: { pageInfo: { hasNextPage: true, endCursor: "page-two" }, nodes: [{
+        id: "comment-1", createdAt: "2026-01-01T00:05:00Z", updatedAt: "2026-01-01T00:05:00Z",
+        body: "continue", user: { displayName: "Captain" },
+        issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null }, parent: null,
+      }] },
+    } }));
+    await Bun.write(join(fixtures, "02-fail-500.json"), "{}");
+    const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+
+    await expect(captureCycle({
+      config,
+      db,
+      transport: new LinearTransport({ fixtureDir: fixtures }),
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767226200", FM_LINEAR_MAX_PAGES: "1" },
+    })).rejects.toThrow("HTTP 500 during issues");
+
+    expect(db.cursor("linear.comments.page.ABC")).toBeNull();
+    expect(db.listEvents()).toHaveLength(0);
+    db.close();
+  });
+
+  test("resumed comment capture commits the maximum timestamp across batches", async () => {
+    const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const comment = (id: string, updatedAt: string) => ({
+      id, createdAt: updatedAt, updatedAt, body: "continue", user: { displayName: "Captain" },
+      issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null }, parent: null,
+    });
+    await Bun.write(join(fixtures, "01-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" }, comments: {
+        pageInfo: { hasNextPage: true, endCursor: "page-two" }, nodes: [comment("newer", "2026-01-01T00:05:00Z")],
+      },
+    } }));
+    await Bun.write(join(fixtures, "02-issues.json"), JSON.stringify({ data: { issues: { pageInfo: { hasNextPage: false }, nodes: [] } } }));
+    await Bun.write(join(fixtures, "03-comments.json"), JSON.stringify({ data: {
+      viewer: { displayName: "Firstmate" }, comments: {
+        pageInfo: { hasNextPage: false }, nodes: [comment("older", "2026-01-01T00:04:00Z")],
+      },
+    } }));
+    await Bun.write(join(fixtures, "04-issues.json"), JSON.stringify({ data: { issues: { pageInfo: { hasNextPage: false }, nodes: [] } } }));
+    const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
+    const transport = new LinearTransport({ fixtureDir: fixtures });
+    const first = await captureCycle({
+      config,
+      db,
+      transport,
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767226200", FM_LINEAR_MAX_PAGES: "1" },
+    });
+
+    expect(first.commentsMax).toBe("2026-01-01T00:05:00Z");
+    expect(db.cursor("linear.comments.ABC")).toBeNull();
+    expect(JSON.parse(db.cursor("linear.comments.page.ABC")!)).toMatchObject({ after: "page-two", highWater: "2026-01-01T00:05:00Z" });
+
+    const second = await captureCycle({
+      config,
+      db,
+      transport,
+      env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767226260", FM_LINEAR_MAX_PAGES: "1" },
+    });
+
+    expect(second.commentsMax).toBe("2026-01-01T00:05:00Z");
+    expect(db.cursor("linear.comments.ABC")).toBe("2026-01-01T00:05:00Z");
+    expect(db.cursor("linear.comments")).toBe("2026-01-01T00:05:00Z");
+    expect(db.cursor("linear.comments.page.ABC")).toBe("");
+    expect(db.listEvents()).toHaveLength(2);
+    db.close();
+  });
+
   test("redacted recordings retain production approval classification", async () => {
     const root = mkdtempSync("/private/tmp/fml-capture-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);

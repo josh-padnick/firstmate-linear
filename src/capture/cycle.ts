@@ -123,6 +123,7 @@ export async function captureCycle(options: {
   const validLegacyCommentsCursor = legacyCommentsCursor && parseIso(legacyCommentsCursor) !== null ? legacyCommentsCursor : null;
   const bootstrapCutoff = validLegacyCommentsCursor ? null : formatIso(nowEpoch(env) - 7200);
   const forceSince = env.FM_LINEAR_FORCE_SINCE?.trim() || null;
+  const maxPages = env.FM_LINEAR_MAX_PAGES ? Number(env.FM_LINEAR_MAX_PAGES) : undefined;
   const transport = options.transport ?? new LinearTransport({
     apiKey: loadKey(resolveHome(env), env),
     fixtureDir: env.FM_LINEAR_FIXTURE_DIR,
@@ -130,31 +131,45 @@ export async function captureCycle(options: {
   });
   const commentsByTeam = new Map<string, Awaited<ReturnType<typeof fetchComments>>>();
   const commentCutoffs = new Map<string, string | null>();
-  const completedCommentCursors = new Map<string, string | null>();
+  const commentCheckpoints = new Map<string, {
+    resumeName: string;
+    resumeValue: string;
+    cursorName: string;
+    previous: string | null;
+    completed: boolean;
+    highWater: string | null;
+  }>();
   let viewer: string | null = null;
   for (const team of options.config.teams) {
     const cursorName = `linear.comments.${team.key}`;
     const stored = options.db.cursor(cursorName) ?? validLegacyCommentsCursor;
     const cursor = stored && parseIso(stored) !== null ? stored : null;
     const resumeName = `linear.comments.page.${team.key}`;
-    let resume: { since: string | null; after: string } | null = null;
+    let resume: { since: string | null; after: string; highWater: string | null } | null = null;
     try {
       const parsed = JSON.parse(options.db.cursor(resumeName) ?? "null") as unknown;
       if (parsed && typeof parsed === "object" && typeof (parsed as any).after === "string") {
-        resume = { since: typeof (parsed as any).since === "string" ? (parsed as any).since : null, after: (parsed as any).after };
+        resume = {
+          since: typeof (parsed as any).since === "string" ? (parsed as any).since : null,
+          after: (parsed as any).after,
+          highWater: typeof (parsed as any).highWater === "string" ? (parsed as any).highWater : null,
+        };
       }
     } catch {}
     const since = resume?.since ?? forceSince ?? (cursor ? overlapTimestamp(cursor) : bootstrapCutoff);
-    const result = await fetchComments(transport, cursor, { team: team.key, forceSince: since, after: resume?.after });
+    const result = await fetchComments(transport, cursor, { team: team.key, forceSince: since, after: resume?.after, maxPages });
     commentsByTeam.set(team.key, result);
     commentCutoffs.set(team.key, since);
     viewer ??= result.viewer;
-    if (result.resumeAfter) {
-      options.db.setCursor(resumeName, JSON.stringify({ since, after: result.resumeAfter }), observedAt);
-    } else {
-      options.db.setCursor(resumeName, "", observedAt);
-      completedCommentCursors.set(team.key, maxIso(result.comments.map((comment) => comment.updatedAt)) ?? cursor);
-    }
+    const highWater = maxIso([resume?.highWater, ...result.comments.map((comment) => comment.updatedAt)]);
+    commentCheckpoints.set(team.key, {
+      resumeName,
+      resumeValue: result.resumeAfter ? JSON.stringify({ since, after: result.resumeAfter, highWater }) : "",
+      cursorName,
+      previous: cursor,
+      completed: result.resumeAfter === null,
+      highWater: highWater ?? cursor,
+    });
   }
   const self = viewer || env.FM_LINEAR_SELF_NAME?.trim() || "firstmate";
   const seen = new DatabaseSeenStore(options.db);
@@ -176,6 +191,7 @@ export async function captureCycle(options: {
     const result = await fetchIssues(transport, fullDue ? null : cursor, historyCutoff, {
       team: team.key,
       forceSince: fullDue ? null : forceSince,
+      maxPages,
     });
     const managedIssues = result.issues.filter((issue) => isManagedIssue(team, self, issue));
     const managedIds = new Set(managedIssues.map((issue) => issue.identifier));
@@ -254,18 +270,23 @@ export async function captureCycle(options: {
     }
   }
 
-  const commentsMax = maxIso([...commentsByTeam.values()].flatMap((result) => result.comments.map((comment) => comment.updatedAt)));
-  for (const [teamKey, next] of completedCommentCursors) {
-    if (!next) continue;
-    const name = `linear.comments.${teamKey}`;
-    const previous = options.db.cursor(name) ?? validLegacyCommentsCursor;
-    if (previous && compareIso(next, previous) === -1) throw new Error(`${teamKey} comments cursor would move backwards`);
-    options.db.setCursor(name, next, observedAt);
+  const commentsMax = maxIso([...commentCheckpoints.values()].map((checkpoint) => checkpoint.highWater));
+  for (const [teamKey, checkpoint] of commentCheckpoints) {
+    if (checkpoint.completed && checkpoint.highWater && checkpoint.previous && compareIso(checkpoint.highWater, checkpoint.previous) === -1) {
+      throw new Error(`${teamKey} comments cursor would move backwards`);
+    }
   }
-  if (commentsMax && completedCommentCursors.size === options.config.teams.length) {
+  const commentsComplete = [...commentCheckpoints.values()].every((checkpoint) => checkpoint.completed);
+  if (commentsMax && commentsComplete) {
     if (validLegacyCommentsCursor && compareIso(commentsMax, validLegacyCommentsCursor) === -1) throw new Error("comments cursor would move backwards");
-    options.db.setCursor("linear.comments", commentsMax, observedAt);
   }
+  options.db.transaction(() => {
+    for (const checkpoint of commentCheckpoints.values()) {
+      options.db.setCursor(checkpoint.resumeName, checkpoint.resumeValue, observedAt);
+      if (checkpoint.completed && checkpoint.highWater) options.db.setCursor(checkpoint.cursorName, checkpoint.highWater, observedAt);
+    }
+    if (commentsMax && commentsComplete) options.db.setCursor("linear.comments", commentsMax, observedAt);
+  });
   for (const team of options.config.teams) {
     const value = issueMax[team.key];
     if (!value) continue;
