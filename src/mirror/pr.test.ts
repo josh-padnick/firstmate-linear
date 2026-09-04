@@ -77,14 +77,34 @@ describe("PR signals", () => {
     const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
     writeFileSync(join(home, "state", "task.meta"), "spawn_gen=g1\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
     const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:00:00Z") / 1000) };
+    const inspect = () => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] });
     expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
-    expect(runTask(["close", "task"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:10:00Z") / 1000) })).toBe(0);
+    expect(runTask(["close", "task"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:10:00Z") / 1000) }, { inspectPr: inspect })).toBe(0);
     const db = StateDatabase.open(env);
 
-    const result = scanPullRequests(home, db, () => ({ state: "OPEN", headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] }), { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:11:00Z") / 1000) });
+    const result = scanPullRequests(home, db, inspect, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:11:00Z") / 1000) });
 
-    expect(result.observations).toContainEqual(expect.objectContaining({ verb: "pr-green", observed_at: "2026-01-01T00:10:00Z" }));
+    expect(result.observations).toHaveLength(0);
+    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ verb: "pr-green", observed_at: "2026-01-01T00:10:00Z" }));
     expect(scanPullRequests(home, db, () => ({ state: "MERGED", headRefOid: "abc123", baseRefName: "main", requiredChecks: [] }), { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:12:00Z") / 1000) }).observations).toHaveLength(0);
+    db.close();
+  });
+
+  test("a PR change after close is not backdated into the closed lifecycle", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    writeFileSync(join(home, "state", "task.meta"), "spawn_gen=g1\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:00:00Z") / 1000) };
+    const snapshot = (state: string) => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state }] });
+    expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
+    expect(runTask(["close", "task"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:10:00Z") / 1000) }, { inspectPr: () => snapshot("fail") })).toBe(0);
+    expect(runTask(["link", "task", "ABC-1"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:11:00Z") / 1000) })).toBe(0);
+    const db = StateDatabase.open(env);
+    const [closed, active] = db.taskLinks("ABC-1");
+
+    expect(scanPullRequests(home, db, () => snapshot("pass"), { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:12:00Z") / 1000) }).observations).toHaveLength(0);
+    expect(db.observations("ABC-1").filter((item) => item.task_lifecycle_id === closed?.lifecycle_id && item.verb === "pr-green")).toHaveLength(0);
+    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ task_lifecycle_id: closed?.lifecycle_id, verb: "pr-withdrawn", observed_at: "2026-01-01T00:10:00Z" }));
+    expect(db.observations("ABC-1").filter((item) => item.task_lifecycle_id === active?.lifecycle_id)).toHaveLength(0);
     db.close();
   });
 
@@ -94,16 +114,11 @@ describe("PR signals", () => {
     writeFileSync(metaPath, "spawn_gen=old\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
     const firstEnv = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
     expect(runTask(["link", "task", "ABC-1"], firstEnv)).toBe(0);
-    expect(runTask(["close", "task"], { ...firstEnv, FM_LINEAR_NOW_EPOCH: "1767225660" })).toBe(0);
+    const inspect = () => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] });
+    expect(runTask(["close", "task"], { ...firstEnv, FM_LINEAR_NOW_EPOCH: "1767225660" }, { inspectPr: inspect })).toBe(0);
     expect(runTask(["link", "task", "ABC-1"], { ...firstEnv, FM_LINEAR_NOW_EPOCH: "1767225720" })).toBe(0);
     const db = StateDatabase.open(firstEnv);
-    const inspect = () => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] });
-
-    const sealed = scanPullRequests(home, db, inspect).observations;
-    const [closed, active] = db.taskLinks();
-    expect(sealed.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
-    expect(sealed.every((item) => item.task_lifecycle_id === closed?.lifecycle_id)).toBe(true);
-    expect(db.observations("ABC-1").filter((item) => item.task_lifecycle_id === active?.lifecycle_id)).toHaveLength(0);
+    expect(scanPullRequests(home, db, inspect).observations).toHaveLength(0);
     writeFileSync(metaPath, "spawn_gen=new\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
     expect(scanPullRequests(home, db, inspect).observations.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
     db.close();
@@ -114,17 +129,12 @@ describe("PR signals", () => {
     const metaPath = join(home, "state", "task.meta");
     writeFileSync(metaPath, "spawn_gen=old\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
     const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    const inspect = () => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] });
     expect(runTask(["link", "task", "ABC-1", "--role", "support"], env)).toBe(0);
     writeFileSync(metaPath, "spawn_gen=current\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
-    expect(runTask(["link", "task", "ABC-1", "--role", "primary", "--spawned-at", "2026-01-01T00:01:00Z"], env)).toBe(0);
+    expect(runTask(["link", "task", "ABC-1", "--role", "primary", "--spawned-at", "2026-01-01T00:01:00Z"], env, { inspectPr: inspect })).toBe(0);
     const db = StateDatabase.open(env);
-    const inspect = () => ({ state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] });
-
-    const sealed = scanPullRequests(home, db, inspect).observations;
-    const [support, primary] = db.taskLinks();
-    expect(sealed.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
-    expect(sealed.every((item) => item.task_lifecycle_id === support?.lifecycle_id)).toBe(true);
-    expect(db.observations("ABC-1").filter((item) => item.task_lifecycle_id === primary?.lifecycle_id)).toHaveLength(0);
+    expect(scanPullRequests(home, db, inspect).observations).toHaveLength(0);
     writeFileSync(metaPath, "spawn_gen=next\npr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
     expect(scanPullRequests(home, db, inspect).observations.map((item) => item.verb)).toEqual(["pr-reported", "pr-green"]);
     db.close();

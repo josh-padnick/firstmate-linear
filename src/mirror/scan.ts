@@ -102,7 +102,7 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
           const observation: Observation = {
             id: `obs:${sha256(`${path}:${link.issue}:${link.lifecycle_id}:${fileIdentity}:${row.offset}:${row.line}`)}`,
             source: "status", task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: parsed.verb,
-            key: parsed.key, note: parsed.note, source_identity: fileIdentity, source_offset: row.offset, observed_at: nowIso(env),
+            key: parsed.key, note: parsed.note, source_identity: fileIdentity, source_offset: row.offset, observed_at: link.torn_down_at ?? nowIso(env),
           };
           if (db.observe(observation)) inserted.push(observation);
         }

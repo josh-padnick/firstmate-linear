@@ -98,31 +98,26 @@ function recordPrState(db: StateDatabase, observation: Observation, link: TaskLi
   record(db, { ...observation, id: `obs:${sha256(`${identity}:${previous?.id ?? "initial"}`)}` }, out);
 }
 
-export function scanPullRequests(home: string, db: StateDatabase, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): { observations: Observation[]; findings: Array<{ code: string; issue: string; detail: string }> } {
+type PrScanResult = { observations: Observation[]; findings: Array<{ code: string; issue: string; detail: string }> };
+
+function scanLinks(home: string, db: StateDatabase, links: TaskLink[], inspect: PrInspect, observedAt: string): PrScanResult {
   const observations: Observation[] = [];
   const findings: Array<{ code: string; issue: string; detail: string }> = [];
-  for (const link of db.taskLinks()) {
+  for (const link of links) {
     const path = join(home, "state", `${link.task}.meta`);
     if (!existsSync(path)) continue;
     const generation = sidecarGeneration(path, "spawn_gen");
     if (generation && generation === link.blocked_meta_generation) continue;
-    if (link.torn_down_at && (!generation || generation !== link.meta_generation)) continue;
-    const closeCursor = link.torn_down_at ? `pr-close:${link.lifecycle_id}` : null;
-    if (closeCursor && db.cursor(closeCursor) === generation) continue;
     const values = meta(path);
     const url = values.pr;
     const expectedHead = values.pr_head;
     if (!url) continue;
     try {
       const snapshot = inspect(url);
-      const observedAt = link.torn_down_at ?? nowIso(env);
       const sourceIdentity = prSourceIdentity(generation, url, snapshot);
       const reportedIdentity = prReportedIdentity(generation, url);
       const base = expectedBase(link, values);
       const lifecycle = `${link.task}:${link.issue}:${link.lifecycle_id}`;
-      const sealCloseBoundary = (): void => {
-        if (closeCursor && generation) db.setCursor(closeCursor, generation, observedAt);
-      };
       record(db, {
         id: `obs:${sha256(`${lifecycle}:${url}:reported`)}`, source: "pr", task: link.task,
         task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-reported", key: "pr", note: url, source_identity: reportedIdentity, observed_at: observedAt,
@@ -132,19 +127,16 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
           id: `obs:${sha256(`${lifecycle}:${url}:${snapshot.headRefOid}:merged:${snapshot.baseRefName}`)}`, source: "pr", task: link.task,
           task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-merged", key: "pr", note: url, source_identity: sourceIdentity, observed_at: observedAt,
         }, observations);
-        sealCloseBoundary();
         continue;
       }
       if (snapshot.state === "MERGED" && !base) {
         recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base unverified`, source_identity: sourceIdentity, observed_at: observedAt }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-unverified`, observations);
         findings.push({ code: "PR_BASE_UNKNOWN", issue: link.issue, detail: `cannot verify expected base for ${url}` });
-        sealCloseBoundary();
         continue;
       }
       if (snapshot.state === "MERGED" && snapshot.baseRefName !== base) {
         recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base=${snapshot.baseRefName} expected=${base}`, source_identity: sourceIdentity, observed_at: observedAt }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-mismatch:${snapshot.baseRefName}`, observations);
         findings.push({ code: "PR_BASE_MISMATCH", issue: link.issue, detail: `${url} merged into ${snapshot.baseRefName}, expected ${base}` });
-        sealCloseBoundary();
         continue;
       }
       const green = snapshot.state === "OPEN" && Boolean(expectedHead) && snapshot.headRefOid === expectedHead
@@ -156,10 +148,17 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
         note: green ? `${url} head=${snapshot.headRefOid}` : `${url} current=${snapshot.headRefOid} expected=${expectedHead ?? "missing"}`,
         source_identity: sourceIdentity, observed_at: observedAt,
       }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:${green ? "green" : "not-green"}`, observations);
-      sealCloseBoundary();
     } catch (error) {
       findings.push({ code: "PR_INSPECTION_FAILED", issue: link.issue, detail: error instanceof Error ? error.message : String(error) });
     }
   }
   return { observations, findings };
+}
+
+export function capturePullRequestsAtBoundary(home: string, db: StateDatabase, task: string, observedAt: string, inspect: PrInspect = inspectPr): PrScanResult {
+  return scanLinks(home, db, db.taskLinks(undefined, true).filter((link) => link.task === task), inspect, observedAt);
+}
+
+export function scanPullRequests(home: string, db: StateDatabase, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): PrScanResult {
+  return scanLinks(home, db, db.taskLinks(undefined, true), inspect, nowIso(env));
 }

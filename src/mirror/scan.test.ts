@@ -184,7 +184,7 @@ describe("fleet scanner", () => {
     expect(runTask(["close", "task"], { ...env, FM_LINEAR_NOW_EPOCH: "1767225660" })).toBe(0);
     db = StateDatabase.open(env);
 
-    expect(scanFleet(home, db, env).observations).toContainEqual(expect.objectContaining({ verb: "done", issue: "ABC-1" }));
+    expect(scanFleet(home, db, { ...env, FM_LINEAR_NOW_EPOCH: "1767226200" }).observations).toContainEqual(expect.objectContaining({ verb: "done", issue: "ABC-1", observed_at: "2026-01-01T00:01:00Z" }));
     db.close();
   });
 

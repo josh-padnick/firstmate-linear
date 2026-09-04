@@ -268,13 +268,14 @@ describe("job worker", () => {
     await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), inspectPr: () => snapshot("fail"), env: { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:20:00Z") / 1000) } });
     db.close();
 
-    expect(runTask(["close", "worker"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:21:00Z") / 1000) })).toBe(0);
+    expect(runTask(["close", "worker"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:21:00Z") / 1000) }, { inspectPr: () => snapshot("pass") })).toBe(0);
     expect(runTask(["link", "worker", "ABC-1"], { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) })).toBe(0);
     db = StateDatabase.open(env);
     const result = scanPullRequests(root, db, () => snapshot("pass"), { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:23:00Z") / 1000) });
     reconcileStalls(root, db, config, { ...env, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:23:00Z") / 1000) });
 
-    expect(result.observations).toContainEqual(expect.objectContaining({ verb: "pr-green", task_lifecycle_id: originalLifecycle }));
+    expect(result.observations).toHaveLength(0);
+    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ verb: "pr-green", task_lifecycle_id: originalLifecycle, observed_at: "2026-01-01T12:21:00Z" }));
     expect(result.observations.some((item) => item.task_lifecycle_id === db.taskLinks("ABC-1", true)[0]!.lifecycle_id)).toBe(false);
     expect(db.promise(promise.id)?.state).toBe("kept");
     db.close();
