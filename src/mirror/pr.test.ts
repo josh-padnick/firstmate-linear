@@ -113,6 +113,33 @@ describe("PR signals", () => {
     db.close();
   });
 
+  test("a task boundary retries when PR metadata changes during inspection", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    const metaPath = join(home, "state", "task.meta");
+    const url = "https://github.com/acme/repo/pull/1";
+    writeFileSync(metaPath, `spawn_gen=g1\npr=${url}\npr_head=head1\npr_base=main\n`);
+    const env = { FM_HOME: home, FM_LINEAR_NOW_EPOCH: "1767225600" };
+    expect(runTask(["link", "task", "ABC-1"], env)).toBe(0);
+    let inspections = 0;
+
+    expect(runTask(["close", "task"], env, { inspectPr: () => {
+      inspections += 1;
+      if (inspections === 1) {
+        writeFileSync(metaPath, `spawn_gen=g2\npr=${url}\npr_head=head2\npr_base=main\n`);
+        return { state: "OPEN", headRefOid: "head1", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] };
+      }
+      return { state: "OPEN", headRefOid: "head2", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] };
+    } })).toBe(0);
+
+    const db = StateDatabase.open(env);
+    const states = db.observations("ABC-1").filter((item) => item.source === "pr" && item.verb !== "pr-reported");
+    expect(inspections).toBe(2);
+    expect(states).toHaveLength(1);
+    expect(states[0]).toEqual(expect.objectContaining({ verb: "pr-green", note: `${url} head=head2` }));
+    expect(db.taskLinks("ABC-1")[0]?.meta_generation).toBe("gen:g2");
+    db.close();
+  });
+
   test("a relinked task waits for a new metadata producer generation", () => {
     const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
     const metaPath = join(home, "state", "task.meta");

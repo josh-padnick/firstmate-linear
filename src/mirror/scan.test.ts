@@ -282,7 +282,7 @@ describe("fleet scanner", () => {
     db.close();
   });
 
-  test("status produced during PR inspection stays with the closing role", () => {
+  test("status produced after boundary sampling stays with the closing role", () => {
     const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
     const path = join(home, "state", "task.status");
     writeFileSync(path, "working: support work\n");
@@ -293,10 +293,13 @@ describe("fleet scanner", () => {
     scanFleet(home, db, env);
     db.close();
 
+    let appended = false;
     expect(runTask(["link", "task", "ABC-1", "--role", "primary", "--spawned-at", "2026-01-01T00:01:00Z"], { ...env, FM_LINEAR_NOW_EPOCH: "1767225660" }, {
-      inspectPr: () => {
+      inspectPr: () => ({ state: "OPEN", headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] }),
+      beforeBoundaryCommit: () => {
+        if (appended) return;
+        appended = true;
         appendFileSync(path, "done: support finished\n");
-        return { state: "OPEN", headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] };
       },
     })).toBe(0);
     appendFileSync(path, "working: primary work\n");

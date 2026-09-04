@@ -58,3 +58,12 @@ export function statusCursorValue(state: NonNullable<ReturnType<typeof statusFil
     prefix_sha: sha256(state.content.subarray(0, offset)),
   });
 }
+
+export function statusFileVersion(state: ReturnType<typeof statusFileState>): string {
+  if (!state) return "missing";
+  return sha256(JSON.stringify({
+    physicalIdentity: state.physicalIdentity,
+    incarnationIdentity: state.incarnationIdentity,
+    content: sha256(state.content),
+  }));
+}

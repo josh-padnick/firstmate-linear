@@ -100,23 +100,56 @@ function recordPrState(db: StateDatabase, observation: Observation, link: TaskLi
 
 type PrScanResult = { observations: Observation[]; findings: Array<{ code: string; issue: string; detail: string }> };
 
-function scanLinks(home: string, db: StateDatabase, links: TaskLink[], inspect: PrInspect, observedAt: string): PrScanResult {
+type PrMetadata = {
+  generation: string | null;
+  url: string | null;
+  expectedHead: string | null;
+  expectedBase: string | null;
+  blocked: boolean;
+};
+
+type PreparedPrLink = { link: TaskLink; metadata: PrMetadata; snapshot: PrSnapshot | null };
+
+export type PreparedPullRequests = {
+  observedAt: string;
+  findings: PrScanResult["findings"];
+  sourcesValid: () => boolean;
+  valid: () => boolean;
+  record: (observedAt?: string) => PrScanResult;
+};
+
+function prMetadata(home: string, link: TaskLink): PrMetadata {
+  const path = join(home, "state", `${link.task}.meta`);
+  if (!existsSync(path)) return { generation: null, url: null, expectedHead: null, expectedBase: null, blocked: false };
+  const generation = sidecarGeneration(path, "spawn_gen");
+  const values = meta(path);
+  return {
+    generation,
+    url: values.pr ?? null,
+    expectedHead: values.pr_head ?? null,
+    expectedBase: expectedBase(link, values),
+    blocked: Boolean(generation && generation === link.blocked_meta_generation),
+  };
+}
+
+function sameMetadata(left: PrMetadata, right: PrMetadata): boolean {
+  return left.generation === right.generation
+    && left.url === right.url
+    && left.expectedHead === right.expectedHead
+    && left.expectedBase === right.expectedBase
+    && left.blocked === right.blocked;
+}
+
+function recordPreparedLinks(db: StateDatabase, prepared: PreparedPrLink[], observedAt: string): PrScanResult {
   const observations: Observation[] = [];
   const findings: Array<{ code: string; issue: string; detail: string }> = [];
-  for (const link of links) {
-    const path = join(home, "state", `${link.task}.meta`);
-    if (!existsSync(path)) continue;
-    const generation = sidecarGeneration(path, "spawn_gen");
-    if (generation && generation === link.blocked_meta_generation) continue;
-    const values = meta(path);
-    const url = values.pr;
-    const expectedHead = values.pr_head;
-    if (!url) continue;
+  for (const { link, metadata, snapshot } of prepared) {
+    const { generation, url, expectedHead } = metadata;
+    if (metadata.blocked || !url || !snapshot) continue;
     try {
-      const snapshot = inspect(url);
       const sourceIdentity = prSourceIdentity(generation, url, snapshot);
       const reportedIdentity = prReportedIdentity(generation, url);
-      const base = expectedBase(link, values);
+      const base = metadata.expectedBase;
       const lifecycle = `${link.task}:${link.issue}:${link.lifecycle_id}`;
       record(db, {
         id: `obs:${sha256(`${lifecycle}:${url}:reported`)}`, source: "pr", task: link.task,
@@ -155,31 +188,43 @@ function scanLinks(home: string, db: StateDatabase, links: TaskLink[], inspect: 
   return { observations, findings };
 }
 
-export function capturePullRequestsAtBoundary(home: string, db: StateDatabase, task: string, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): PrScanResult & { observedAt: string } {
-  const links = db.taskLinks(undefined, true).filter((link) => link.task === task);
+function prepareLinks(home: string, db: StateDatabase, links: TaskLink[], inspect: PrInspect, env: NodeJS.ProcessEnv): PreparedPullRequests {
+  const prepared: PreparedPrLink[] = links.map((link) => ({ link, metadata: prMetadata(home, link), snapshot: null }));
   const snapshots = new Map<string, PrSnapshot>();
   const findings: PrScanResult["findings"] = [];
-  for (const link of links) {
-    const path = join(home, "state", `${link.task}.meta`);
-    if (!existsSync(path)) continue;
-    const generation = sidecarGeneration(path, "spawn_gen");
-    if (generation && generation === link.blocked_meta_generation) continue;
-    const url = meta(path).pr;
-    if (url && !snapshots.has(url)) {
-      try { snapshots.set(url, inspect(url)); }
-      catch (error) { findings.push({ code: "PR_INSPECTION_FAILED", issue: link.issue, detail: error instanceof Error ? error.message : String(error) }); }
+  for (const item of prepared) {
+    if (item.metadata.blocked || !item.metadata.url) continue;
+    const key = JSON.stringify(item.metadata);
+    if (!snapshots.has(key)) {
+      try { snapshots.set(key, inspect(item.metadata.url)); }
+      catch (error) { findings.push({ code: "PR_INSPECTION_FAILED", issue: item.link.issue, detail: error instanceof Error ? error.message : String(error) }); }
     }
+    item.snapshot = snapshots.get(key) ?? null;
   }
   const observedAt = nowIso(env);
-  if (findings.length) return { observations: [], findings, observedAt };
-  const result = scanLinks(home, db, links, (url) => {
-    const snapshot = snapshots.get(url);
-    if (!snapshot) throw new Error(`PR metadata changed during task boundary capture: ${url}`);
-    return snapshot;
-  }, observedAt);
-  return { ...result, observedAt };
+  const linkIds = links.map((link) => link.lifecycle_id).sort().join("\0");
+  const sourcesValid = () => prepared.every((item) => sameMetadata(item.metadata, prMetadata(home, item.link)));
+  return {
+    observedAt,
+    findings,
+    sourcesValid,
+    valid: () => {
+      const currentIds = db.taskLinks(undefined, true).filter((link) => links.some((item) => item.task === link.task)).map((link) => link.lifecycle_id).sort().join("\0");
+      return currentIds === linkIds && sourcesValid();
+    },
+    record: (at = observedAt) => findings.length ? { observations: [], findings } : recordPreparedLinks(db, prepared, at),
+  };
+}
+
+export function preparePullRequestsAtBoundary(home: string, db: StateDatabase, task: string, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): PreparedPullRequests {
+  return prepareLinks(home, db, db.taskLinks(undefined, true).filter((link) => link.task === task), inspect, env);
 }
 
 export function scanPullRequests(home: string, db: StateDatabase, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): PrScanResult {
-  return scanLinks(home, db, db.taskLinks(undefined, true), inspect, nowIso(env));
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const prepared = prepareLinks(home, db, db.taskLinks(undefined, true), inspect, env);
+    if (prepared.findings.length) return { observations: [], findings: prepared.findings };
+    if (prepared.valid()) return prepared.record();
+  }
+  return { observations: [], findings: [{ code: "PR_METADATA_CHANGED", issue: "fleet", detail: "PR metadata changed during inspection" }] };
 }
