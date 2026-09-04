@@ -287,6 +287,95 @@ describe("state database", () => {
     migrated.close();
   });
 
+  test("v14 migration adds host ownership to task links", () => {
+    const db = database();
+    const path = db.path;
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("ALTER TABLE task_links DROP COLUMN host; PRAGMA user_version = 13;");
+    legacy.close();
+
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    migrated.linkTask({ task: "remote-worker", issue: "ABC-1", role: "primary", host: "mini", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    expect(migrated.taskLinks("ABC-1")[0]?.host).toBe("mini");
+    migrated.close();
+  });
+
+  test("v15 migration preserves the original steer message for idempotent redelivery", () => {
+    const db = database();
+    const path = db.path;
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("ALTER TABLE steers DROP COLUMN message; PRAGMA user_version = 14;");
+    legacy.close();
+
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.recordSteer({ issue: "ABC-1", home: "mini", task: "worker", record_path: "/remote/001.msg", message: "Report status", sent_at: "2026-01-01T00:00:00Z" }).message).toBe("Report status");
+    migrated.close();
+  });
+
+  test("v16 migration adds the remote steer delivery identity", () => {
+    const db = database();
+    const path = db.path;
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("ALTER TABLE steers DROP COLUMN delivery_id; PRAGMA user_version = 15;");
+    legacy.close();
+
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.recordSteer({
+      issue: "ABC-1", home: "mini", task: "worker", record_path: "/remote/001.msg",
+      message: "Report status", delivery_id: "delivery-1", sent_at: "2026-01-01T00:00:00Z",
+    }).delivery_id).toBe("delivery-1");
+    migrated.close();
+  });
+
+  test("v17 migration adds steer lifecycle identity", () => {
+    const db = database();
+    const path = db.path;
+    db.linkTask({
+      lifecycle_id: "link:one", task: "worker", issue: "ABC-1", role: "primary",
+      worktree: null, harness: null, spawned_at: "2025-12-31T23:00:00Z", torn_down_at: null,
+    });
+    db.recordSteer({
+      issue: "ABC-1", home: "local", task: "worker", record_path: "/local/legacy.msg",
+      lifecycle_id: "link:one", sent_at: "2026-01-01T00:00:00Z",
+    });
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("ALTER TABLE steers DROP COLUMN lifecycle_id; PRAGMA user_version = 16;");
+    legacy.close();
+
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.steers()[0]?.lifecycle_id).toBe("link:one");
+    expect(migrated.recordSteer({
+      issue: "ABC-1", home: "local", task: "worker", record_path: "/local/001.msg",
+      lifecycle_id: "link:one", sent_at: "2026-01-01T00:00:00Z",
+    }).lifecycle_id).toBe("link:one");
+    migrated.close();
+  });
+
+  test("v18 migration backfills an unambiguous legacy steer lifecycle", () => {
+    const db = database();
+    const path = db.path;
+    db.linkTask({
+      lifecycle_id: "link:one", task: "worker", issue: "ABC-1", role: "primary",
+      worktree: null, harness: null, spawned_at: "2025-12-31T23:00:00Z", torn_down_at: null,
+    });
+    db.recordSteer({
+      issue: "ABC-1", home: "local", task: "worker", record_path: "/local/unresolved.msg",
+      sent_at: "2026-01-01T00:00:00Z",
+    });
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("PRAGMA user_version = 17;");
+    legacy.close();
+
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.steers()[0]?.lifecycle_id).toBe("link:one");
+    migrated.close();
+  });
+
   test("running jobs are reclaimed only after their lease expires", () => {
     const db = database();
     db.enqueue({ key: "leased", kind: "linear.comment", target: "ABC-1", payload: {} }, "2026-01-01T00:00:00Z");

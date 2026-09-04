@@ -21,7 +21,7 @@ describe("inbox commands", () => {
         project: null, labels: { nodes: [] }, history: { pageInfo: { hasNextPage: false }, nodes: [] },
       },
     } }));
-    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\n    roles: { building: Building, review-gate: Approve Deliverable, validating: Validating Code, done: Done, canceled: Canceled }\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
     const db = StateDatabase.open({ FM_HOME: home });
     db.capture({ id: "event:stall", team: "ABC", issue: "ABC-1", type: "stalled", token: "stalled", author: "fm-linear", body_sha: null, created_at: "2026-01-01T00:00:00Z", captured_at: "2026-01-01T00:00:00Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
     const receipt = db.issueReceipt(["event:stall"], "2026-01-01T00:01:00Z");
@@ -57,7 +57,7 @@ describe("inbox commands", () => {
         project: null, labels: { nodes: [] }, history: { pageInfo: { hasNextPage: false }, nodes: [] },
       },
     } }));
-    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\n    roles: { building: Building, review-gate: Approve Deliverable, validating: Validating Code, done: Done, canceled: Canceled }\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
     const db = StateDatabase.open({ FM_HOME: home });
     db.capture({ id: "event:stall", team: "ABC", issue: "ABC-1", type: "stalled", token: "stalled", author: "fm-linear", body_sha: null, created_at: "2026-01-01T00:00:00Z", captured_at: "2026-01-01T00:00:00Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
     const receipt = db.issueReceipt(["event:stall"], "2026-01-01T00:01:00Z");
@@ -90,9 +90,9 @@ describe("inbox commands", () => {
         project: null, labels: { nodes: [] }, history: { pageInfo: { hasNextPage: false }, nodes: [] },
       },
     } }));
-    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: assignee:self\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: assignee:self\n    roles: { building: Building, review-gate: Approve Deliverable, validating: Validating Code, done: Done, canceled: Canceled }\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
     const db = StateDatabase.open({ FM_HOME: home });
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
     db.capture({ id: "event:stall", team: "ABC", issue: "ABC-1", type: "stalled", token: "stalled", author: "fm-linear", body_sha: null, created_at: "2026-01-01T00:00:00Z", captured_at: "2026-01-01T00:00:00Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
     const receipt = db.issueReceipt(["event:stall"], "2026-01-01T00:01:00Z");
     db.close();
@@ -134,7 +134,7 @@ describe("inbox commands", () => {
         }] },
       },
     } }));
-    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: assignee:self\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: assignee:self\n    roles: { building: Building, review-gate: Approve Deliverable, validating: Validating Code, done: Done, canceled: Canceled }\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
     const db = StateDatabase.open({ FM_HOME: home });
     db.capture({ id: "event:stall", team: "ABC", issue: "ABC-1", type: "stalled", token: "stalled", author: "fm-linear", body_sha: null, created_at: "2026-01-01T00:00:00Z", captured_at: "2026-01-01T00:00:00Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
     const receipt = db.issueReceipt(["event:stall"], "2026-01-01T00:01:00Z");
@@ -146,9 +146,9 @@ describe("inbox commands", () => {
     expect(result.status).toBe(1);
     const after = StateDatabase.open({ FM_HOME: home });
     const approval = after.listEvents().find((event) => event.created_at === "2026-01-01T00:00:02Z");
-    expect(approval?.token).toBe("approval");
+    expect(approval?.token).toBe("gate-pass");
     expect(after.jobs()).toHaveLength(1);
-    expect(JSON.parse(after.jobs()[0]!.payload)).toMatchObject({ state: "Validating Code", cause_event: approval?.id });
+    expect(JSON.parse(after.jobs()[0]!.payload)).toMatchObject({ role: "validating", cause_event: approval?.id });
     expect(after.receipt(receipt)?.consumed_at).toBeNull();
     expect(after.event("event:stall")?.disposition).toBe("waiting-for-core");
     after.close();

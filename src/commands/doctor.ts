@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { configPath, loadConfig, loadConfigFile } from "../config/load.ts";
 import { StateDatabase } from "../db/database.ts";
 import { runtimePaths } from "../paths.ts";
+import { configuredRemoteHosts } from "../reconcile/host.ts";
 
 export type DoctorCheck = {
   name: string;
@@ -91,6 +92,25 @@ function databaseValid(env: NodeJS.ProcessEnv): DoctorCheck {
   }
 }
 
+function remoteRings(env: NodeJS.ProcessEnv): DoctorCheck {
+  try {
+    const home = resolveHome(env);
+    const hosts = configuredRemoteHosts(home);
+    if (!hosts.length) {
+      return { name: "remote-rings", ok: true, detail: "no configured remote homes", required: false };
+    }
+    const db = StateDatabase.open(env);
+    const rows = db.raw.query("SELECT home,installed_at,last_error FROM remote_rings").all() as Array<{ home: string; installed_at: string | null; last_error: string | null }>;
+    db.close();
+    const byHome = new Map(rows.map((row) => [row.home, row]));
+    const failures = hosts.filter((host) => !byHome.get(host)?.installed_at || byHome.get(host)?.last_error);
+    if (failures.length) return { name: "remote-rings", ok: false, detail: `${failures.map((host) => `${host}: ${byHome.get(host)?.last_error ?? "not installed"}`).join("; ")}; run fm-linear install --remote-ring <home>`, required: false };
+    return { name: "remote-rings", ok: true, detail: `installed for ${hosts.join(",")}`, required: false };
+  } catch (error) {
+    return { name: "remote-rings", ok: false, detail: error instanceof Error ? error.message : String(error), required: false };
+  }
+}
+
 function installation(env: NodeJS.ProcessEnv): DoctorCheck {
   try {
     const path = `${runtimePaths(env).root}/install.json`;
@@ -149,7 +169,7 @@ export async function runDoctorChecks(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DoctorCheck[]> {
   const offline = args.includes("--offline") || args.includes("--skip-api");
-  const checks: DoctorCheck[] = [nodePresent(), bunPresent(), keyPresent(env), parseRoundTrip(), configValid(env), databaseValid(env), installation(env)];
+  const checks: DoctorCheck[] = [nodePresent(), bunPresent(), keyPresent(env), parseRoundTrip(), configValid(env), databaseValid(env), installation(env), remoteRings(env)];
   if (!offline) {
     checks.push(await apiReachable(env));
   }

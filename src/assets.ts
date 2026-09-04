@@ -1,5 +1,6 @@
 import captainSnippet from "../examples/captain-md-snippet.md" with { type: "text" };
-import configExample from "../examples/linear-workflow.example.yaml" with { type: "text" };
+import configExample from "../examples/minimal.yaml" with { type: "text" };
+import fullConfigExample from "../examples/full.yaml" with { type: "text" };
 import outputStyle from "../examples/output-style.example.md" with { type: "text" };
 import replyTemplate from "../examples/reply.example.md" with { type: "text" };
 import reportTemplate from "../examples/report.example.md" with { type: "text" };
@@ -11,6 +12,7 @@ import extensionPackage from "../extension/package.json" with { type: "text" };
 export const ASSETS = {
   captainSnippet: captainSnippet as unknown as string,
   configExample: configExample as unknown as string,
+  fullConfigExample: fullConfigExample as unknown as string,
   outputStyle: outputStyle as unknown as string,
   replyTemplate: replyTemplate as unknown as string,
   reportTemplate: reportTemplate as unknown as string,

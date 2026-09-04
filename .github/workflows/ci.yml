@@ -23,7 +23,7 @@ jobs:
       - name: Lint public workflow contract
         run: |
           mkdir -p "$RUNNER_TEMP/fm-home/config"
-          cp examples/linear-workflow.example.yaml "$RUNNER_TEMP/fm-home/config/linear-workflow.yaml"
+          cp examples/minimal.yaml "$RUNNER_TEMP/fm-home/config/linear-workflow.yaml"
           cp examples/reply.example.md "$RUNNER_TEMP/fm-home/config/reply.md"
           cp examples/report.example.md "$RUNNER_TEMP/fm-home/config/report.md"
           cp examples/review-walkthrough.example.html "$RUNNER_TEMP/fm-home/config/review-walkthrough.html"

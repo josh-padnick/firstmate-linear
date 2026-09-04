@@ -11,10 +11,26 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 describe("installer", () => {
   test("LaunchAgent embeds the selected home and one compiled service binary", () => {
     const plist = renderLaunchAgent("/opt/fm-linear", "/srv/firstmate", "/srv/firstmate/state/linear/service.log");
-    expect(plist).toContain("/opt/fm-linear");
-    expect(plist).toContain("/srv/firstmate");
-    expect(plist).toContain("<string>service</string><string>run</string>");
-    expect(plist).toContain("<key>KeepAlive</key><true/>");
+    const parsed = spawnSync("plutil", ["-convert", "json", "-o", "-", "-"], { input: plist, encoding: "utf8" });
+    expect(parsed.status).toBe(0);
+    const launchAgent = JSON.parse(parsed.stdout) as {
+      Label: string;
+      KeepAlive: boolean;
+      RunAtLoad: boolean;
+      ProgramArguments: string[];
+      EnvironmentVariables: Record<string, string>;
+      StandardOutPath: string;
+      StandardErrorPath: string;
+    };
+    expect(launchAgent).toMatchObject({
+      Label: "com.firstmate.linear",
+      KeepAlive: true,
+      RunAtLoad: true,
+      ProgramArguments: ["/opt/fm-linear", "service", "run"],
+      EnvironmentVariables: { FM_HOME: "/srv/firstmate" },
+      StandardOutPath: "/srv/firstmate/state/linear/service.log",
+      StandardErrorPath: "/srv/firstmate/state/linear/service.log",
+    });
   });
 
   test("the installed linear-axi shim permits reads and refuses writes", () => {
@@ -60,13 +76,13 @@ describe("installer", () => {
     uninstall(env);
     expect(existsSync(database)).toBe(true);
     expect(existsSync(config)).toBe(true);
-    expect(readFileSync(join(home, "data", "captain.md"), "utf8")).not.toContain("fm-linear:start");
+    expect(existsSync(join(home, "data", "captain.md"))).toBe(false);
     expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { deny: ["Bash(linear-axi issue create:*)", "Bash(git push:*)"] }, outputStyle: "concise" });
     expect(readFileSync(existingReport, "utf8")).toBe("User-owned report command\n");
     expect(existsSync(join(home, ".codex", "prompts", "report.md"))).toBe(false);
     expect(existsSync(extensionRoot)).toBe(false);
     expect(runInit([], env)).toBe(0);
-    expect(readFileSync(join(home, "data", "captain.md"), "utf8")).toContain("fm-linear:start");
+    expect(existsSync(join(home, "data", "captain.md"))).toBe(false);
   });
 
   test("uninstall leaves Claude settings unchanged without a valid install record", () => {

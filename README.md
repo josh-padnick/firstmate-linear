@@ -49,7 +49,7 @@ Review the generated config, then queue the workflow contract checks:
 ```sh
 fm-linear config show --effective
 fm-linear contract lint
-fm-linear contract apply-states --team ENG
+fm-linear contract apply-states --team ENG --role decision-captain --name "Needs Decision"
 fm-linear contract apply-labels
 fm-linear doctor
 fm-linear cutover enable
@@ -90,7 +90,7 @@ Run `fm-linear status --issue ENG-123` to inspect the last observed progress, op
 When the captain asks `status`, `current status`, or `update` on a Firstmate-owned issue, `inbox show` gives the model those same observed facts as reply context.
 The service never generates the captain-facing answer itself.
 
-The exact normalized comments `approved` and `lgtm` are approvals only while an issue is in an approval status.
+Configured approval phrases are exact full-comment matches and apply only while an issue is in their mapped gate role.
 Conditional text such as `Approved if you fix X` is feedback and returns ownership to Firstmate.
 
 Link fleet tasks explicitly so relay and mirror operations never guess:
@@ -104,7 +104,7 @@ fm-linear task close TASK_ID
 ## Configuration
 
 The only runtime config is `$FM_HOME/config/linear-workflow.yaml`.
-See [the complete example](examples/linear-workflow.example.yaml) and [the contract reference](docs/contract-reference.md).
+See [the minimal example](examples/minimal.yaml), [the full example](examples/full.yaml), and [the contract reference](docs/contract-reference.md).
 
 Every team defaults to `managed: assignee:self`.
 `managed: all` is an explicit opt-in, and `projects` can narrow a team by project name or slug.

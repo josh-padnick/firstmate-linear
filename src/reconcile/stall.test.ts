@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { WorkflowConfig } from "../config/schema.ts";
+import { testWorkflowConfig } from "../testing/config.ts";
 import { StateDatabase } from "../db/database.ts";
 import { planEscalations } from "../escalation/escalation.ts";
 import { reconcileStalls } from "./stall.ts";
@@ -9,28 +9,7 @@ import { reconcileStalls } from "./stall.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-const config: WorkflowConfig = {
-  version: 1,
-  captain: { display_name: "Captain" },
-  teams: [{
-    key: "ABC", projects: [], managed: "all", agent_labels: {},
-    statuses: {
-      backlog: "Backlog", todo: "ToDo", prioritized: "Prioritized", waiting: "Waiting",
-      plan_in_progress: "Plan In Progress", approve_plan: "Approve Plan", building: "Building",
-      validating_code: "Validating Code", approve_deliverable: "Approve Deliverable",
-      needs_decision: "Needs Decision", needs_firstmate_decision: "Needs Firstmate Decision",
-      done: "Done", canceled: "Canceled", duplicate: "Duplicate",
-    },
-  }],
-  features: { relay: "off", mirror: "off", escalation: "on" },
-  templates: { reply: "reply.md", report: "report.md", review_walkthrough: "review.html" },
-  deadlines: {
-    progress: { "Plan In Progress": 1800, Building: 2700, "Validating Code": 3600, Waiting: 14400, "Needs Firstmate Decision": 900 },
-    stalled: { mention: 1800 },
-  },
-  promises: { required_on_firstmate_owned: true, vocabulary: ["status:*", "board:*", "pr-reported", "pr-green", "pr-merged", "comment", "dispatch", "none"] },
-  sourcePath: "test",
-};
+const config = testWorkflowConfig({ features: { escalation: "on" } });
 
 function setup(): { root: string; db: StateDatabase } {
   const root = mkdtempSync("/private/tmp/fml-stall-"); roots.push(root);
@@ -54,7 +33,7 @@ describe("stall reconciliation", () => {
 
   test("an overdue pr-green promise emits one specific stalled wake", () => {
     const { root, db } = setup();
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T11:52:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T11:52:00Z" });
     db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
 
     const result = reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:31:00Z") / 1000) });
@@ -165,11 +144,11 @@ describe("stall reconciliation", () => {
 
   test("a board promise requires a post-promise state transition", () => {
     const { root, db } = setup();
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T11:59:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T11:59:00Z" });
     const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "board:Done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
     db.observe({ id: "obs:done", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Done", note: "Building", observed_at: "2026-01-01T12:01:00Z" });
-    db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
-    db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:02:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:02:00Z" });
     reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:03:00Z") / 1000) });
     expect(db.promise(promise.id)?.state).toBe("kept");
     expect(db.promise(promise.id)?.observation_id).toBe("obs:done");
@@ -178,9 +157,9 @@ describe("stall reconciliation", () => {
 
   test("an unchanged post-promise board snapshot does not keep a promise", () => {
     const { root, db } = setup();
-    db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T11:59:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T11:59:00Z" });
     const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "board:Done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
-    db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
     reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:02:00Z") / 1000) });
     expect(db.promise(promise.id)?.state).toBe("open");
     db.close();
@@ -190,8 +169,8 @@ describe("stall reconciliation", () => {
     const { root, db } = setup();
     db.observe({ id: "obs:old-done", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Done", note: "Building", observed_at: "2026-01-01T11:59:00Z" });
     const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "board:Done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
-    db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:02:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:02:00Z" });
 
     reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:03:00Z") / 1000) });
 
@@ -201,10 +180,10 @@ describe("stall reconciliation", () => {
 
   test("a transient captured board transition keeps a board promise", () => {
     const { root, db } = setup();
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T11:59:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T11:59:00Z" });
     const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "board:Done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
     db.observe({ id: "obs:transition", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Done", note: "Building", observed_at: "2026-01-01T12:10:00Z" });
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:20:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:20:00Z" });
 
     reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:31:00Z") / 1000) });
 
@@ -215,7 +194,7 @@ describe("stall reconciliation", () => {
   test("a busy primary worker suppresses the heartbeat while the same idle issue stalls", () => {
     const { root, db } = setup();
     mkdirSync(join(root, "state"));
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
     db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
     writeFileSync(join(root, "state", "worker.busy-state"), "v1 gen=g1.1.1 seq=1 state=busy source=test event=turn ts=1\n");
     const env = { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:46:00Z") / 1000) };
@@ -223,15 +202,27 @@ describe("stall reconciliation", () => {
     expect(reconcileStalls(root, db, config, env).emitted).toBe(0);
     rmSync(join(root, "state", "worker.busy-state"));
     expect(reconcileStalls(root, db, config, env).emitted).toBe(1);
-    expect(db.listEvents(["waiting-for-core"])[0]?.note).toContain("Building 46m");
+    expect(db.listEvents(["waiting-for-core"])[0]?.note).toContain("building 46m");
+    db.close();
+  });
+
+  test("a degraded task host suspends the busy exemption", () => {
+    const { root, db } = setup();
+    mkdirSync(join(root, "state"));
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", host: "mini", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
+    writeFileSync(join(root, "state", "worker.busy-state"), "v1 gen=g1.1.1 seq=1 state=busy source=test event=turn ts=1\n");
+    const env = { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:46:00Z") / 1000) };
+
+    expect(reconcileStalls(root, db, config, env, new Set(["mini"])).emitted).toBe(1);
     db.close();
   });
 
   test("a delayed snapshot preserves authoritative board transition chronology", () => {
     const { root, db } = setup();
-    db.snapshot({ issue: "ABC-1", state: "Plan In Progress", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T10:00:00Z" });
-    db.observe({ id: "obs:building", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Building", note: "Plan In Progress", observed_at: "2026-01-01T10:30:00Z" });
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "plan", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T10:00:00Z" });
+    db.observe({ id: "obs:building", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "building", note: "plan", observed_at: "2026-01-01T10:30:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
 
     expect(reconcileStalls(root, db, config, {
       FM_HOME: root,
@@ -239,17 +230,17 @@ describe("stall reconciliation", () => {
     }).emitted).toBe(1);
     const event = db.listEvents(["waiting-for-core"])[0]!;
     expect(JSON.parse(event.raw_ref).last_progress).toMatchObject({ id: "obs:building", at: "2026-01-01T10:30:00Z" });
-    expect(event.note).toContain("Building 90m");
+    expect(event.note).toContain("building 90m");
     db.close();
   });
 
   test("heartbeat uses the latest in-window transition across intermediate states", () => {
     const { root, db } = setup();
-    db.snapshot({ issue: "ABC-1", state: "Plan In Progress", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T10:00:00Z" });
-    db.observe({ id: "obs:building-first", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Building", note: "Plan In Progress", observed_at: "2026-01-01T10:30:00Z" });
-    db.observe({ id: "obs:waiting", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Waiting", note: "Building", observed_at: "2026-01-01T11:00:00Z" });
-    db.observe({ id: "obs:building-latest", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Building", note: "Waiting", observed_at: "2026-01-01T11:30:00Z" });
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "plan", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T10:00:00Z" });
+    db.observe({ id: "obs:building-first", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "building", note: "plan", observed_at: "2026-01-01T10:30:00Z" });
+    db.observe({ id: "obs:waiting", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "waiting", note: "building", observed_at: "2026-01-01T11:00:00Z" });
+    db.observe({ id: "obs:building-latest", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "building", note: "waiting", observed_at: "2026-01-01T11:30:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
 
     expect(reconcileStalls(root, db, config, {
       FM_HOME: root,
@@ -257,14 +248,14 @@ describe("stall reconciliation", () => {
     }).emitted).toBe(1);
     const event = db.listEvents(["waiting-for-core"])[0]!;
     expect(JSON.parse(event.raw_ref).last_progress).toMatchObject({ id: "obs:building-latest", at: "2026-01-01T11:30:00Z" });
-    expect(event.note).toContain("Building 50m");
+    expect(event.note).toContain("building 50m");
     db.close();
   });
 
   test("a relinked task ignores the prior busy producer generation", () => {
     const { root, db } = setup();
     mkdirSync(join(root, "state"));
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
     db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null, blocked_busy_generation: "gen:g1.1.1" });
     writeFileSync(join(root, "state", "worker.busy-state"), "v1 gen=g1.1.1 seq=1 state=busy source=test event=turn ts=1\n");
 
@@ -274,7 +265,7 @@ describe("stall reconciliation", () => {
 
   test("closed primary progress prevents a heartbeat based on older board state", () => {
     const { root, db } = setup();
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
     db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:10:00Z", torn_down_at: null });
     db.observe({ id: "obs:working", source: "status", task: "worker", issue: "ABC-1", verb: "working", key: "default", note: null, observed_at: "2026-01-01T12:50:00Z" });
     db.closeTask("worker", "2026-01-01T12:55:00Z");
@@ -285,7 +276,7 @@ describe("stall reconciliation", () => {
 
   test("a delivered promise resolves an older open heartbeat", () => {
     const { root, db } = setup();
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T12:00:00Z" });
     const first = reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:46:00Z") / 1000) });
     expect(first.emitted).toBe(1);
     const heartbeat = db.listEvents(["waiting-for-core"])[0]!;
@@ -299,7 +290,7 @@ describe("stall reconciliation", () => {
 
   test("captain-owned statuses never emit progress heartbeats", () => {
     const { root, db } = setup();
-    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T09:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "review-gate", assignee: "Captain", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T09:00:00Z" });
     expect(reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:00:00Z") / 1000) }).emitted).toBe(0);
     db.close();
   });

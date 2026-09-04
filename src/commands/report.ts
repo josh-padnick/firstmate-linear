@@ -30,10 +30,13 @@ export function runReport(_args: string[], env: NodeJS.ProcessEnv = process.env)
     const relayed = events.filter((event) => event.disposition === "handled-by-service" && event.note?.startsWith("relayed")).length;
     const pending = db.listEvents(["waiting-for-core"]).length;
     const resumed = events.some((event) => event.token === "resumed");
+    const restarted = observations.some((observation) => observation.verb === "service-restarted");
     const summary = [
       `Window: ${cursor ?? "beginning"} to ${nowIso(env)}`,
       `Captured: ${events.length}; pending: ${pending}; relayed: ${relayed}; job problems: ${jobs.length}.`,
-      resumed ? "The service resumed after a polling gap and reconciled immediately." : "No resume gap was recorded in this window.",
+      restarted ? "The service restarted after its poll watchdog fired and reconciled immediately."
+        : resumed ? "The service resumed after a polling gap and reconciled immediately."
+          : "No resume gap or watchdog restart was recorded in this window.",
     ].join("\n");
     const eventLines = events.length ? events.map((event) => `- ${event.created_at} ${event.issue} ${event.token}: ${event.note ?? event.disposition}`).join("\n") : "No new Linear events.";
     const driftLines = jobs.length

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_PROGRESS_DEADLINES, type TeamConfig, type WorkflowConfig } from "../config/schema.ts";
+import { DEFAULT_PROGRESS_DEADLINES, FIRSTMATE_OWNED_ROLES, type WorkflowConfig, type WorkflowRole } from "../config/schema.ts";
 import { type DomainEvent, type Observation, observationBelongsToTaskLink, type PromiseRecord, type PromiseSourceWatermarks, type StateDatabase, type TaskLink } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { sidecarGeneration } from "../mirror/generation.ts";
@@ -8,16 +8,6 @@ import { compareIso, formatIso, nowEpoch, nowIso, parseIso } from "../time.ts";
 
 export type Progress = { id: string; kind: string; at: string; detail: string };
 export type StallResult = { emitted: number; kept: number; overdue: number };
-
-export function firstmateOwnedStatuses(team: TeamConfig): Set<string> {
-  return new Set([
-    team.statuses.plan_in_progress,
-    team.statuses.building,
-    team.statuses.validating_code,
-    team.statuses.waiting,
-    team.statuses.needs_firstmate_decision,
-  ]);
-}
 
 function atOrAfter(candidate: string, baseline: string): boolean {
   const compared = compareIso(candidate, baseline);
@@ -133,7 +123,7 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
       && (!unambiguousAfter || atOrAfter(item.observed_at, unambiguousAfter)));
     return transition ? { id: transition.id, kind: "board", at: transition.observed_at, detail: `board ${state}` } : null;
   }
-  if (["pr-reported", "pr-green", "pr-merged"].includes(expected)) {
+  if (["pr-reported", "pr-green", "pr-merged", "verdict"].includes(expected)) {
     const found = matchingPrObservation(db, promise, observations);
     return found ? { id: found.id, kind: "pr", at: found.observed_at, detail: expected } : null;
   }
@@ -164,18 +154,18 @@ export function lastProgress(db: StateDatabase, issue: string): Progress | null 
   for (let index = 0; index < snapshots.length; index += 1) {
     const item = snapshots[index]!;
     const previous = index === 0 ? null : snapshots[index - 1]!;
-    if (previous?.state === item.state) continue;
+    if (previous?.role === item.role) continue;
     let transition: Observation | null = null;
     for (const observation of observations) {
-      if (observation.source !== "linear" || observation.verb !== "board-transition" || observation.key !== item.state) continue;
+      if (observation.source !== "linear" || observation.verb !== "board-transition" || observation.key !== item.role) continue;
       const beforeSnapshot = compareIso(observation.observed_at, item.observed_at);
       const afterPrevious = previous ? compareIso(observation.observed_at, previous.observed_at) : 0;
       if (beforeSnapshot === null || beforeSnapshot === 1 || afterPrevious === null || afterPrevious === -1) continue;
       transition = observation;
     }
     latest = transition
-      ? later(latest, { id: transition.id, kind: "board", at: transition.observed_at, detail: item.state })
-      : later(latest, { id: `snapshot:${issue}:${item.observed_at}`, kind: "board", at: item.observed_at, detail: item.state });
+      ? later(latest, { id: transition.id, kind: "board", at: transition.observed_at, detail: item.role ?? "unmapped status" })
+      : later(latest, { id: `snapshot:${issue}:${item.observed_at}`, kind: "board", at: item.observed_at, detail: item.role ?? "unmapped status" });
   }
   for (const link of db.taskLinks(issue).filter((item) => item.role === "primary")) {
     latest = later(latest, { id: `dispatch:${link.task}:${link.spawned_at}`, kind: "dispatch", at: link.spawned_at, detail: link.task });
@@ -195,8 +185,9 @@ function taskBusyState(home: string, link: TaskLink): "busy" | "not-busy" {
   } catch { return "not-busy"; }
 }
 
-function busy(home: string, db: StateDatabase, issue: string): boolean {
+function busy(home: string, db: StateDatabase, issue: string, degradedHosts: ReadonlySet<string>): boolean {
   for (const link of db.taskLinks(issue, true).filter((item) => item.role === "primary")) {
+    if (degradedHosts.has(link.host ?? "local")) continue;
     if (taskBusyState(home, link) === "busy") return true;
   }
   return false;
@@ -234,7 +225,7 @@ function resolveOpenHeartbeat(db: StateDatabase, issue: string, note: string, at
   } catch { /* a malformed event remains visible for manual handling */ }
 }
 
-function emitStall(db: StateDatabase, options: {
+export function emitStall(db: StateDatabase, options: {
   team: string;
   issue: string;
   reasonKey: string;
@@ -242,7 +233,7 @@ function emitStall(db: StateDatabase, options: {
   stalledAt: string;
   note: string;
   required: string;
-  kind: "promise" | "heartbeat";
+  kind: "promise" | "heartbeat" | "idle" | "steer" | "host";
   expected?: string;
   deadlineAt?: string;
   progress: Progress | null;
@@ -286,7 +277,7 @@ function emitStall(db: StateDatabase, options: {
   });
 }
 
-export function reconcileStalls(home: string, db: StateDatabase, config: WorkflowConfig, env: NodeJS.ProcessEnv = process.env): StallResult {
+export function reconcileStalls(home: string, db: StateDatabase, config: WorkflowConfig, env: NodeJS.ProcessEnv = process.env, degradedHosts: ReadonlySet<string> = new Set()): StallResult {
   const now = nowEpoch(env);
   const at = formatIso(now);
   let emitted = 0;
@@ -339,13 +330,13 @@ export function reconcileStalls(home: string, db: StateDatabase, config: Workflo
     }
     if (promisedIssues.has(snapshot.issue)) continue;
     const team = config.teams.find((item) => item.key === snapshot.issue.split("-")[0]);
-    if (!team || !firstmateOwnedStatuses(team).has(snapshot.state)) {
+    if (!team || !snapshot.role || !(FIRSTMATE_OWNED_ROLES as readonly string[]).includes(snapshot.role)) {
       resolveOpenHeartbeat(db, snapshot.issue, "issue is no longer Firstmate-owned", at);
       continue;
     }
-    const deadline = progressDeadlines[snapshot.state];
+    const deadline = progressDeadlines[snapshot.role];
     if (!deadline) continue;
-    if (busy(home, db, snapshot.issue)) {
+    if (busy(home, db, snapshot.issue, degradedHosts)) {
       resolveOpenHeartbeat(db, snapshot.issue, "primary worker is busy", at);
       continue;
     }
@@ -358,10 +349,10 @@ export function reconcileStalls(home: string, db: StateDatabase, config: Workflo
     }
     const age = now - progressAt;
     const multiple = Math.floor(age / deadline);
-    const note = `stalled ${snapshot.issue}: ${snapshot.state} ${Math.floor(age / 60)}m with no progress and no busy worker (last: ${progress?.detail ?? "board state"} ${clock(progress?.at ?? snapshot.observed_at)})`;
+    const note = `stalled ${snapshot.issue}: ${snapshot.role} ${Math.floor(age / 60)}m with no progress and no busy worker (last: ${progress?.detail ?? "board state"} ${clock(progress?.at ?? snapshot.observed_at)})`;
     if (emitStall(db, {
-      team: team.key, issue: snapshot.issue, reasonKey: `heartbeat:${snapshot.state}:${progress?.id ?? snapshot.observed_at}:${multiple}`,
-      seriesKey: `heartbeat:${snapshot.state}:${progress?.id ?? snapshot.observed_at}`,
+      team: team.key, issue: snapshot.issue, reasonKey: `heartbeat:${snapshot.role}:${progress?.id ?? snapshot.observed_at}:${multiple}`,
+      seriesKey: `heartbeat:${snapshot.role}:${progress?.id ?? snapshot.observed_at}`,
       stalledAt: formatIso(progressAt + deadline),
       note, required: requiredFor(null), kind: "heartbeat", progress, at,
     }).captured) emitted += 1;
@@ -373,12 +364,17 @@ export function issueStatus(home: string, db: StateDatabase, issue: string): str
   const progress = lastProgress(db, issue);
   const promises = db.promises(issue, ["open", "overdue"]);
   const tasks = db.taskLinks(issue, true).map((link) => {
-    return `${link.task} (${link.role}, ${taskBusyState(home, link)})`;
+    const host = link.host ?? "local";
+    const state = host === "local" ? taskBusyState(home, link) : `remote host ${host}`;
+    return `${link.task} (${link.role}, ${state})`;
   });
+  const steers = db.steers(true).filter((steer) => steer.issue === issue)
+    .map((steer) => `${steer.home}/${steer.task} since ${steer.sent_at}${steer.waiting_on_host ? " (waiting on host)" : ""}`);
   return [
     `issue ${issue}`,
     `last progress: ${progress ? `${progress.at} ${progress.detail}` : "none"}`,
     `promises: ${promises.length ? promises.map((item) => `${item.expected_event} ${item.state} by ${item.deadline_at}`).join("; ") : "none"}`,
     `tasks: ${tasks.length ? tasks.join("; ") : "none"}`,
+    `steers: ${steers.length ? steers.join("; ") : "none"}`,
   ].join("\n");
 }

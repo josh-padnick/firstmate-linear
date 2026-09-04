@@ -22,6 +22,24 @@ describe("PR signals", () => {
     expect(inspectPr("https://example.test/pr/1", failedChecks).requiredChecks).toEqual([{ name: "ci", state: "fail" }]);
   });
 
+  test("inspection selects only the configured verdict source and check", () => {
+    const view = JSON.stringify({
+      state: "OPEN", mergedAt: null, baseRefName: "main", headRefOid: "abc123", files: [],
+      statusCheckRollup: [
+        { name: "other", output: { summary: "verdict=changes-requested risk=high reason=other check" } },
+        { name: "fleet-validation", output: { summary: "verdict=auto-mergeable risk=low reason=configured check" } },
+      ],
+      labels: [{ name: "verdict:needs-human" }, { name: "risk:medium" }],
+      reviews: [{ body: "verdict=changes-requested risk=high reason=configured review" }],
+    });
+    const run = (_command: string, args: string[]) => args[1] === "view"
+      ? { status: 0, stdout: view, stderr: "" }
+      : { status: 0, stdout: JSON.stringify([{ name: "ci", bucket: "pass" }]), stderr: "" };
+    expect(inspectPr("https://example.test/pr/1", run, { source: "check", check_name: "fleet-validation" }).verdict).toMatchObject({ verdict: "auto-mergeable", source: "check", checkName: "fleet-validation" });
+    expect(inspectPr("https://example.test/pr/1", run, { source: "review", check_name: "unused" }).verdict).toMatchObject({ verdict: "changes-requested", source: "review" });
+    expect(inspectPr("https://example.test/pr/1", run, { source: "labels", check_name: "unused" }).verdict).toMatchObject({ verdict: "needs-human", source: "labels" });
+  });
+
   test("green is bound to the mapped current head SHA", () => {
     const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
     writeFileSync(join(home, "state", "task.meta"), "pr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
@@ -29,6 +47,24 @@ describe("PR signals", () => {
     db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
     const result = scanPullRequests(home, db, () => ({ state: "OPEN", headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] }));
     expect(result.observations.some((item) => item.verb === "pr-green")).toBe(true);
+    db.close();
+  });
+
+  test("auto-merge state changes create distinct verdict observations", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    writeFileSync(join(home, "state", "task.meta"), "pr=https://github.com/acme/repo/pull/1\npr_head=abc123\npr_base=main\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const snapshot = (autoMergeArmed: boolean) => ({
+      state: "OPEN" as const, headRefOid: "abc123", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }],
+      verdict: { verdict: "auto-mergeable" as const, risk: "low" as const, reason: "reviewed" }, autoMergeArmed,
+    });
+    scanPullRequests(home, db, () => snapshot(false));
+    scanPullRequests(home, db, () => snapshot(true));
+    const verdicts = db.observations("ABC-1").filter((item) => item.verb === "verdict");
+    expect(verdicts).toHaveLength(2);
+    expect(new Set(verdicts.map((item) => item.id)).size).toBe(2);
+    expect(new Set(verdicts.map((item) => item.source_identity)).size).toBe(2);
     db.close();
   });
 

@@ -3,13 +3,14 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { doctorExitCode, formatDoctor, runDoctorChecks } from "./doctor.ts";
+import { StateDatabase } from "../db/database.ts";
 
 describe("doctor", () => {
   test("required checks pass offline when a key file exists", async () => {
     const home = mkdtempSync(join(tmpdir(), "fm-linear-doctor-"));
     mkdirSync(join(home, "config"));
     writeFileSync(join(home, ".env"), "LINEAR_API_KEY=fixture-key\n");
-    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\n    roles: { building: Building, review-gate: Approve Deliverable, validating: Validating Code, done: Done, canceled: Canceled }\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
     const checks = await runDoctorChecks(["--offline"], { FM_HOME: home });
     expect(checks.filter((check) => check.required).every((check) => check.ok)).toBe(true);
     expect(doctorExitCode(checks)).toBe(0);
@@ -23,7 +24,7 @@ describe("doctor", () => {
   test("missing key fails closed", async () => {
     const home = mkdtempSync(join(tmpdir(), "fm-linear-doctor-"));
     mkdirSync(join(home, "config"));
-    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\n    roles: { building: Building, review-gate: Approve Deliverable, validating: Validating Code, done: Done, canceled: Canceled }\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
     const checks = await runDoctorChecks(["--offline"], { FM_HOME: home });
     expect(doctorExitCode(checks)).toBe(1);
     expect(checks.find((check) => check.name === "key")?.ok).toBe(false);
@@ -34,12 +35,25 @@ describe("doctor", () => {
     mkdirSync(join(home, "config"));
     writeFileSync(join(home, ".env"), "LINEAR_API_KEY=fixture-key\n");
     const path = join(home, "config", "linear-workflow.yaml");
-    writeFileSync(path, "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    writeFileSync(path, "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    roles: { building: Building, review-gate: Approve Deliverable, validating: Validating Code, done: Done, canceled: Canceled }\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
     await runDoctorChecks(["--offline"], { FM_HOME: home });
     writeFileSync(path, "version: invalid\n");
     const checks = await runDoctorChecks(["--offline"], { FM_HOME: home });
     const config = checks.find((check) => check.name === "config");
     expect(config?.ok).toBe(true);
     expect(config?.detail).toContain("using last-known-good");
+  });
+
+  test("each structured remote host needs its own alternate ring", async () => {
+    const home = mkdtempSync(join(tmpdir(), "fm-linear-doctor-"));
+    mkdirSync(join(home, "config")); mkdirSync(join(home, "data"));
+    writeFileSync(join(home, ".env"), "LINEAR_API_KEY=fixture-key\n");
+    writeFileSync(join(home, "config", "linear-workflow.yaml"), "version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\n    roles: { building: Building, done: Done, canceled: Canceled }\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n");
+    writeFileSync(join(home, "data", "secondmates.md"), "- plans - owns plans (host: fm-mini; root: /remote/root; home: /remote/home; scope: plans; projects: plans; added 2026-01-01)\n");
+    expect((await runDoctorChecks(["--offline"], { FM_HOME: home })).find((check) => check.name === "remote-rings")).toMatchObject({ ok: false, detail: expect.stringContaining("fm-mini: not installed") });
+    const db = StateDatabase.open({ FM_HOME: home });
+    db.raw.query("INSERT INTO remote_rings(home,installed_at,checked_at) VALUES(?,?,?)").run("fm-mini", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z");
+    db.close();
+    expect((await runDoctorChecks(["--offline"], { FM_HOME: home })).find((check) => check.name === "remote-rings")).toMatchObject({ ok: true, detail: "installed for fm-mini" });
   });
 });

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import type { WorkflowConfig } from "../config/schema.ts";
+import type { WorkflowConfig, WorkflowRole } from "../config/schema.ts";
+import { roleForState, stateNameForRole } from "../config/load.ts";
 import { StateDatabase, type Job, type PromiseSourceWatermarks } from "../db/database.ts";
 import { resolveHome, resolveStateDir } from "../env.ts";
 import { sha256 } from "../hash.ts";
@@ -10,6 +11,7 @@ import { statusCursorValue, statusFileState } from "../mirror/generation.ts";
 import { capturePrSourceWatermarks, type PrInspect } from "../mirror/pr.ts";
 import { formatIso, nowEpoch, nowIso } from "../time.ts";
 import { LinearTransport, type TransportResult } from "../transport.ts";
+import { isCaptainOwnedRole } from "../workflow/roles.ts";
 
 const RESOLVE_STATE = `query($issue:String!){viewer{id displayName} issue(id:$issue){id identifier assignee{displayName} project{name slugId} state{id name} team{states{nodes{id name}} members{nodes{id displayName}}}}}`;
 const UPDATE_STATE = `mutation($issue:String!,$state:String!,$assignee:String){issueUpdate(id:$issue,input:{stateId:$state,assigneeId:$assignee}){success issue{id state{name} assignee{displayName}}}}`;
@@ -32,8 +34,9 @@ export type JobOutcome = {
   nativeId?: string | null;
   deliveredAt?: string;
   followups?: Array<{ key: string; kind: string; target: string; payload: unknown }>;
-  transitionedState?: string;
+  transitionedRole?: WorkflowRole;
   skipped?: string;
+  steer?: { home: string; task: string; recordPath: string; message: string; issue: string | null; deliveryId: string | null; lifecycleId: string | null };
 };
 
 function payload(job: Job): JobPayload {
@@ -68,9 +71,14 @@ function mutationRemainsManaged(body: JobPayload, resolved: any, config: Workflo
     && isManagedIssue(team, resolved.viewer.displayName, issue));
 }
 
-async function updateIssueState(job: Job, body: JobPayload, transport: LinearTransport, config: WorkflowConfig): Promise<JobOutcome> {
+async function updateIssueRole(job: Job, body: JobPayload, transport: LinearTransport, config: WorkflowConfig): Promise<JobOutcome> {
   const issue = requiredString(body.issue ?? job.target, "issue");
-  const target = requiredString(body.state, "state");
+  const targetRole = requiredString(body.role, "role") as WorkflowRole;
+  const teamKey = issue.slice(0, issue.indexOf("-")).toUpperCase();
+  const team = config.teams.find((item) => item.key === teamKey);
+  if (!team) throw new Error(`configured team not found: ${teamKey}`);
+  const target = stateNameForRole(team, targetRole);
+  if (!target) throw new Error(`workflow role is unmapped for ${teamKey}: ${targetRole}`);
   const resolved = value(await transport.call("job-resolve-state", { query: RESOLVE_STATE, variables: { issue } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
   if (!mutationRemainsManaged(body, resolved, config, issue)) return { skipped: "issue is outside managed scope" };
@@ -82,18 +90,16 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
       payload: { issue, body: note, requires_managed: body.requires_managed === true || undefined },
     }] : undefined,
   });
-  if (resolved.issue.state?.name === target) return outcome();
-  const expected = typeof body.expected_state === "string" ? body.expected_state : null;
-  if (expected && resolved.issue.state?.name !== expected) {
-    throw new Error(`precondition changed: ${issue} is ${resolved.issue.state?.name}, expected ${expected}`);
+  const currentRole = roleForState(team, resolved.issue.state?.name);
+  if (currentRole === targetRole) return outcome();
+  const expected = typeof body.expected_role === "string" ? body.expected_role : null;
+  if (expected && currentRole !== expected) {
+    throw new Error(`precondition changed: ${issue} is role ${currentRole ?? "unmapped"}, expected ${expected}`);
   }
   const state = resolved.issue.team?.states?.nodes?.find((item: any) => item.name === target);
   if (!state?.id) throw new Error(`target status not found: ${target}`);
-  const teamKey = issue.slice(0, issue.indexOf("-")).toUpperCase();
-  const team = config.teams.find((item) => item.key === teamKey);
-  const captainStates = new Set([team?.statuses.approve_plan, team?.statuses.approve_deliverable, team?.statuses.needs_decision]);
   let assigneeId: string | null = resolved.viewer?.id ?? null;
-  if (captainStates.has(target)) {
+  if (isCaptainOwnedRole(targetRole)) {
     const captain = resolved.issue.team?.members?.nodes?.find((item: any) => identityMatches(item.displayName, config.captain.display_name));
     if (!captain?.id) throw new Error(`captain not found in ${teamKey}: ${config.captain.display_name}`);
     assigneeId = captain.id;
@@ -105,7 +111,21 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
     variables: { issue: resolved.issue.id, state: state.id, assignee: assigneeId },
   }));
   if (!updated?.issueUpdate?.success) throw new Error(`issue update was not successful: ${issue}`);
-  return { ...outcome(), transitionedState: target };
+  return { ...outcome(), transitionedRole: targetRole };
+}
+
+async function updateLegacyIssueState(job: Job, body: JobPayload, transport: LinearTransport, config: WorkflowConfig): Promise<JobOutcome> {
+  const issue = requiredString(body.issue ?? job.target, "issue");
+  const teamKey = issue.slice(0, issue.indexOf("-")).toUpperCase();
+  const team = config.teams.find((item) => item.key === teamKey);
+  if (!team) throw new Error(`configured team not found: ${teamKey}`);
+  const targetState = requiredString(body.state, "state");
+  const targetRole = roleForState(team, targetState);
+  if (!targetRole) throw new Error(`legacy target status is unmapped for ${teamKey}: ${targetState}`);
+  const expectedState = typeof body.expected_state === "string" ? body.expected_state : null;
+  const expectedRole = expectedState ? roleForState(team, expectedState) : null;
+  if (expectedState && !expectedRole) throw new Error(`legacy expected status is unmapped for ${teamKey}: ${expectedState}`);
+  return updateIssueRole(job, { ...body, role: targetRole, expected_role: expectedRole ?? undefined }, transport, config);
 }
 
 function promiseSourceWatermarks(
@@ -217,21 +237,37 @@ async function createAttachment(job: Job, body: JobPayload, transport: LinearTra
   throw new Error(created.error.message);
 }
 
-function relay(job: Job, body: JobPayload, db: StateDatabase, env: NodeJS.ProcessEnv): JobOutcome {
+function sendToTask(job: Job, body: JobPayload, db: StateDatabase, env: NodeJS.ProcessEnv, relayCaptain = false): JobOutcome {
   const task = requiredString(body.task, "task");
   const issue = requiredString(body.issue ?? job.target, "issue");
-  const lifecycle = requiredString(body.lifecycle_id, "lifecycle_id");
-  const active = db.taskLinks(issue, true).some((link) => link.lifecycle_id === lifecycle && link.task === task && link.role === "primary");
-  if (!active) return { skipped: "relay task lifecycle is no longer active" };
+  if (typeof body.lifecycle_id === "string") {
+    const active = db.taskLinks(issue, true).some((link) => link.lifecycle_id === body.lifecycle_id && link.task === task);
+    if (!active) return { skipped: "relay task lifecycle is no longer active" };
+  }
   const decisionKey = typeof body.key === "string" && body.key ? body.key : null;
-  const message = `Captain replied on ${issue}. Read the authoritative thread with: linear-axi issue view ${issue}`;
+  const message = relayCaptain
+    ? `Captain replied on ${issue}. Read the authoritative thread with: linear-axi issue view ${issue}`
+    : requiredString(body.message, "message");
   const home = resolveHome(env);
-  const args = [task, ...(decisionKey ? ["--resolve-key", decisionKey] : []), message];
+  const activeLink = db.taskLinks(issue, true).find((link) => link.task === task) ?? null;
+  const linkHome = activeLink?.host ?? null;
+  const recipientHome = typeof body.home === "string" && body.home.trim() ? body.home.trim() : linkHome ?? "local";
+  const existingRecord = typeof body.record_path === "string" && body.record_path ? body.record_path : null;
+  const deliveryId = !decisionKey
+    ? (typeof body.delivery_id === "string" && body.delivery_id ? body.delivery_id : sha256(job.key).slice(0, 16))
+    : null;
+  const delivery = deliveryId ? ["--fire-and-forget", deliveryId] : [];
+  const args = [task, ...(decisionKey ? ["--resolve-key", decisionKey] : []), ...delivery, message];
   const result = spawnSync(join(home, "bin", "fm-send.sh"), args, {
     env: { ...process.env, ...env, FM_HOME: home }, encoding: "utf8", timeout: 15_000,
   });
   if (result.status !== 0) throw new Error(`fm-send failed: ${(result.stderr || result.stdout || "unknown failure").trim()}`);
-  return { nativeId: task };
+  const output = `${result.stdout}\n${result.stderr}`;
+  const reportedPath = output.match(/(?:^|\s)(\/\S+\.inbox\/\S+)/m)?.[1];
+  const recordPath = typeof body.record_path === "string" && body.record_path
+    ? body.record_path
+    : reportedPath ?? (recipientHome === "local" ? join(home, "state", `${task}.inbox`, `${job.id}.record`) : join("state", `${task}.inbox`, `${job.id}.record`));
+  return { nativeId: task, steer: { home: recipientHome, task, recordPath, message, issue, deliveryId, lifecycleId: activeLink?.lifecycle_id ?? null } };
 }
 
 function acknowledgeCore(job: Job, body: JobPayload, db: StateDatabase, env: NodeJS.ProcessEnv): JobOutcome {
@@ -253,7 +289,7 @@ function acknowledgeCore(job: Job, body: JobPayload, db: StateDatabase, env: Nod
 async function ensureWorkflowState(job: Job, body: JobPayload, transport: LinearTransport): Promise<JobOutcome> {
   const team = requiredString(body.team ?? job.target, "team");
   const name = requiredString(body.name, "name");
-  const statusKey = requiredString(body.status_key, "status_key");
+  const role = requiredString(body.role, "role");
   const resolved = value(await transport.call("job-team-states", { query: RESOLVE_TEAM_STATES, variables: { team } }));
   const matches = (resolved?.teams?.nodes ?? []).filter((item: any) => item.key === team);
   if (resolved?.teams?.pageInfo?.hasNextPage || matches.length > 1) throw new Error(`multiple Linear teams found for key: ${team}`);
@@ -261,10 +297,9 @@ async function ensureWorkflowState(job: Job, body: JobPayload, transport: Linear
   if (!authoritativeTeam?.id) throw new Error(`team not found: ${team}`);
   const existing = authoritativeTeam.states?.nodes?.find((item: any) => item.name === name);
   if (existing?.id) return { nativeId: existing.id };
-  const type = statusKey === "backlog" ? "backlog"
-    : ["done"].includes(statusKey) ? "completed"
-    : ["canceled", "duplicate"].includes(statusKey) ? "canceled"
-    : ["building", "validating_code", "plan_in_progress"].includes(statusKey) ? "started"
+  const type = role === "done" ? "completed"
+    : role === "canceled" ? "canceled"
+    : ["building", "validating", "plan", "merge-gate"].includes(role) ? "started"
     : "unstarted";
   const colors: Record<string, string> = { backlog: "#6B7280", unstarted: "#9CA3AF", started: "#3B82F6", completed: "#10B981", canceled: "#EF4444" };
   const created = value(await transport.call("job-create-state", { query: CREATE_WORKFLOW_STATE, variables: { team: authoritativeTeam.id, name, type, color: colors[type] } }));
@@ -332,12 +367,37 @@ export async function executeJob(job: Job, options: {
       || !isManagedIssue(team, resolved.viewer.displayName, issue)) return { skipped: "issue is outside managed scope" };
   }
   switch (job.kind) {
-    case "linear.issue-state": return updateIssueState(job, body, options.transport, options.config);
+    case "linear.issue-role": return updateIssueRole(job, body, options.transport, options.config);
+    case "linear.issue-state": return updateLegacyIssueState(job, body, options.transport, options.config);
+    case "promise.implicit": {
+      if (!options.db) throw new Error("implicit promise requires the state database");
+      const issue = requiredString(body.issue ?? job.target, "issue");
+      const sourceEventId = requiredString(body.source_event_id, "source_event_id");
+      const expectedEvent = requiredString(body.expected_event, "expected_event");
+      const deadlineKey = requiredString(body.deadline, "deadline");
+      const seconds = deadlineKey === "merge" ? options.config.deadlines.promises.merge
+        : deadlineKey === "validating" ? options.config.deadlines.promises.validating
+          : (() => { throw new Error(`unknown implicit promise deadline: ${deadlineKey}`); })();
+      const createdAt = options.db.event(sourceEventId)?.created_at ?? nowIso(options.env);
+      options.db.createPromise({
+        issue,
+        source_event_id: sourceEventId,
+        expected_event: expectedEvent,
+        deadline_at: formatIso((Date.parse(createdAt) / 1000) + seconds),
+        reply_job_id: job.id,
+        created_at: createdAt,
+      });
+      return { nativeId: job.id };
+    }
     case "linear.comment": return createComment(job, body, options.transport, options.config, options.db, options.captureCommentDeliveryBoundary);
     case "linear.attachment": return createAttachment(job, body, options.transport, options.config);
     case "relay": {
       if (!options.db) throw new Error("relay requires the state database");
-      return relay(job, body, options.db, options.env ?? process.env);
+      return sendToTask(job, body, options.db, options.env ?? process.env, true);
+    }
+    case "fleet.send": {
+      if (!options.db) throw new Error("fleet send requires the state database");
+      return sendToTask(job, body, options.db, options.env ?? process.env);
     }
     case "core.ack": {
       if (!options.db) throw new Error("core acknowledgement requires the state database");
@@ -449,12 +509,30 @@ export async function processJobs(options: {
           });
           options.db.setDisposition(eventId, "handled-by-service", `relayed to ${result.nativeId ?? job.target}`, completedAt);
         }
-        if (result.transitionedState) {
+        if (result.steer) {
+          options.db.recordSteer({
+            issue: result.steer.issue, home: result.steer.home, task: result.steer.task,
+            record_path: result.steer.recordPath, message: result.steer.message,
+            delivery_id: result.steer.deliveryId, lifecycle_id: result.steer.lifecycleId, sent_at: completedAt,
+          });
+        }
+        if (result.transitionedRole) {
           options.db.observe({
-            id: `obs:${sha256(`linear-board-job:${job.id}:${result.transitionedState}`)}`,
-            source: "linear", task: null, issue: job.target, verb: "board-transition", key: result.transitionedState,
+            id: `obs:${sha256(`linear-board-job:${job.id}:${result.transitionedRole}`)}`,
+            source: "linear", task: null, issue: job.target, verb: "board-transition", key: result.transitionedRole,
             note: null, observed_at: completedAt,
           });
+          if (result.transitionedRole === "validating") {
+            options.db.enqueue({
+              key: `${job.key}:promise:${options.config.validation.mode === "verdict" ? "verdict" : "pr-green"}`,
+              kind: "promise.implicit", target: job.target,
+              payload: {
+                issue: job.target, source_event_id: job.id,
+                expected_event: options.config.validation.mode === "verdict" ? "verdict" : "pr-green",
+                deadline: "validating",
+              },
+            }, completedAt);
+          }
         }
         options.db.finishJob(job.id, result.nativeId ?? null, completedAt, null, result.deliveredAt);
       });

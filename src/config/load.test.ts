@@ -2,12 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, loadConfigFile } from "./load.ts";
+import { lintContract } from "../commands/contract.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 function yaml(team = "ABC"): string {
-  return `version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ${team}\n    projects: []\nfeatures: { relay: shadow, mirror: shadow, escalation: shadow }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n`;
+  return `version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ${team}\n    projects: []\n    roles: { building: Building, done: Done, canceled: Canceled }\nfeatures: { relay: shadow, mirror: shadow, escalation: shadow }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n`;
 }
 
 describe("v6 config", () => {
@@ -28,7 +29,7 @@ describe("v6 config", () => {
   test("a second team is an independent config block", () => {
     const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
     const path = join(root, "config.yaml");
-    writeFileSync(path, yaml("ABC").replace("    projects: []", "    projects: [alpha]").replace("features:", "  - key: FAC\n    projects: [fabrica]\n    managed: assignee:self\nfeatures:"));
+    writeFileSync(path, yaml("ABC").replace("    projects: []", "    projects: [alpha]").replace("features:", "  - key: FAC\n    projects: [fabrica]\n    managed: assignee:self\n    roles: { building: Building, done: Done, canceled: Canceled }\nfeatures:"));
     const config = loadConfigFile(path);
     expect(config.teams.map((team) => team.key)).toEqual(["ABC", "FAC"]);
     expect(config.teams[1]?.projects).toEqual(["fabrica"]);
@@ -38,27 +39,46 @@ describe("v6 config", () => {
     const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
     const path = join(root, "config.yaml"); writeFileSync(path, yaml());
     const config = loadConfigFile(path);
-    expect(config.deadlines?.progress.Building).toBe(45 * 60);
+    expect(config.deadlines.progress.building).toBe(45 * 60);
     expect(config.deadlines?.stalled.mention).toBe(30 * 60);
     expect(config.promises).toMatchObject({ required_on_firstmate_owned: true });
-    expect(config.promises?.vocabulary).toContain("pr-green");
+    expect(config.promises.vocabulary).toContain("pr-green");
   });
 
   test("stall durations are overridable with duration strings", () => {
     const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
     const path = join(root, "config.yaml");
-    writeFileSync(path, `${yaml()}deadlines:\n  progress: { Building: 7m }\n  stalled: { mention: 9m }\npromises:\n  required_on_firstmate_owned: false\n  vocabulary: [pr-green, none]\n`);
+    writeFileSync(path, `${yaml()}deadlines:\n  progress: { building: 7m }\n  stalled: { mention: 9m }\npromises:\n  required_on_firstmate_owned: false\n  vocabulary: [pr-green, none]\n`);
     const config = loadConfigFile(path);
-    expect(config.deadlines?.progress.Building).toBe(7 * 60);
+    expect(config.deadlines.progress.building).toBe(7 * 60);
     expect(config.deadlines?.stalled.mention).toBe(9 * 60);
     expect(config.promises).toEqual({ required_on_firstmate_owned: false, vocabulary: ["pr-green", "none"] });
   });
 
-  test("progress deadlines follow custom workflow status names", () => {
+  test("progress deadlines remain role keyed when workflow status names change", () => {
     const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
     const path = join(root, "config.yaml");
-    writeFileSync(path, `${yaml().replace("      building: Building", "      building: In Progress")}deadlines:\n  progress: { In Progress: 7m }\n`);
+    writeFileSync(path, `${yaml().replace("building: Building", "building: In Progress")}deadlines:\n  progress: { building: 7m }\n`);
     const config = loadConfigFile(path);
-    expect(config.deadlines?.progress["In Progress"]).toBe(7 * 60);
+    expect(config.deadlines.progress.building).toBe(7 * 60);
+  });
+
+  test("rejects legacy statuses and duplicate role mappings", () => {
+    const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
+    const legacy = join(root, "legacy.yaml");
+    writeFileSync(legacy, yaml().replace("roles: { building: Building, done: Done, canceled: Canceled }", "statuses: { building: Building, done: Done, canceled: Canceled }"));
+    expect(() => loadConfigFile(legacy)).toThrow("statuses");
+    const duplicate = join(root, "duplicate.yaml");
+    writeFileSync(duplicate, yaml().replace("building: Building, done: Done", "building: Building, done: Building"));
+    expect(() => loadConfigFile(duplicate)).toThrow("already mapped to another role");
+  });
+
+  test("lint data names a configured status and role when Linear lacks it", () => {
+    const root = mkdtempSync("/private/tmp/fml-config-"); roots.push(root);
+    mkdirSync(join(root, "config"));
+    writeFileSync(join(root, "config", "linear-workflow.yaml"), yaml());
+    for (const name of ["reply.md", "report.md"]) writeFileSync(join(root, "config", name), name === "reply.md" ? "{{body}} {{next}}\n" : "{{summary}} {{events}} {{drift}}\n");
+    writeFileSync(join(root, "config", "review.html"), "{{issue}} {{title}}<section id='outcome'></section><section id='changes'></section><section id='verification'></section><section id='review'></section>");
+    expect(lintContract({ FM_HOME: root }, { ABC: ["Done", "Canceled"] })).toContain('ABC status "Building" mapped to role building does not exist');
   });
 });

@@ -43,7 +43,8 @@ The adapter records their transport completion when Firstmate accepts the silent
 ## Inbound decisions
 
 Captain authorship is matched against the configured Linear display name.
-Only the complete normalized comment `approved` or `lgtm` is an approval, and only in a plan or deliverable approval status.
+Only the complete normalized comment `approved` or `lgtm` is an approval, and only while the issue occupies its configured plan or deliverable gate role.
+The merge gate additionally accepts native Linear approval or an unambiguous merge authorization, but generic approval words never authorize a merge.
 Every other captain comment in a gate returns ownership to Firstmate and remains meaningful input.
 
 `inbox show` is the read gate.

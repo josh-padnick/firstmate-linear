@@ -73,7 +73,7 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
     const generation = sidecarGeneration(path, "spawn_gen");
     for (const link of current) {
       if (generation && generation === link.blocked_meta_generation) continue;
-      db.linkTask({ ...link, worktree: meta.worktree || link.worktree, harness: meta.harness || link.harness });
+      db.linkTask({ ...link, worktree: meta.worktree || link.worktree, harness: meta.harness || link.harness, host: meta.remote_host || link.host || "local" });
       const model = meta.delegate === "devin" ? "devin" : meta.model || "unknown";
       const observation: Observation = {
         id: `obs:${sha256(`${task}:${link.issue}:${link.lifecycle_id}:${meta.spawn_gen ?? "spawn"}:model:${model}`)}`,
