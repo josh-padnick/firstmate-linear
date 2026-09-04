@@ -6,6 +6,7 @@ import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
 import { LinearTransport } from "../transport.ts";
 import { scanFleet } from "../mirror/scan.ts";
+import { scanPullRequests } from "../mirror/pr.ts";
 import { reconcileStalls } from "../reconcile/stall.ts";
 import { nextAttempt, processJobs } from "./worker.ts";
 
@@ -128,6 +129,61 @@ describe("job worker", () => {
     scanFleet(root, db, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
     reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
     expect(db.promise(promise.id)?.state).toBe("kept");
+    db.close();
+  });
+
+  test("promise activation rejects an unchanged pre-delivery PR state", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures); mkdirSync(join(root, "state"));
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
+    const metaPath = join(root, "state", "worker.meta");
+    writeFileSync(metaPath, "spawn_gen=g1\npr=https://github.com/acme/repo/pull/1\npr_head=head1\npr_base=main\n");
+    const green = (headRefOid: string) => ({ state: "OPEN" as const, headRefOid, baseRefName: "main", requiredChecks: [{ name: "test", state: "pass" }] });
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
+    const job = db.enqueue({ key: "comment:pr-promise", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "I will keep it green", actor: "core" } }, "2026-01-01T12:00:00Z");
+    const promise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "pr-green", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: job.id, created_at: "2026-01-01T12:00:00Z" });
+    await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), inspectPr: () => green("head1"), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:20:00Z") / 1000) } });
+    scanPullRequests(root, db, () => green("head1"), { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:21:00Z") / 1000) });
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:21:00Z") / 1000) });
+    expect(db.promise(promise.id)?.state).toBe("open");
+
+    writeFileSync(metaPath, "spawn_gen=g1\npr=https://github.com/acme/repo/pull/1\npr_head=head2\npr_base=main\n");
+    scanPullRequests(root, db, () => green("head2"), { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
+    expect(db.promise(promise.id)?.state).toBe("kept");
+    db.close();
+  });
+
+  test("an already-satisfied retried state job records no transition", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { viewer: { id: "me" }, issue: { id: "issue-id", state: { name: "Done" }, team: { states: { nodes: [] }, members: { nodes: [] } } } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    const job = db.enqueue({ key: "state:retry", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Done" } }, "2026-01-01T00:00:00Z");
+    db.claimDueJobs(1, "2026-01-01T00:00:00Z");
+    db.retryJob(job.id, "lost acknowledgement", "2026-01-01T00:00:01Z");
+
+    await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225601" } });
+
+    expect(db.observations("ABC-1").filter((item) => item.verb === "board-transition")).toHaveLength(0);
+    db.close();
+  });
+
+  test("a managed-scope skip fails its staged promise without progress", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Someone Else", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: false, observed_at: "2026-01-01T00:00:00Z" });
+    const job = db.enqueue({ key: "comment:skipped", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "Not delivered", actor: "core", requires_managed: true } }, "2026-01-01T00:00:00Z");
+    const promise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "comment", deadline_at: "2026-01-01T00:30:00Z", reply_job_id: job.id, created_at: "2026-01-01T00:00:00Z" });
+
+    await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
+
+    expect(db.jobs()[0]).toMatchObject({ state: "done", native_id: null });
+    expect(db.jobs()[0]?.last_error).toContain("skipped: issue is outside managed scope");
+    expect(db.promise(promise.id)?.state).toBe("failed");
+    expect(db.observations("ABC-1").filter((item) => item.verb === "firstmate-comment")).toHaveLength(0);
     db.close();
   });
 

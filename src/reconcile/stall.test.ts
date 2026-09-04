@@ -167,11 +167,12 @@ describe("stall reconciliation", () => {
     const { root, db } = setup();
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T11:59:00Z" });
     const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "board:Done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    db.observe({ id: "obs:done", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Done", note: "Building", observed_at: "2026-01-01T12:01:00Z" });
     db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
     db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:02:00Z" });
     reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:03:00Z") / 1000) });
     expect(db.promise(promise.id)?.state).toBe("kept");
-    expect(db.promise(promise.id)?.observation_id).toContain("12:01:00Z");
+    expect(db.promise(promise.id)?.observation_id).toBe("obs:done");
     db.close();
   });
 
@@ -181,6 +182,19 @@ describe("stall reconciliation", () => {
     const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "board:Done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
     db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
     reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:02:00Z") / 1000) });
+    expect(db.promise(promise.id)?.state).toBe("open");
+    db.close();
+  });
+
+  test("a delayed snapshot cannot replace pre-promise transition chronology", () => {
+    const { root, db } = setup();
+    db.observe({ id: "obs:old-done", source: "linear", task: null, issue: "ABC-1", verb: "board-transition", key: "Done", note: "Building", observed_at: "2026-01-01T11:59:00Z" });
+    const promise = db.createPromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "board:Done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: "job:reply", created_at: "2026-01-01T12:00:00Z" });
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:01:00Z" });
+    db.snapshot({ issue: "ABC-1", state: "Done", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, observed_at: "2026-01-01T12:02:00Z" });
+
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:03:00Z") / 1000) });
+
     expect(db.promise(promise.id)?.state).toBe("open");
     db.close();
   });

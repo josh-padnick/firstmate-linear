@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_PROGRESS_DEADLINES, type TeamConfig, type WorkflowConfig } from "../config/schema.ts";
-import { type DomainEvent, type Observation, observationBelongsToTaskLink, type PromiseRecord, type StateDatabase, type TaskLink } from "../db/database.ts";
+import { type DomainEvent, type Observation, observationBelongsToTaskLink, type PromiseRecord, type PromiseSourceWatermarks, type StateDatabase, type TaskLink } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { sidecarGeneration } from "../mirror/generation.ts";
 import { compareIso, formatIso, nowEpoch, nowIso, parseIso } from "../time.ts";
@@ -35,20 +35,71 @@ function wasPrimaryTaskAt(db: StateDatabase, observation: Observation): boolean 
     && observationBelongsToTaskLink(observation, link));
 }
 
-function beyondSourceWatermark(db: StateDatabase, promise: PromiseRecord, observation: Observation): boolean {
-  if (!promise.source_watermarks) return true;
-  let watermarks: Record<string, { identity: string | null; offset: number }>;
-  try { watermarks = JSON.parse(promise.source_watermarks) as Record<string, { identity: string | null; offset: number }>; }
-  catch { return false; }
+function sourceWatermarks(promise: PromiseRecord): PromiseSourceWatermarks | null | undefined {
+  if (!promise.source_watermarks) return undefined;
+  try { return JSON.parse(promise.source_watermarks) as PromiseSourceWatermarks; }
+  catch { return null; }
+}
+
+function newLifecycleAfterPromise(db: StateDatabase, promise: PromiseRecord, lifecycle: string): boolean {
+  const link = db.taskLinks(promise.issue).find((item) => item.lifecycle_id === lifecycle);
+  return Boolean(link && atOrAfter(link.spawned_at, promise.created_at));
+}
+
+function statusBeyondSourceWatermark(db: StateDatabase, promise: PromiseRecord, observation: Observation): boolean {
+  const watermarks = sourceWatermarks(promise);
+  if (watermarks === undefined) return true;
+  if (!watermarks) return false;
   const lifecycle = observation.task_lifecycle_id;
   if (!lifecycle) return false;
-  const watermark = watermarks[lifecycle];
-  if (!watermark) {
-    const link = db.taskLinks(observation.issue).find((item) => item.lifecycle_id === lifecycle);
-    return Boolean(link && atOrAfter(link.spawned_at, promise.created_at));
-  }
+  const entry = watermarks[lifecycle];
+  if (!entry) return newLifecycleAfterPromise(db, promise, lifecycle);
+  const watermark = entry.status ?? ("offset" in entry ? entry as unknown as { identity: string | null; offset: number } : undefined);
+  if (!watermark) return true;
   if (!observation.source_identity || observation.source_offset === null || observation.source_offset === undefined) return false;
   return observation.source_identity !== watermark.identity || observation.source_offset >= watermark.offset;
+}
+
+function matchingPrObservation(db: StateDatabase, promise: PromiseRecord, observations: Observation[]): Observation | null {
+  const watermarks = sourceWatermarks(promise);
+  const baselines = new Map<string, string | null>();
+  const advanced = new Set<string>();
+  for (const observation of observations) {
+    if (observation.source !== "pr" || !observation.task || !wasPrimaryTaskAt(db, observation)) continue;
+    if (watermarks === undefined) {
+      if (observation.verb === promise.expected_event) return observation;
+      continue;
+    }
+    if (!watermarks || !observation.task_lifecycle_id || !observation.source_identity) continue;
+    const lifecycle = observation.task_lifecycle_id;
+    const entry = watermarks[lifecycle];
+    if (!entry) {
+      if (newLifecycleAfterPromise(db, promise, lifecycle) && observation.verb === promise.expected_event) return observation;
+      continue;
+    }
+    if (!entry.pr) {
+      if (observation.verb === promise.expected_event) return observation;
+      continue;
+    }
+    if (promise.expected_event === "pr-reported") {
+      if (observation.verb === "pr-reported" && (entry.pr.reported === null || observation.source_identity !== entry.pr.reported)) return observation;
+      continue;
+    }
+    if (observation.verb === "pr-reported") continue;
+    if (!baselines.has(lifecycle)) {
+      if (entry.pr.stateKnown) baselines.set(lifecycle, entry.pr.state);
+      else {
+        baselines.set(lifecycle, observation.source_identity);
+        continue;
+      }
+    }
+    if (observation.source_identity !== baselines.get(lifecycle)) {
+      baselines.set(lifecycle, observation.source_identity);
+      advanced.add(lifecycle);
+    }
+    if (advanced.has(lifecycle) && observation.verb === promise.expected_event) return observation;
+  }
+  return null;
 }
 
 function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progress | null {
@@ -60,25 +111,16 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
       && item.verb === verb
       && item.task
       && wasPrimaryTaskAt(db, item)
-      && beyondSourceWatermark(db, promise, item));
+      && statusBeyondSourceWatermark(db, promise, item));
     return found ? { id: found.id, kind: "status", at: found.observed_at, detail: `status ${verb}` } : null;
   }
   if (expected.startsWith("board:")) {
     const state = expected.slice("board:".length);
     const transition = observations.find((item) => item.source === "linear" && item.verb === "board-transition" && item.key === state);
-    if (transition) return { id: transition.id, kind: "board", at: transition.observed_at, detail: `board ${state}` };
-    const snapshots = db.snapshots(promise.issue);
-    const found = snapshots.find((item, index) => index > 0
-      && atOrAfter(item.observed_at, promise.created_at)
-      && item.state === state
-      && snapshots[index - 1]!.state !== state);
-    return found ? { id: `snapshot:${promise.issue}:${found.observed_at}`, kind: "board", at: found.observed_at, detail: `board ${state}` } : null;
+    return transition ? { id: transition.id, kind: "board", at: transition.observed_at, detail: `board ${state}` } : null;
   }
   if (["pr-reported", "pr-green", "pr-merged"].includes(expected)) {
-    const found = observations.find((item) => item.source === "pr"
-      && item.verb === expected
-      && item.task
-      && wasPrimaryTaskAt(db, item));
+    const found = matchingPrObservation(db, promise, observations);
     return found ? { id: found.id, kind: "pr", at: found.observed_at, detail: expected } : null;
   }
   if (expected === "comment") {

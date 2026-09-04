@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import type { WorkflowConfig } from "../config/schema.ts";
-import { StateDatabase, type Job } from "../db/database.ts";
+import { StateDatabase, type Job, type PromiseSourceWatermarks } from "../db/database.ts";
 import { resolveHome, resolveStateDir } from "../env.ts";
 import { sha256 } from "../hash.ts";
 import { isManagedIssue } from "../managed.ts";
 import { statusCursorValue, statusFileState } from "../mirror/generation.ts";
+import { capturePrSourceWatermarks, type PrInspect } from "../mirror/pr.ts";
 import { nowEpoch, nowIso } from "../time.ts";
 import { LinearTransport, type TransportResult } from "../transport.ts";
 
@@ -30,6 +31,7 @@ export type JobOutcome = {
   nativeId?: string | null;
   followups?: Array<{ key: string; kind: string; target: string; payload: unknown }>;
   transitionedState?: string;
+  skipped?: string;
 };
 
 function payload(job: Job): JobPayload {
@@ -66,9 +68,7 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
       payload: { issue, body: note, requires_managed: body.requires_managed === true || undefined },
     }] : undefined,
   });
-  if (resolved.issue.state?.name === target) {
-    return job.attempts > 1 ? { ...outcome(), transitionedState: target } : outcome();
-  }
+  if (resolved.issue.state?.name === target) return outcome();
   const expected = typeof body.expected_state === "string" ? body.expected_state : null;
   if (expected && resolved.issue.state?.name !== expected) {
     throw new Error(`precondition changed: ${issue} is ${resolved.issue.state?.name}, expected ${expected}`);
@@ -94,14 +94,19 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
   return { ...outcome(), transitionedState: target };
 }
 
-function promiseSourceWatermarks(db: StateDatabase, issue: string, env: NodeJS.ProcessEnv): Record<string, { identity: string | null; offset: number }> {
+function promiseSourceWatermarks(db: StateDatabase, issue: string, expectedEvent: string, env: NodeJS.ProcessEnv, initial: PromiseSourceWatermarks): PromiseSourceWatermarks {
   const state = resolveStateDir(resolveHome(env), env);
-  const watermarks: Record<string, { identity: string | null; offset: number }> = {};
-  for (const link of db.taskLinks(issue, true).filter((item) => item.role === "primary")) {
-    const path = join(state, `${link.task}.status`);
-    const status = statusFileState(path, db.cursor(`status:${path}`));
-    watermarks[link.lifecycle_id] = { identity: status?.incarnationIdentity ?? null, offset: status?.content.length ?? 0 };
-    if (status?.needsPersistence) db.setCursor(`status:${path}`, statusCursorValue(status, 0));
+  const watermarks: PromiseSourceWatermarks = { ...initial };
+  if (expectedEvent.startsWith("status:")) {
+    for (const link of db.taskLinks(issue, true).filter((item) => item.role === "primary")) {
+      const path = join(state, `${link.task}.status`);
+      const status = statusFileState(path, db.cursor(`status:${path}`));
+      watermarks[link.lifecycle_id] = {
+        ...watermarks[link.lifecycle_id],
+        status: { identity: status?.incarnationIdentity ?? null, offset: status?.content.length ?? 0 },
+      };
+      if (status?.needsPersistence) db.setCursor(`status:${path}`, statusCursorValue(status, 0));
+    }
   }
   return watermarks;
 }
@@ -112,13 +117,13 @@ async function createComment(job: Job, body: JobPayload, transport: LinearTransp
     if (!db) throw new Error("guarded comment requires the state database");
     return db.event(body.waiting_event_id)?.disposition === "waiting-for-core";
   };
-  if (!stillWaiting()) return {};
+  if (!stillWaiting()) return { skipped: "waiting event is no longer open" };
   const issue = requiredString(body.issue ?? job.target, "issue");
   const text = requiredString(body.body, "body");
   const id = nativeUuid(job.key);
   const resolved = value(await transport.call("job-resolve-comment-issue", { query: RESOLVE_ISSUE, variables: { issue } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
-  if (!stillWaiting()) return {};
+  if (!stillWaiting()) return { skipped: "waiting event is no longer open" };
   const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue: resolved.issue.id, body: text } });
   if (result.ok) {
     if (!(result.value.data as any)?.commentCreate?.success) throw new Error(`comment creation was not successful: ${issue}`);
@@ -249,14 +254,14 @@ export async function executeJob(job: Job, options: {
   const body = payload(job);
   if (body.requires_managed === true) {
     if (!options.db) throw new Error("managed issue guard requires the state database");
-    if (options.db.latestSnapshot(job.target)?.managed !== true) return {};
+    if (options.db.latestSnapshot(job.target)?.managed !== true) return { skipped: "issue is outside managed scope" };
     const resolved = value(await options.transport.call("job-resolve-managed", { query: RESOLVE_MANAGED, variables: { issue: job.target } }));
     const issue = resolved?.issue;
     const identifier = typeof issue?.identifier === "string" ? issue.identifier : job.target;
     const teamKey = identifier.slice(0, identifier.indexOf("-")).toUpperCase();
     const team = options.config.teams.find((item) => item.key === teamKey);
     if (!team || !issue || typeof resolved?.viewer?.displayName !== "string"
-      || !isManagedIssue(team, resolved.viewer.displayName, issue)) return {};
+      || !isManagedIssue(team, resolved.viewer.displayName, issue)) return { skipped: "issue is outside managed scope" };
   }
   switch (job.kind) {
     case "linear.issue-state": return updateIssueState(job, body, options.transport, options.config);
@@ -287,6 +292,7 @@ export async function processJobs(options: {
   transport: LinearTransport;
   env?: NodeJS.ProcessEnv;
   maxAttempts?: number;
+  inspectPr?: PrInspect;
 }): Promise<{ done: number; retried: number; dead: number }> {
   const env = options.env ?? process.env;
   const maxAttempts = options.maxAttempts ?? 8;
@@ -296,6 +302,17 @@ export async function processJobs(options: {
   for (const job of options.db.claimDueJobs(20, nowIso(env))) {
     try {
       const result = await executeJob(job, { db: options.db, config: options.config, transport: options.transport, env });
+      if (result.skipped) {
+        options.db.skipJob(job.id, result.skipped, nowIso(env));
+        done += 1;
+        continue;
+      }
+      const pendingPromise = result.nativeId
+        ? options.db.promises(job.target, ["pending"]).find((item) => item.reply_job_id === job.id)
+        : undefined;
+      const prWatermarks = pendingPromise?.expected_event.startsWith("pr-")
+        ? capturePrSourceWatermarks(resolveHome(env), options.db, job.target, options.inspectPr)
+        : {};
       options.db.transaction(() => {
         for (const followup of result.followups ?? []) options.db.enqueue(followup, nowIso(env));
         const completedAt = nowIso(env);
@@ -324,10 +341,10 @@ export async function processJobs(options: {
             note: null, observed_at: completedAt,
           });
         }
-        const pendingPromise = result.nativeId
-          ? options.db.promises(job.target, ["pending"]).some((item) => item.reply_job_id === job.id)
-          : false;
-        options.db.finishJob(job.id, result.nativeId ?? null, completedAt, pendingPromise ? promiseSourceWatermarks(options.db, job.target, env) : null);
+        const sourceWatermarks = pendingPromise
+          ? promiseSourceWatermarks(options.db, job.target, pendingPromise.expected_event, env, prWatermarks)
+          : null;
+        options.db.finishJob(job.id, result.nativeId ?? null, completedAt, sourceWatermarks);
       });
       done += 1;
     } catch (error) {

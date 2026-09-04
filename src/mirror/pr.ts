@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { type Observation, observationBelongsToTaskLink, type StateDatabase, type TaskLink } from "../db/database.ts";
+import { type Observation, observationBelongsToTaskLink, type PromiseSourceWatermarks, type StateDatabase, type TaskLink } from "../db/database.ts";
 import { sha256 } from "../hash.ts";
 import { nowIso } from "../time.ts";
 import { sidecarGeneration } from "./generation.ts";
@@ -37,6 +37,41 @@ function expectedBase(link: TaskLink, values: Record<string, string>): string | 
   const result = spawnSync("git", ["-C", link.worktree, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], { encoding: "utf8", timeout: 5_000 });
   if (result.status !== 0) return null;
   return result.stdout.trim().replace(/^origin\//, "") || null;
+}
+
+function prSourceIdentity(generation: string | null, url: string, snapshot: PrSnapshot): string {
+  const checks = [...snapshot.requiredChecks]
+    .map((check) => ({ name: check.name, state: check.state.toLowerCase() }))
+    .sort((left, right) => left.name.localeCompare(right.name) || left.state.localeCompare(right.state));
+  return `pr:${sha256(JSON.stringify({ generation, url, state: snapshot.state, head: snapshot.headRefOid, base: snapshot.baseRefName, checks }))}`;
+}
+
+function prReportedIdentity(generation: string | null, url: string): string {
+  return `pr-reported:${sha256(JSON.stringify({ generation, url }))}`;
+}
+
+export function capturePrSourceWatermarks(home: string, db: StateDatabase, issue: string, inspect: PrInspect = inspectPr): PromiseSourceWatermarks {
+  const watermarks: PromiseSourceWatermarks = {};
+  for (const link of db.taskLinks(issue, true).filter((item) => item.role === "primary")) {
+    const path = join(home, "state", `${link.task}.meta`);
+    const generation = sidecarGeneration(path, "spawn_gen");
+    if (!existsSync(path) || (generation && generation === link.blocked_meta_generation)) {
+      watermarks[link.lifecycle_id] = { pr: { reported: null, state: null, stateKnown: true } };
+      continue;
+    }
+    const values = meta(path);
+    if (!values.pr) {
+      watermarks[link.lifecycle_id] = { pr: { reported: null, state: null, stateKnown: true } };
+      continue;
+    }
+    const reported = prReportedIdentity(generation, values.pr);
+    try {
+      watermarks[link.lifecycle_id] = { pr: { reported, state: prSourceIdentity(generation, values.pr, inspect(values.pr)), stateKnown: true } };
+    } catch {
+      watermarks[link.lifecycle_id] = { pr: { reported, state: null, stateKnown: false } };
+    }
+  }
+  return watermarks;
 }
 
 export function inspectPr(url: string, run: CommandRunner = runCommand): PrSnapshot {
@@ -81,26 +116,28 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
     if (!url) continue;
     try {
       const snapshot = inspect(url);
+      const sourceIdentity = prSourceIdentity(generation, url, snapshot);
+      const reportedIdentity = prReportedIdentity(generation, url);
       const base = expectedBase(link, values);
       const lifecycle = `${link.task}:${link.issue}:${link.lifecycle_id}`;
       record(db, {
         id: `obs:${sha256(`${lifecycle}:${url}:reported`)}`, source: "pr", task: link.task,
-        task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-reported", key: "pr", note: url, observed_at: nowIso(env),
+        task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-reported", key: "pr", note: url, source_identity: reportedIdentity, observed_at: nowIso(env),
       }, observations);
       if (snapshot.state === "MERGED" && base && snapshot.baseRefName === base) {
         record(db, {
           id: `obs:${sha256(`${lifecycle}:${url}:${snapshot.headRefOid}:merged:${snapshot.baseRefName}`)}`, source: "pr", task: link.task,
-          task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-merged", key: "pr", note: url, observed_at: nowIso(env),
+          task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-merged", key: "pr", note: url, source_identity: sourceIdentity, observed_at: nowIso(env),
         }, observations);
         continue;
       }
       if (snapshot.state === "MERGED" && !base) {
-        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base unverified`, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-unverified`, observations);
+        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base unverified`, source_identity: sourceIdentity, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-unverified`, observations);
         findings.push({ code: "PR_BASE_UNKNOWN", issue: link.issue, detail: `cannot verify expected base for ${url}` });
         continue;
       }
       if (snapshot.state === "MERGED" && snapshot.baseRefName !== base) {
-        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base=${snapshot.baseRefName} expected=${base}`, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-mismatch:${snapshot.baseRefName}`, observations);
+        recordPrState(db, { id: "", source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-withdrawn", key: "pr", note: `${url} base=${snapshot.baseRefName} expected=${base}`, source_identity: sourceIdentity, observed_at: nowIso(env) }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:base-mismatch:${snapshot.baseRefName}`, observations);
         findings.push({ code: "PR_BASE_MISMATCH", issue: link.issue, detail: `${url} merged into ${snapshot.baseRefName}, expected ${base}` });
         continue;
       }
@@ -111,7 +148,7 @@ export function scanPullRequests(home: string, db: StateDatabase, inspect: PrIns
         id: "", source: "pr", task: link.task,
         task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: green ? "pr-green" : "pr-withdrawn", key: "pr",
         note: green ? `${url} head=${snapshot.headRefOid}` : `${url} current=${snapshot.headRefOid} expected=${expectedHead ?? "missing"}`,
-        observed_at: nowIso(env),
+        source_identity: sourceIdentity, observed_at: nowIso(env),
       }, link, `${lifecycle}:${url}:${snapshot.headRefOid}:${green ? "green" : "not-green"}`, observations);
     } catch (error) {
       findings.push({ code: "PR_INSPECTION_FAILED", issue: link.issue, detail: error instanceof Error ? error.message : String(error) });

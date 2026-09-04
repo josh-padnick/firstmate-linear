@@ -65,6 +65,11 @@ export type NewJob = {
 
 export type PromiseState = "pending" | "open" | "kept" | "overdue" | "superseded" | "failed";
 
+export type PromiseSourceWatermarks = Record<string, {
+  status?: { identity: string | null; offset: number };
+  pr?: { reported: string | null; state: string | null; stateKnown: boolean };
+}>;
+
 export type PromiseRecord = {
   id: string;
   issue: string;
@@ -527,7 +532,7 @@ export class StateDatabase {
     });
   }
 
-  finishJob(id: string, nativeId: string | null = null, at = nowIso(), sourceWatermarks: Record<string, { identity: string | null; offset: number }> | null = null): void {
+  finishJob(id: string, nativeId: string | null = null, at = nowIso(), sourceWatermarks: PromiseSourceWatermarks | null = null): void {
     this.transaction(() => {
       this.raw.query("UPDATE jobs SET state='done',native_id=COALESCE(?,native_id),done_at=?,last_error=NULL WHERE id=?")
         .run(nativeId, at, id);
@@ -561,6 +566,14 @@ export class StateDatabase {
       } else {
         this.raw.query("UPDATE promises SET reply_comment_id=? WHERE reply_job_id=?").run(nativeId, id);
       }
+    });
+  }
+
+  skipJob(id: string, reason: string, at = nowIso()): void {
+    this.transaction(() => {
+      this.raw.query("UPDATE jobs SET state='done',done_at=?,last_error=? WHERE id=?")
+        .run(at, `skipped: ${reason}`.slice(0, 2000), id);
+      this.raw.query("UPDATE promises SET state='failed' WHERE reply_job_id=? AND state='pending'").run(id);
     });
   }
 
