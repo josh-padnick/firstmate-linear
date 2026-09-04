@@ -102,7 +102,7 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
           const observation: Observation = {
             id: `obs:${sha256(`${path}:${link.issue}:${link.lifecycle_id}:${fileIdentity}:${row.offset}:${row.line}`)}`,
             source: "status", task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: parsed.verb,
-            key: parsed.key, note: parsed.note, observed_at: nowIso(env),
+            key: parsed.key, note: parsed.note, source_identity: fileIdentity, source_offset: row.offset, observed_at: nowIso(env),
           };
           if (db.observe(observation)) inserted.push(observation);
         }
@@ -114,13 +114,16 @@ export function scanFleet(home: string, db: StateDatabase, env: NodeJS.ProcessEn
   const summaryPath = join(state, "home-summary.json");
   if (existsSync(summaryPath)) {
     try {
-      const summary = JSON.parse(readFileSync(summaryPath, "utf8")) as { generated?: string; active_children?: Array<{ id?: string; state?: string }> };
+      const summary = JSON.parse(readFileSync(summaryPath, "utf8")) as { generated?: string; active_children?: Array<{ id?: string; state?: string; generated?: string; lifecycle_id?: string }> };
       for (const child of summary.active_children ?? []) {
         if (!child.id || !child.state || !summary.generated) continue;
         for (const link of db.taskLinks(undefined, true).filter((item) => item.task === child.id)) {
-          const belongs = compareIso(summary.generated, link.spawned_at);
-          if (belongs === null || belongs < 0) continue;
-          const observation: Observation = { id: `obs:${sha256(`${summary.generated}:${child.id}:${link.issue}:${link.lifecycle_id}:${child.state}`)}`, source: "summary", task: child.id, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: child.state, key: "summary", note: null, observed_at: summary.generated ?? nowIso(env) };
+          const childGenerated = child.generated;
+          const belongs = child.lifecycle_id === link.lifecycle_id
+            || (childGenerated ? compareIso(childGenerated, link.spawned_at) !== null && compareIso(childGenerated, link.spawned_at)! >= 0 : false);
+          if (!belongs) continue;
+          const observedAt = childGenerated ?? summary.generated ?? nowIso(env);
+          const observation: Observation = { id: `obs:${sha256(`${observedAt}:${child.id}:${link.issue}:${link.lifecycle_id}:${child.state}`)}`, source: "summary", task: child.id, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: child.state, key: "summary", note: null, observed_at: observedAt };
           if (db.observe(observation)) observations.push(observation);
         }
       }

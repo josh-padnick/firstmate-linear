@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -97,7 +97,7 @@ CREATE INDEX IF NOT EXISTS task_links_issue_idx ON task_links(issue, role, torn_
 
 CREATE TABLE IF NOT EXISTS observations (
   id TEXT PRIMARY KEY,
-  source TEXT NOT NULL CHECK (source IN ('status', 'summary', 'pr')),
+  source TEXT NOT NULL CHECK (source IN ('status', 'summary', 'pr', 'linear')),
   task TEXT,
   task_spawned_at TEXT,
   task_lifecycle_id TEXT,
@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS observations (
   verb TEXT NOT NULL,
   key TEXT NOT NULL,
   note TEXT,
+  source_identity TEXT,
+  source_offset INTEGER,
   observed_at TEXT NOT NULL
 );
 
@@ -136,7 +138,8 @@ CREATE TABLE IF NOT EXISTS promises (
   state TEXT NOT NULL CHECK (state IN ('pending', 'open', 'kept', 'overdue', 'superseded', 'failed')),
   observation_id TEXT,
   superseded_by TEXT,
-  stalled_event_id TEXT
+  stalled_event_id TEXT,
+  source_watermarks TEXT
 );
 
 CREATE INDEX IF NOT EXISTS promises_issue_state_idx ON promises(issue,state,created_at);
@@ -164,7 +167,8 @@ CREATE TABLE promises (
   superseded_by TEXT,
   stalled_event_id TEXT
 );
-INSERT INTO promises SELECT * FROM promises_v3;
+INSERT INTO promises(id,issue,source_event_id,expected_event,deadline_at,reply_job_id,reply_comment_id,created_at,state,observation_id,superseded_by,stalled_event_id)
+SELECT id,issue,source_event_id,expected_event,deadline_at,reply_job_id,reply_comment_id,created_at,state,observation_id,superseded_by,stalled_event_id FROM promises_v3;
 DROP TABLE promises_v3;
 CREATE INDEX promises_issue_state_idx ON promises(issue,state,created_at);
 `;
@@ -233,4 +237,27 @@ ALTER TABLE task_links ADD COLUMN meta_generation TEXT;
 ALTER TABLE task_links ADD COLUMN busy_generation TEXT;
 ALTER TABLE task_links ADD COLUMN blocked_meta_generation TEXT;
 ALTER TABLE task_links ADD COLUMN blocked_busy_generation TEXT;
+`;
+
+export const MIGRATE_TO_V11_SQL = `
+ALTER TABLE observations RENAME TO observations_v10;
+DROP INDEX observations_issue_idx;
+CREATE TABLE observations (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL CHECK (source IN ('status', 'summary', 'pr', 'linear')),
+  task TEXT,
+  task_spawned_at TEXT,
+  task_lifecycle_id TEXT,
+  issue TEXT NOT NULL,
+  verb TEXT NOT NULL,
+  key TEXT NOT NULL,
+  note TEXT,
+  source_identity TEXT,
+  source_offset INTEGER,
+  observed_at TEXT NOT NULL
+);
+INSERT INTO observations(id,source,task,task_spawned_at,task_lifecycle_id,issue,verb,key,note,observed_at)
+SELECT id,source,task,task_spawned_at,task_lifecycle_id,issue,verb,key,note,observed_at FROM observations_v10;
+DROP TABLE observations_v10;
+CREATE INDEX observations_issue_idx ON observations(issue, observed_at);
 `;

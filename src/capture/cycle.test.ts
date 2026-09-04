@@ -95,6 +95,9 @@ describe("SQLite capture cycle", () => {
     });
     expect(result.captured).toBe(0);
     expect(db.listEvents()).toHaveLength(0);
+    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({
+      source: "linear", verb: "board-transition", key: "Building", observed_at: "2025-01-01T00:00:00Z",
+    }));
     expect(db.latestSnapshot("ABC-1")?.state).toBe("Building");
     db.close();
   });

@@ -154,6 +154,14 @@ export async function captureCycle(options: {
     const managedIds = new Set(managedIssues.map((issue) => issue.identifier));
     const managedHistory = result.history.filter((item) => managedIds.has(item.issue ?? ""));
     allHistory.push(...managedHistory);
+    for (const item of managedHistory) {
+      if (!item.issue || !item.toState?.name) continue;
+      options.db.observe({
+        id: `obs:${sha256(`linear-board:${item.id}`)}`,
+        source: "linear", task: null, issue: item.issue, verb: "board-transition", key: item.toState.name,
+        note: item.fromState?.name ?? null, observed_at: item.createdAt,
+      });
+    }
     for (const issue of result.issues) {
       const isManaged = managedIds.has(issue.identifier);
       if (isManaged || options.db.latestSnapshot(issue.identifier)) {

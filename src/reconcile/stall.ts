@@ -35,6 +35,22 @@ function wasPrimaryTaskAt(db: StateDatabase, observation: Observation): boolean 
     && observationBelongsToTaskLink(observation, link));
 }
 
+function beyondSourceWatermark(db: StateDatabase, promise: PromiseRecord, observation: Observation): boolean {
+  if (!promise.source_watermarks) return true;
+  let watermarks: Record<string, { identity: string | null; offset: number }>;
+  try { watermarks = JSON.parse(promise.source_watermarks) as Record<string, { identity: string | null; offset: number }>; }
+  catch { return false; }
+  const lifecycle = observation.task_lifecycle_id;
+  if (!lifecycle) return false;
+  const watermark = watermarks[lifecycle];
+  if (!watermark) {
+    const link = db.taskLinks(observation.issue).find((item) => item.lifecycle_id === lifecycle);
+    return Boolean(link && atOrAfter(link.spawned_at, promise.created_at));
+  }
+  if (!observation.source_identity || observation.source_offset === null || observation.source_offset === undefined) return false;
+  return observation.source_identity !== watermark.identity || observation.source_offset >= watermark.offset;
+}
+
 function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progress | null {
   const observations = db.observations(promise.issue, promise.created_at);
   const expected = promise.expected_event;
@@ -43,11 +59,14 @@ function matchingObservation(db: StateDatabase, promise: PromiseRecord): Progres
     const found = observations.find((item) => item.source === "status"
       && item.verb === verb
       && item.task
-      && wasPrimaryTaskAt(db, item));
+      && wasPrimaryTaskAt(db, item)
+      && beyondSourceWatermark(db, promise, item));
     return found ? { id: found.id, kind: "status", at: found.observed_at, detail: `status ${verb}` } : null;
   }
   if (expected.startsWith("board:")) {
     const state = expected.slice("board:".length);
+    const transition = observations.find((item) => item.source === "linear" && item.verb === "board-transition" && item.key === state);
+    if (transition) return { id: transition.id, kind: "board", at: transition.observed_at, detail: `board ${state}` };
     const snapshots = db.snapshots(promise.issue);
     const found = snapshots.find((item, index) => index > 0
       && atOrAfter(item.observed_at, promise.created_at)

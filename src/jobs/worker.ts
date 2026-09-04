@@ -2,9 +2,10 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase, type Job } from "../db/database.ts";
-import { resolveHome } from "../env.ts";
+import { resolveHome, resolveStateDir } from "../env.ts";
 import { sha256 } from "../hash.ts";
 import { isManagedIssue } from "../managed.ts";
+import { statusCursorValue, statusFileState } from "../mirror/generation.ts";
 import { nowEpoch, nowIso } from "../time.ts";
 import { LinearTransport, type TransportResult } from "../transport.ts";
 
@@ -28,6 +29,7 @@ export type JobPayload = Record<string, unknown>;
 export type JobOutcome = {
   nativeId?: string | null;
   followups?: Array<{ key: string; kind: string; target: string; payload: unknown }>;
+  transitionedState?: string;
 };
 
 function payload(job: Job): JobPayload {
@@ -64,7 +66,9 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
       payload: { issue, body: note, requires_managed: body.requires_managed === true || undefined },
     }] : undefined,
   });
-  if (resolved.issue.state?.name === target) return outcome();
+  if (resolved.issue.state?.name === target) {
+    return job.attempts > 1 ? { ...outcome(), transitionedState: target } : outcome();
+  }
   const expected = typeof body.expected_state === "string" ? body.expected_state : null;
   if (expected && resolved.issue.state?.name !== expected) {
     throw new Error(`precondition changed: ${issue} is ${resolved.issue.state?.name}, expected ${expected}`);
@@ -87,7 +91,19 @@ async function updateIssueState(job: Job, body: JobPayload, transport: LinearTra
     variables: { issue: resolved.issue.id, state: state.id, assignee: assigneeId },
   }));
   if (!updated?.issueUpdate?.success) throw new Error(`issue update was not successful: ${issue}`);
-  return outcome();
+  return { ...outcome(), transitionedState: target };
+}
+
+function promiseSourceWatermarks(db: StateDatabase, issue: string, env: NodeJS.ProcessEnv): Record<string, { identity: string | null; offset: number }> {
+  const state = resolveStateDir(resolveHome(env), env);
+  const watermarks: Record<string, { identity: string | null; offset: number }> = {};
+  for (const link of db.taskLinks(issue, true).filter((item) => item.role === "primary")) {
+    const path = join(state, `${link.task}.status`);
+    const status = statusFileState(path, db.cursor(`status:${path}`));
+    watermarks[link.lifecycle_id] = { identity: status?.incarnationIdentity ?? null, offset: status?.content.length ?? 0 };
+    if (status?.needsPersistence) db.setCursor(`status:${path}`, statusCursorValue(status, 0));
+  }
+  return watermarks;
 }
 
 async function createComment(job: Job, body: JobPayload, transport: LinearTransport, db?: StateDatabase): Promise<JobOutcome> {
@@ -301,7 +317,17 @@ export async function processJobs(options: {
           });
           options.db.setDisposition(eventId, "handled-by-service", `relayed to ${result.nativeId ?? job.target}`, completedAt);
         }
-        options.db.finishJob(job.id, result.nativeId ?? null, completedAt);
+        if (result.transitionedState) {
+          options.db.observe({
+            id: `obs:${sha256(`linear-board-job:${job.id}:${result.transitionedState}`)}`,
+            source: "linear", task: null, issue: job.target, verb: "board-transition", key: result.transitionedState,
+            note: null, observed_at: completedAt,
+          });
+        }
+        const pendingPromise = result.nativeId
+          ? options.db.promises(job.target, ["pending"]).some((item) => item.reply_job_id === job.id)
+          : false;
+        options.db.finishJob(job.id, result.nativeId ?? null, completedAt, pendingPromise ? promiseSourceWatermarks(options.db, job.target, env) : null);
       });
       done += 1;
     } catch (error) {

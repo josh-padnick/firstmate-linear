@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyEvent } from "../classify/classify.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
 import { LinearTransport } from "../transport.ts";
+import { scanFleet } from "../mirror/scan.ts";
+import { reconcileStalls } from "../reconcile/stall.ts";
 import { nextAttempt, processJobs } from "./worker.ts";
 
 const roots: string[] = [];
@@ -32,6 +34,7 @@ describe("job worker", () => {
     const transport = new LinearTransport({ fixtureDir: fixtures });
     expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
     expect(db.jobs().map((job) => [job.kind, job.state])).toEqual([["linear.issue-state", "done"], ["linear.comment", "pending"]]);
+    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ source: "linear", verb: "board-transition", key: "Validating Code" }));
     expect(JSON.parse(db.jobs()[1]!.payload).requires_managed).toBe(true);
     expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
     expect(db.jobs().map((job) => job.state)).toEqual(["done", "done"]);
@@ -102,6 +105,29 @@ describe("job worker", () => {
     expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ verb: "firstmate-comment", issue: "ABC-1" }));
     const createCall = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line.split("\t")[1]!)).find((call) => call.variables?.body === "Hello");
     expect(createCall?.variables.issue).toBe("issue-id");
+    db.close();
+  });
+
+  test("promise activation rejects status produced before reply delivery", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures); mkdirSync(join(root, "state"));
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "02-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
+    const statusPath = join(root, "state", "worker.status");
+    writeFileSync(statusPath, "done: before promise\n");
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:00:00Z", torn_down_at: null });
+    const job = db.enqueue({ key: "comment:promise", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "I will finish", actor: "core" } }, "2026-01-01T12:00:00Z");
+    const promise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "status:done", deadline_at: "2026-01-01T12:30:00Z", reply_job_id: job.id, created_at: "2026-01-01T12:00:00Z" });
+    await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:20:00Z") / 1000) } });
+    scanFleet(root, db, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:21:00Z") / 1000) });
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:21:00Z") / 1000) });
+    expect(db.promise(promise.id)?.state).toBe("open");
+
+    appendFileSync(statusPath, "done: after promise\n");
+    scanFleet(root, db, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
+    reconcileStalls(root, db, config, { FM_HOME: root, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:22:00Z") / 1000) });
+    expect(db.promise(promise.id)?.state).toBe("kept");
     db.close();
   });
 

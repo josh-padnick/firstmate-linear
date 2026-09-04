@@ -31,7 +31,7 @@ describe("fleet scanner", () => {
     const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
     writeFileSync(join(home, "state", "task.meta"), "model=codex\n");
     writeFileSync(join(home, "state", "task.status"), "working: started\n");
-    writeFileSync(join(home, "state", "home-summary.json"), JSON.stringify({ generated: "2026-01-01T00:01:00Z", active_children: [{ id: "task", state: "working" }] }));
+    writeFileSync(join(home, "state", "home-summary.json"), JSON.stringify({ generated: "2026-01-01T00:01:00Z", active_children: [{ id: "task", state: "working", generated: "2026-01-01T00:01:00Z" }] }));
     const db = new StateDatabase(join(home, "db"), join(home, "backups"));
     for (const issue of ["ABC-1", "ABC-2"]) db.linkTask({ task: "task", issue, role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
     const observations = scanFleet(home, db).observations;
@@ -68,6 +68,24 @@ describe("fleet scanner", () => {
     db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:02:00Z", torn_down_at: null });
 
     expect(scanFleet(home, db).observations.filter((item) => item.source === "status")).toHaveLength(0);
+    db.close();
+  });
+
+  test("a regenerated summary does not reauthorize a stale child entry", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    const summaryPath = join(home, "state", "home-summary.json");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    writeFileSync(summaryPath, JSON.stringify({ generated: "2026-01-01T00:01:00Z", active_children: [{ id: "task", state: "done", generated: "2026-01-01T00:01:00Z" }] }));
+    expect(scanFleet(home, db).observations).toContainEqual(expect.objectContaining({ source: "summary", verb: "done" }));
+    db.closeTask("task", "2026-01-01T00:02:00Z");
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:03:00Z", torn_down_at: null });
+    writeFileSync(summaryPath, JSON.stringify({ generated: "2026-01-01T00:04:00Z", active_children: [{ id: "task", state: "done", generated: "2026-01-01T00:01:00Z" }] }));
+
+    expect(scanFleet(home, db).observations.filter((item) => item.source === "summary")).toHaveLength(0);
+    const lifecycle = db.taskLinks("ABC-1", true)[0]!.lifecycle_id;
+    writeFileSync(summaryPath, JSON.stringify({ generated: "2026-01-01T00:05:00Z", active_children: [{ id: "task", state: "working", lifecycle_id: lifecycle }] }));
+    expect(scanFleet(home, db).observations).toContainEqual(expect.objectContaining({ source: "summary", verb: "working", task_lifecycle_id: lifecycle }));
     db.close();
   });
 

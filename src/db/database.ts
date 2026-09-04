@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, MIGRATE_TO_V11_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
 export type EventDisposition =
   | "captured"
@@ -78,6 +78,7 @@ export type PromiseRecord = {
   observation_id: string | null;
   superseded_by: string | null;
   stalled_event_id: string | null;
+  source_watermarks: string | null;
 };
 
 export type NewPromise = Pick<PromiseRecord, "issue" | "source_event_id" | "expected_event" | "deadline_at" | "reply_job_id" | "created_at">;
@@ -129,7 +130,7 @@ export type NewTaskLink = Omit<TaskLink, "lifecycle_id" | "status_start_offset" 
 
 export type Observation = {
   id: string;
-  source: "status" | "summary" | "pr";
+  source: "status" | "summary" | "pr" | "linear";
   task: string | null;
   task_spawned_at?: string | null;
   task_lifecycle_id?: string | null;
@@ -137,6 +138,8 @@ export type Observation = {
   verb: string;
   key: string;
   note: string | null;
+  source_identity?: string | null;
+  source_offset?: number | null;
   observed_at: string;
 };
 
@@ -204,6 +207,8 @@ export class StateDatabase {
         if (from > 0 && from < 8 && !tableHasColumn(db, "issue_snapshots", "managed")) db.exec(MIGRATE_TO_V8_SQL);
         if (from > 0 && from < 9 && !tableHasColumn(db, "task_links", "status_start_offset")) db.exec(MIGRATE_TO_V9_SQL);
         if (from > 0 && from < 10 && !tableHasColumn(db, "task_links", "status_start_identity")) db.exec(MIGRATE_TO_V10_SQL);
+        if (from > 0 && from < 11 && !tableHasColumn(db, "observations", "source_identity")) db.exec(MIGRATE_TO_V11_SQL);
+        if (from > 0 && from < 11 && !tableHasColumn(db, "promises", "source_watermarks")) db.exec("ALTER TABLE promises ADD COLUMN source_watermarks TEXT");
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -522,7 +527,7 @@ export class StateDatabase {
     });
   }
 
-  finishJob(id: string, nativeId: string | null = null, at = nowIso()): void {
+  finishJob(id: string, nativeId: string | null = null, at = nowIso(), sourceWatermarks: Record<string, { identity: string | null; offset: number }> | null = null): void {
     this.transaction(() => {
       this.raw.query("UPDATE jobs SET state='done',native_id=COALESCE(?,native_id),done_at=?,last_error=NULL WHERE id=?")
         .run(nativeId, at, id);
@@ -551,8 +556,8 @@ export class StateDatabase {
         const deliveredDeadline = formatIso(deliveredAt + stagedDeadline - stagedAt);
         this.raw.query("UPDATE promises SET state='superseded',superseded_by=? WHERE issue=? AND state IN ('open','overdue') AND id<>?")
           .run(pending.id, pending.issue, pending.id);
-        this.raw.query("UPDATE promises SET state='open',reply_comment_id=?,created_at=?,deadline_at=? WHERE id=? AND state='pending'")
-          .run(nativeId, at, deliveredDeadline, pending.id);
+        this.raw.query("UPDATE promises SET state='open',reply_comment_id=?,created_at=?,deadline_at=?,source_watermarks=? WHERE id=? AND state='pending'")
+          .run(nativeId, at, deliveredDeadline, sourceWatermarks ? JSON.stringify(sourceWatermarks) : null, pending.id);
       } else {
         this.raw.query("UPDATE promises SET reply_comment_id=? WHERE reply_job_id=?").run(nativeId, id);
       }
@@ -660,10 +665,10 @@ export class StateDatabase {
     const taskSpawnedAt = value.task_spawned_at ?? activeLink?.spawned_at ?? null;
     const taskLifecycleId = value.task_lifecycle_id ?? activeLink?.lifecycle_id ?? null;
     const result = this.raw.query(`INSERT OR IGNORE INTO observations(
-      id,source,task,task_spawned_at,task_lifecycle_id,issue,verb,key,note,observed_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?)`).run(
+      id,source,task,task_spawned_at,task_lifecycle_id,issue,verb,key,note,source_identity,source_offset,observed_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       value.id, value.source, value.task, taskSpawnedAt, taskLifecycleId, value.issue, value.verb,
-      value.key, value.note, value.observed_at,
+      value.key, value.note, value.source_identity ?? null, value.source_offset ?? null, value.observed_at,
     );
     return result.changes === 1;
   }
