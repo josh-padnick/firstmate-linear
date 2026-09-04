@@ -3,7 +3,14 @@ import { cutover, install, uninstall } from "../install/install.ts";
 export function runInstall(args: string[], env: NodeJS.ProcessEnv = process.env): number {
   const harnesses: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === "--harness" && args[index + 1]) harnesses.push(args[++index]!);
+    if (args[index] !== "--harness") continue;
+    const harness = args[index + 1];
+    if (!harness || harness.startsWith("--")) {
+      process.stderr.write("fm-linear install: --harness requires a value\n");
+      return 2;
+    }
+    harnesses.push(harness);
+    index += 1;
   }
   try {
     const result = install({ harnesses, bind: !args.includes("--no-bind"), env });

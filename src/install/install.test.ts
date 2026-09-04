@@ -232,4 +232,31 @@ describe("installer", () => {
     expect(existsSync(runtime)).toBe(false);
     expect(existsSync(join(home, "state", "linear", "install.json"))).toBe(false);
   });
+
+  test("changing install roots cannot overwrite an unowned extension destination", () => {
+    const root = mkdtempSync("/private/tmp/fml-install-"); roots.push(root);
+    const home = join(root, "home");
+    const oldExtension = join(root, "old-runtime", "extension", "1.0.0");
+    const newRuntime = join(root, "new-runtime");
+    const newExtension = join(newRuntime, "extension", "1.0.0");
+    const marker = join(newExtension, "firstmate-extension.json");
+    const manifest = join(home, "state", "linear", "install.json");
+    mkdirSync(newExtension, { recursive: true });
+    mkdirSync(join(home, "state", "linear"), { recursive: true });
+    writeFileSync(marker, "user-owned extension\n");
+    writeFileSync(manifest, `${JSON.stringify({
+      schema: "fm-linear.install.v1",
+      extension: { packageRoot: oldExtension, bindOutput: "", registerOutput: "", bindingDigest: null, ownerToken: null },
+    })}\n`);
+    const env = {
+      FM_HOME: home,
+      FM_LINEAR_INSTALL_ROOT: newRuntime,
+      FM_LINEAR_LAUNCH_AGENTS_DIR: join(root, "agents"),
+      FM_LINEAR_SKIP_LAUNCHCTL: "1",
+      FM_LINEAR_REAL_LINEAR_AXI: "/usr/bin/true",
+    };
+    expect(() => install({ harnesses: [], bind: true, env })).toThrow("refusing to change owned extension destination");
+    expect(readFileSync(marker, "utf8")).toBe("user-owned extension\n");
+    expect(existsSync(join(newRuntime, "bin", "fm-linear"))).toBe(false);
+  });
 });

@@ -261,13 +261,18 @@ export function install(options: { harnesses: string[]; bind: boolean; env?: Nod
   const accelerators = [...new Set([...(prior?.accelerators ?? []), ...plannedOwnedFiles.map((item) => item.path)])];
   const installedHarnesses = [...new Set([...(prior?.harnesses ?? []), ...harnesses])];
   const claudeSettings = harnessPlans.find((plan) => plan.claudeSettings)?.claudeSettings ?? prior?.claudeSettings;
+  const extensionPath = join(root, "extension", "1.0.0");
+  const ownedExtension = prior?.extension?.packageRoot === extensionPath ? prior.extension : undefined;
+  if (options.bind && prior?.extension && !ownedExtension) {
+    throw new Error(`refusing to change owned extension destination: ${prior.extension.packageRoot} -> ${extensionPath}`);
+  }
   const stagedExtension = options.bind
-    ? prior?.extension ?? { packageRoot: join(root, "extension", "1.0.0"), bindOutput: "", registerOutput: "", bindingDigest: null, ownerToken: null }
+    ? ownedExtension ?? { packageRoot: extensionPath, bindOutput: "", registerOutput: "", bindingDigest: null, ownerToken: null }
     : prior?.extension ?? null;
   requireOwnedOrAbsent(binaryPath, prior?.binary);
   requireOwnedOrAbsent(linearAxiGuardPath, prior?.linearAxiGuard);
   requireOwnedOrAbsent(plist, prior?.plist);
-  if (options.bind && stagedExtension) requireOwnedOrAbsent(stagedExtension.packageRoot, prior?.extension?.packageRoot);
+  if (options.bind) requireOwnedOrAbsent(extensionPath, ownedExtension?.packageRoot);
   const record: InstallRecord = {
     schema: "fm-linear.install.v1",
     binary: binaryPath,
