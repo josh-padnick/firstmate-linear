@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS observations (
   id TEXT PRIMARY KEY,
   source TEXT NOT NULL CHECK (source IN ('status', 'summary', 'pr')),
   task TEXT,
+  task_spawned_at TEXT,
   issue TEXT NOT NULL,
   verb TEXT NOT NULL,
   key TEXT NOT NULL,
@@ -174,4 +175,8 @@ CREATE TABLE task_links (
 INSERT INTO task_links SELECT * FROM task_links_v4;
 DROP TABLE task_links_v4;
 CREATE INDEX task_links_issue_idx ON task_links(issue, role, torn_down_at);
+`;
+
+export const MIGRATE_TO_V6_SQL = `
+ALTER TABLE observations ADD COLUMN task_spawned_at TEXT;
 `;

@@ -39,4 +39,21 @@ describe("fleet scanner", () => {
     expect(observations.filter((item) => item.verb === "model-resolved").map((item) => item.issue).sort()).toEqual(["ABC-1", "ABC-2"]);
     db.close();
   });
+
+  test("relinked tasks emit fresh model and truncated status evidence", () => {
+    const home = mkdtempSync("/private/tmp/fml-scan-"); roots.push(home); mkdirSync(join(home, "state"));
+    writeFileSync(join(home, "state", "task.meta"), "model=codex\n");
+    writeFileSync(join(home, "state", "task.status"), "working: started\nworking: filler\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    scanFleet(home, db);
+    db.closeTask("task", "2026-01-01T00:01:00Z");
+    db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:02:00Z", torn_down_at: null });
+    writeFileSync(join(home, "state", "task.status"), "working: started\n");
+
+    const observations = scanFleet(home, db).observations;
+    expect(observations.filter((item) => item.verb === "model-resolved")).toHaveLength(1);
+    expect(observations.filter((item) => item.source === "status")).toHaveLength(1);
+    db.close();
+  });
 });

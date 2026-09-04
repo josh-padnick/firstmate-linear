@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
 export type EventDisposition =
   | "captured"
@@ -107,6 +107,7 @@ export type Observation = {
   id: string;
   source: "status" | "summary" | "pr";
   task: string | null;
+  task_spawned_at?: string | null;
   issue: string;
   verb: string;
   key: string;
@@ -116,11 +117,12 @@ export type Observation = {
 
 export function observationBelongsToTaskLink(observation: Observation, link: TaskLink): boolean {
   if (observation.issue !== link.issue || observation.task !== link.task) return false;
+  if (observation.task_spawned_at && observation.task_spawned_at !== link.spawned_at) return false;
   const afterSpawn = compareIso(observation.observed_at, link.spawned_at);
   if (afterSpawn === null || afterSpawn < 0) return false;
   if (!link.torn_down_at) return true;
   const beforeTeardown = compareIso(observation.observed_at, link.torn_down_at);
-  return beforeTeardown !== null && beforeTeardown <= 0;
+  return beforeTeardown !== null && (observation.task_spawned_at ? beforeTeardown <= 0 : beforeTeardown < 0);
 }
 
 function stampForPath(now = new Date()): string {
@@ -130,6 +132,11 @@ function stampForPath(now = new Date()): string {
 function currentVersion(db: Database): number {
   const row = db.query("PRAGMA user_version").get() as { user_version?: number } | null;
   return Number(row?.user_version ?? 0);
+}
+
+function tableHasColumn(db: Database, table: string, column: string): boolean {
+  const rows = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
 }
 
 function backupBeforeMigration(path: string, backupDir: string, version: number): string | null {
@@ -166,6 +173,7 @@ export class StateDatabase {
         if (from === 1) db.exec(MIGRATE_TO_V2_SQL);
         if (from === 3) db.exec(MIGRATE_TO_V4_SQL);
         if (from > 0 && from < 5) db.exec(MIGRATE_TO_V5_SQL);
+        if (from > 0 && from < 6 && !tableHasColumn(db, "observations", "task_spawned_at")) db.exec(MIGRATE_TO_V6_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -595,10 +603,15 @@ export class StateDatabase {
   }
 
   observe(value: Observation): boolean {
+    const taskSpawnedAt = value.task_spawned_at ?? (value.task
+      ? (this.raw.query(`SELECT spawned_at FROM task_links
+          WHERE task=? AND issue=? AND torn_down_at IS NULL ORDER BY spawned_at DESC LIMIT 1`)
+        .get(value.task, value.issue) as { spawned_at: string } | null)?.spawned_at ?? null
+      : null);
     const result = this.raw.query(`INSERT OR IGNORE INTO observations(
-      id,source,task,issue,verb,key,note,observed_at
-    ) VALUES(?,?,?,?,?,?,?,?)`).run(
-      value.id, value.source, value.task, value.issue, value.verb,
+      id,source,task,task_spawned_at,issue,verb,key,note,observed_at
+    ) VALUES(?,?,?,?,?,?,?,?,?)`).run(
+      value.id, value.source, value.task, taskSpawnedAt, value.issue, value.verb,
       value.key, value.note, value.observed_at,
     );
     return result.changes === 1;

@@ -234,6 +234,20 @@ describe("state database", () => {
     migrated.close();
   });
 
+  test("v5 migration adds task lifecycle identity to observations", () => {
+    const db = database();
+    const path = db.path;
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("ALTER TABLE observations DROP COLUMN task_spawned_at; PRAGMA user_version = 5;");
+    legacy.close();
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    migrated.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    migrated.observe({ id: "observed", source: "status", task: "worker", issue: "ABC-1", verb: "working", key: "default", note: null, observed_at: "2026-01-01T00:01:00Z" });
+    expect(migrated.observations("ABC-1")[0]?.task_spawned_at).toBe("2026-01-01T00:00:00Z");
+    migrated.close();
+  });
+
   test("running jobs are reclaimed only after their lease expires", () => {
     const db = database();
     db.enqueue({ key: "leased", kind: "linear.comment", target: "ABC-1", payload: {} }, "2026-01-01T00:00:00Z");

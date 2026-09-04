@@ -87,6 +87,18 @@ describe("mirror plan", () => {
     db.close();
   });
 
+  test("a same-second role change does not reclassify prior lifecycle signals", () => {
+    const root = mkdtempSync("/private/tmp/fml-plan-"); roots.push(root);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "support", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.observe({ id: "support-done", source: "status", task: "worker", issue: "ABC-1", verb: "done", key: "default", note: null, observed_at: "2026-01-01T00:01:00Z" });
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:01:00Z", torn_down_at: null });
+
+    expect(planMirror(db, config, []).actions.filter((action) => action.job.kind === "linear.issue-state")).toHaveLength(0);
+    db.close();
+  });
+
   test("support control signals never drive issue state", () => {
     for (const verb of ["dispatch", "dispatch-scout", "lane-cap"]) {
       const root = mkdtempSync("/private/tmp/fml-plan-"); roots.push(root);
