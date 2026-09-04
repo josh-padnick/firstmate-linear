@@ -2,10 +2,11 @@ import { StateDatabase, type DomainEvent } from "../db/database.ts";
 import { optionValue } from "./args.ts";
 import { loadConfig } from "../config/load.ts";
 import { resolveHome } from "../env.ts";
-import { firstmateOwnedStatuses } from "../reconcile/stall.ts";
+import { isFirstmateOwnedRole } from "../workflow/roles.ts";
 import { buildIssueStatus, isCaptainStatusQuery } from "./status.ts";
 import type { LinearTransport } from "../transport.ts";
 import { synchronizeReceiptCaptainComments } from "./receipt-sync.ts";
+import { transcriptTail } from "../evidence/transcript.ts";
 
 const PENDING = ["waiting-for-core"] as const;
 
@@ -70,12 +71,13 @@ export async function runInboxV6(args: string[], env: NodeJS.ProcessEnv = proces
         const statusFacts = event.author === config.captain.display_name
           && event.type === "comment"
           && typeof raw?.body === "string"
-          && isCaptainStatusQuery(raw.body)
+          && isCaptainStatusQuery(raw.body, config.messages.status_queries)
           && team
-          && firstmateOwnedStatuses(team).has(snapshot?.state ?? "")
+          && isFirstmateOwnedRole(snapshot?.role)
           ? buildIssueStatus(resolveHome(env), db, event.issue)
           : null;
-        process.stdout.write(`${renderEvent(event, statusFacts)}\nreceipt: ${receipt}\n`);
+        const evidence = event.token === "stalled" ? `\n${transcriptTail(db, event.issue, config.evidence.transcript_tail, env)}` : "";
+        process.stdout.write(`${renderEvent(event, statusFacts)}${evidence}\nreceipt: ${receipt}\n`);
       }
       return 0;
     }

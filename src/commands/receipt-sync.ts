@@ -70,7 +70,7 @@ export async function synchronizeReceiptCaptainComments(options: {
   const observedAt = nowIso(options.env);
   const snapshot = snapshotFromLinearIssue(
     issueState.issue,
-    team.agent_labels,
+    team,
     observedAt,
     managed,
     options.config.captain.display_name,

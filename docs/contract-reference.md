@@ -34,5 +34,5 @@ When enabled, `act reply`, `act comment`, and `act handoff-to-captain` require `
 The default closed vocabulary is `status:*`, `board:*`, `pr-reported`, `pr-green`, `pr-merged`, `comment`, `dispatch`, and `none`.
 
 Run `fm-linear contract lint` after every config change.
-Run `fm-linear contract apply-states --team KEY` to idempotently ensure configured workflow states.
+Run `fm-linear contract apply-states --team KEY --role ROLE [--name STATUS]` to idempotently ensure one explicitly approved workflow status.
 Run `fm-linear contract apply-labels` to idempotently ensure the workspace `Agent` group only.

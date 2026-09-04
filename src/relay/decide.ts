@@ -51,9 +51,9 @@ export function decideRelay(options: {
   const keys = activeKeys(db, task);
   const snapshot = db.latestSnapshot(event.issue);
   const team = config.teams.find((item) => item.key === event.team);
-  const building = snapshot?.state === team?.statuses.building;
+  const building = snapshot?.role === "building";
   if (keys.length > 1 || (keys.length === 0 && !building)) {
-    return { disposition: "waiting-for-core", job: null, note: `relay precondition failed: open keys=${keys.length}, state=${snapshot?.state ?? "unknown"}` };
+    return { disposition: "waiting-for-core", job: null, note: `relay precondition failed: open keys=${keys.length}, role=${snapshot?.role ?? "unknown"}` };
   }
   const job: NewJob = {
     key: `${event.id}:relay`, kind: "relay", target: event.issue,

@@ -1,7 +1,9 @@
-import type { WorkflowConfig } from "../config/schema.ts";
+import type { WorkflowConfig, WorkflowRole } from "../config/schema.ts";
 import { type NewJob, type Observation, observationBelongsToTaskLink, type StateDatabase } from "../db/database.ts";
 import { compareIso } from "../time.ts";
+import { sha256 } from "../hash.ts";
 import { foldSignals, reduceTaskState, type TaskSignal } from "./reducer.ts";
+import { resolveSignalRole } from "../workflow/roles.ts";
 
 export type MirrorAction = { issue: string; cause: string; description: string; job: NewJob };
 export type MirrorFinding = { code: string; issue: string; detail: string };
@@ -50,7 +52,7 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
     const primaryObservations = relevant.filter((item) => item.task !== null && primary.has(item.task));
     const latestPrimary = primaryObservations.at(-1);
     if (snapshot.last_actor === config.captain.display_name && (!latestPrimary || (compareIso(latestPrimary.observed_at, snapshot.observed_at) ?? -1) <= 0)) {
-      findings.push({ code: "CAPTAIN_DRAG", issue, detail: `captain set ${snapshot.state}; no newer fleet signal permits repair` });
+      findings.push({ code: "CAPTAIN_DRAG", issue, detail: `captain set ${snapshot.role ?? "an unmapped status"}; no newer fleet signal permits repair` });
       continue;
     }
     const taskSignals: Array<{ task: string; role: "primary" | "support"; signal: TaskSignal; key?: string }> = [
@@ -69,25 +71,49 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
     }
     const reduced = primary.size > 0 && latestPrimary ? reduceTaskState(foldSignals(taskSignals)) : null;
     let cause = latestPrimary ?? latest;
-    let target: string | null = null;
-    if (reduced === "needs-decision") target = team.statuses.needs_decision;
-    else if (reduced === "blocked" || reduced === "failed") target = team.statuses.needs_firstmate_decision;
+    let target: WorkflowRole | null = null;
+    let stayReason: string | null = null;
+    if (reduced === "needs-decision") {
+      const resolution = resolveSignalRole(team, "needs-decision");
+      if (resolution.kind === "move") target = resolution.role;
+      else stayReason = "Worker needs a captain decision, but decision-captain is unmapped.";
+    } else if (reduced === "blocked" || reduced === "failed") {
+      const resolution = resolveSignalRole(team, reduced);
+      if (resolution.kind === "move") target = resolution.role;
+      else stayReason = `Worker reported ${reduced}, but decision-firstmate is unmapped.`;
+    }
     else if (latestPrimary?.verb === "dispatch") {
       const building = db.latestSnapshots().filter((item) => {
         const snapshotTeam = item.issue.slice(0, item.issue.indexOf("-")).toUpperCase();
-        return item.managed && snapshotTeam === team.key && item.state === team.statuses.building;
+        return item.managed && snapshotTeam === team.key && item.role === "building";
       }).length;
-      target = building >= laneCap ? team.statuses.waiting : team.statuses.building;
-    } else if (latestPrimary?.verb === "dispatch-scout") target = team.statuses.plan_in_progress;
-    else if (latestPrimary?.verb === "lane-cap") target = team.statuses.waiting;
+      const dispatch = resolveSignalRole(team, building >= laneCap ? "lane-cap" : "dispatch");
+      target = dispatch.kind === "move" ? dispatch.role : null;
+      if (dispatch.kind === "stay") stayReason = building >= laneCap ? "Lane cap reached, but waiting is unmapped." : null;
+    } else if (latestPrimary?.verb === "dispatch-scout") {
+      const resolution = resolveSignalRole(team, "dispatch-scout");
+      target = resolution.kind === "move" ? resolution.role : null;
+      if (resolution.kind === "stay") stayReason = "Scout dispatched, but neither plan nor building is mapped.";
+    } else if (latestPrimary?.verb === "lane-cap") {
+      const resolution = resolveSignalRole(team, "lane-cap");
+      target = resolution.kind === "move" ? resolution.role : null;
+      if (resolution.kind === "stay") stayReason = "Lane cap reached, but waiting is unmapped.";
+    }
     else if (reduced === "done") {
-      target = team.statuses.done;
+      target = "done";
       cause = primaryObservations.filter((item) => item.verb === "pr-merged").at(-1) ?? cause;
     } else if (reduced === "review-ready") {
-      target = team.statuses.approve_deliverable;
+      if (snapshot.role === "validating" && config.validation.mode === "verdict") continue;
+      const preferred: WorkflowRole | null = snapshot.role === "validating" && config.validation.mode === "word"
+        ? (team.roles["merge-gate"] ? "merge-gate" : team.roles["review-gate"] ? "review-gate" : null)
+        : team.roles["review-gate"] ? "review-gate"
+          : team.roles["merge-gate"] ? "merge-gate"
+            : team.roles.validating ? "validating" : null;
+      target = preferred;
+      if (!preferred) stayReason = "PR is green; no review-gate, merge-gate, or validating role is mapped.";
       cause = primaryObservations.filter((item) => item.verb === "pr-green").at(-1) ?? cause;
     }
-    else if (reduced === "working") target = team.statuses.building;
+    else if (reduced === "working") target = "building";
 
     for (const observation of currentNewObservations.filter((item) => item.verb === "pr-reported")) {
       const url = observation.note?.match(/https:\/\/\S+/)?.[0];
@@ -105,8 +131,21 @@ export function planMirror(db: StateDatabase, config: WorkflowConfig, newObserva
       if (!team.agent_labels[model]) findings.push({ code: "UNKNOWN_MODEL", issue, detail: `unmapped model ${model}; using unknown` });
       if (label) actions.push({ issue, cause: labelCause.id, description: `set agent label ${label}`, job: { key: `${labelCause.id}:agent-label:${label}`, kind: "linear.agent-label", target: issue, payload: { issue, label, known_labels: Object.values(team.agent_labels), requires_managed: true } } });
     }
-    if (target && target !== snapshot.state) {
-      actions.push({ issue, cause: cause.id, description: `${snapshot.state} -> ${target}`, job: { key: `${cause.id}:state:${target}`, kind: "linear.issue-state", target: issue, payload: { issue, state: target, expected_state: snapshot.state, cause_observation: cause.id, actor: "service", requires_managed: true, comment: cause.verb === "pr-green" ? "Required checks passed for the current PR head. Walkthrough: pending." : undefined } } });
+    if (stayReason) {
+      actions.push({
+        issue,
+        cause: cause.id,
+        description: `stay in ${snapshot.role ?? "unmapped status"}; ${stayReason}`,
+        job: {
+          key: `${cause.id}:stay-comment:${sha256(stayReason)}`,
+          kind: "linear.comment",
+          target: issue,
+          payload: { issue, body: stayReason, requires_managed: true },
+        },
+      });
+    }
+    if (target && target !== snapshot.role) {
+      actions.push({ issue, cause: cause.id, description: `${snapshot.role ?? "unmapped status"} -> ${target}`, job: { key: `${cause.id}:role:${target}`, kind: "linear.issue-role", target: issue, payload: { issue, role: target, expected_role: snapshot.role, cause_observation: cause.id, actor: "service", requires_managed: true, comment: cause.verb === "pr-green" ? "Required checks passed for the current PR head. Walkthrough: pending." : undefined } } });
     }
   }
   return { actions, findings };

@@ -17,6 +17,7 @@ function linkState(db: StateDatabase, task: string): string {
       role: link.role,
       worktree: link.worktree,
       harness: link.harness,
+      host: link.host,
       spawnedAt: link.spawned_at,
       tornDownAt: link.torn_down_at,
       blockedMetaGeneration: link.blocked_meta_generation,
@@ -32,7 +33,7 @@ export function runTask(args: string[], env: NodeJS.ProcessEnv = process.env, de
       const issue = args[2];
       const role = optionValue(args, "--role") ?? "primary";
       if (!task || !issue || (role !== "primary" && role !== "support")) {
-        process.stderr.write("Usage: fm-linear task link TASK ISSUE [--role primary|support] [--worktree path] [--harness name]\n");
+        process.stderr.write("Usage: fm-linear task link TASK ISSUE [--role primary|support] [--worktree path] [--harness name] [--home name]\n");
         return 2;
       }
       const state = resolveStateDir(resolveHome(env), env);
@@ -66,7 +67,7 @@ export function runTask(args: string[], env: NodeJS.ProcessEnv = process.env, de
             const recorded = prepared?.record(spawnedAt);
             if (recorded?.findings.length) throw new BoundaryRejected(recorded.findings.map((finding) => finding.detail).join("; "));
             db.linkTask({
-              task, issue, role, worktree: optionValue(args, "--worktree"), harness: optionValue(args, "--harness"),
+              task, issue, role, worktree: optionValue(args, "--worktree"), harness: optionValue(args, "--harness"), host: optionValue(args, "--home") ?? "local",
               spawned_at: spawnedAt, torn_down_at: null,
               status_start_offset: statusStartOffset, status_start_identity: statusIdentity,
               meta_generation: metaGeneration, busy_generation: busyGeneration,

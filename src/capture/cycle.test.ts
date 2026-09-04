@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { testWorkflowConfig } from "../testing/config.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
 import { LinearTransport, redactFixture } from "../transport.ts";
@@ -10,23 +11,7 @@ import { captureCycle } from "./cycle.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-const config: WorkflowConfig = {
-  version: 1,
-  captain: { display_name: "Captain" },
-  teams: [{
-    key: "ABC", projects: [], managed: "assignee:self", agent_labels: {},
-    statuses: {
-      backlog: "Backlog", todo: "ToDo", prioritized: "Prioritized", waiting: "Waiting",
-      plan_in_progress: "Plan In Progress", approve_plan: "Approve Plan", building: "Building",
-      validating_code: "Validating Code", approve_deliverable: "Approve Deliverable",
-      needs_decision: "Needs Decision", needs_firstmate_decision: "Needs Firstmate Decision",
-      done: "Done", canceled: "Canceled", duplicate: "Duplicate",
-    },
-  }],
-  features: { relay: "shadow", mirror: "shadow", escalation: "shadow" },
-  templates: { reply: "reply.md", report: "report.md", review_walkthrough: "review.html" },
-  sourcePath: "test.yaml",
-};
+const config = testWorkflowConfig({ managed: "assignee:self", features: { relay: "shadow", mirror: "shadow", escalation: "shadow" } });
 
 describe("SQLite capture cycle", () => {
   test("a failed cycle does not commit its resumed comment checkpoint", async () => {
@@ -56,7 +41,7 @@ describe("SQLite capture cycle", () => {
       db,
       transport: new LinearTransport({ fixtureDir: fixtures }),
       env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767226200", FM_LINEAR_MAX_PAGES: "1" },
-    })).rejects.toThrow("cannot reconstruct state for ABC-1 at comment revision");
+    })).rejects.toThrow("cannot reconstruct role for ABC-1 at comment revision");
 
     expect(db.cursor("linear.comments.page.ABC")).toBeNull();
     expect(db.cursor("linear.full.ABC")).toBeNull();
@@ -153,9 +138,9 @@ describe("SQLite capture cycle", () => {
     });
 
     const approval = db.listEvents().find((event) => event.type === "comment");
-    expect(approval).toMatchObject({ token: "plan-approved", disposition: "waiting-for-core" });
+    expect(approval).toMatchObject({ token: "gate-pass", disposition: "waiting-for-core" });
     expect(JSON.parse(db.jobs().find((job) => job.key.includes(approval!.id))!.payload)).toMatchObject({
-      state: "Building", expected_state: "Approve Plan",
+      role: "building", expected_role: "plan-gate",
     });
     const issueCalls = (await Bun.file(log).text()).trim().split("\n")
       .filter((line) => line.startsWith("issues\t"))
@@ -189,9 +174,9 @@ describe("SQLite capture cycle", () => {
     const result = await captureCycle({ config: replayConfig, db, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225720" } });
 
     expect(result.captured).toBe(1);
-    expect(db.listEvents()[0]).toMatchObject({ author: "Captain", token: "approval" });
-    expect(db.jobs()[0]?.kind).toBe("linear.issue-state");
-    expect(db.latestSnapshot("ABC-1")).toMatchObject({ state: "Approve Deliverable", managed: true });
+    expect(db.listEvents()[0]).toMatchObject({ author: "Captain", token: "gate-pass" });
+    expect(db.jobs()[0]?.kind).toBe("linear.issue-role");
+    expect(db.latestSnapshot("ABC-1")).toMatchObject({ role: "review-gate", managed: true });
     db.close();
   });
 
@@ -223,10 +208,10 @@ describe("SQLite capture cycle", () => {
       env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225720" },
     });
     expect(result.captured).toBe(1);
-    expect(db.listEvents()[0]?.token).toBe("approval");
-    expect(db.jobs()[0]?.kind).toBe("linear.issue-state");
-    expect(JSON.parse(db.jobs()[0]!.payload)).toMatchObject({ expected_state: "Approve Deliverable" });
-    expect(db.latestSnapshot("ABC-1")?.state).toBe("Approve Deliverable");
+    expect(db.listEvents()[0]?.token).toBe("gate-pass");
+    expect(db.jobs()[0]?.kind).toBe("linear.issue-role");
+    expect(JSON.parse(db.jobs()[0]!.payload)).toMatchObject({ expected_role: "review-gate" });
+    expect(db.latestSnapshot("ABC-1")?.role).toBe("review-gate");
     const commentsRequest = JSON.parse(readFileSync(fixtureLog, "utf8").split("\n")[0]!.split("\t")[1]!);
     expect(commentsRequest.query).toContain('updatedAt:{gte:"2025-12-31T22:02:00Z"}');
     db.close();
@@ -262,9 +247,9 @@ describe("SQLite capture cycle", () => {
     expect(result.captured).toBe(0);
     expect(db.listEvents()).toHaveLength(0);
     expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({
-      source: "linear", verb: "board-transition", key: "Building", observed_at: "2025-01-01T00:00:00Z",
+      source: "linear", verb: "board-transition", key: "building", observed_at: "2025-01-01T00:00:00Z",
     }));
-    expect(db.latestSnapshot("ABC-1")?.state).toBe("Building");
+    expect(db.latestSnapshot("ABC-1")?.role).toBe("building");
     db.close();
   });
 
@@ -300,7 +285,7 @@ describe("SQLite capture cycle", () => {
     const comment = db.listEvents().find((event) => event.type === "comment");
     expect(comment?.token).toBe("comment");
     expect(db.jobs()).toHaveLength(0);
-    expect(db.latestSnapshot("ABC-1")?.state).toBe("Approve Plan");
+    expect(db.latestSnapshot("ABC-1")?.role).toBe("plan-gate");
     db.close();
   });
 
@@ -331,7 +316,7 @@ describe("SQLite capture cycle", () => {
     });
     expect(result.captured).toBe(2);
     const approval = db.listEvents().find((event) => event.type === "comment");
-    expect(approval).toMatchObject({ token: "approval", disposition: "waiting-for-core" });
+    expect(approval).toMatchObject({ token: "comment", disposition: "waiting-for-core" });
     expect(approval?.note).toContain("chronology is ambiguous");
     expect(db.jobs()).toHaveLength(0);
     expect(db.cursor("linear.comments")).toBe("2026-01-01T00:01:00Z");
@@ -411,7 +396,7 @@ describe("SQLite capture cycle", () => {
       }],
     } } }));
     const db = new StateDatabase(join(root, "state.db"), join(root, "backups"));
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
     db.linkTask({ task: "task", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:30Z", torn_down_at: null });
     const done = { id: "obs:scope-exit", source: "status" as const, task: "task", issue: "ABC-1", verb: "done", key: "default", note: null, observed_at: "2026-01-01T00:01:00Z" };
     db.observe(done);

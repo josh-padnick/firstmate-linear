@@ -60,13 +60,13 @@ describe("installer", () => {
     uninstall(env);
     expect(existsSync(database)).toBe(true);
     expect(existsSync(config)).toBe(true);
-    expect(readFileSync(join(home, "data", "captain.md"), "utf8")).not.toContain("fm-linear:start");
+    expect(existsSync(join(home, "data", "captain.md"))).toBe(false);
     expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { deny: ["Bash(linear-axi issue create:*)", "Bash(git push:*)"] }, outputStyle: "concise" });
     expect(readFileSync(existingReport, "utf8")).toBe("User-owned report command\n");
     expect(existsSync(join(home, ".codex", "prompts", "report.md"))).toBe(false);
     expect(existsSync(extensionRoot)).toBe(false);
     expect(runInit([], env)).toBe(0);
-    expect(readFileSync(join(home, "data", "captain.md"), "utf8")).toContain("fm-linear:start");
+    expect(existsSync(join(home, "data", "captain.md"))).toBe(false);
   });
 
   test("uninstall leaves Claude settings unchanged without a valid install record", () => {

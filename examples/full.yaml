@@ -1,0 +1,82 @@
+version: 1
+
+captain:
+  display_name: CAPTAIN_NAME
+
+teams:
+  - key: TEAM
+    projects: []
+    managed: assignee:self
+    roles:
+      plan: Plan In Progress
+      plan-gate: Approve Plan
+      waiting: Waiting
+      building: Building
+      review-gate: Approve Deliverable
+      validating: Validating Code
+      merge-gate: Approve Merge
+      decision-captain: Needs Decision
+      decision-firstmate: Needs Firstmate Decision
+      done: Done
+      canceled: Canceled
+    agent_labels:
+      unknown: "Agent: unknown"
+
+features:
+  relay: shadow
+  mirror: shadow
+  escalation: shadow
+
+validation:
+  mode: word
+  source: check
+  check_name: fleet-validation
+  gate_check_name: fleet-merge-gate
+
+merge:
+  never_auto_paths: []
+  max_auto_lines: 10000
+
+deadlines:
+  progress:
+    plan: 30m
+    building: 45m
+    validating: 60m
+    waiting: 4h
+    decision-firstmate: 15m
+  stalled:
+    mention: 30m
+  idle:
+    silent: 5m
+    after_nudge: 5m
+    unknown_grace: 10m
+  steer:
+    redeliver: 3m
+    stalled: 10m
+    remote_check: 60s
+
+promises:
+  required_on_firstmate_owned: true
+  vocabulary: ["status:*", "board:*", pr-reported, pr-green, pr-merged, verdict, comment, dispatch, none]
+
+messages:
+  idle_nudge: "You stopped without reporting. Append `done:`, `blocked:`, or `needs-decision:` to your status file, or continue the task."
+  status_queries: [status, "status?", "current status", "update?"]
+
+evidence:
+  transcript_tail: 8
+
+hosts:
+  check_interval: 60s
+  window: 5m
+  load_factor: 4
+  min_free_mb: 512
+
+service:
+  poll_failures_before_restart: 6
+  probe_url: https://api.github.com
+
+templates:
+  reply: reply.md
+  report: report.md
+  review_walkthrough: review-walkthrough.html

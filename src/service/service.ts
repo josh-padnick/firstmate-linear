@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, unlinkSync } from "node:fs";
 import type { Server } from "node:net";
-import { captureCycle, eventId } from "../capture/cycle.ts";
+import { captureCycle, eventId, type CaptureCycleResult } from "../capture/cycle.ts";
 import { loadConfig } from "../config/load.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
@@ -18,6 +18,10 @@ import { applyEscalations } from "../escalation/escalation.ts";
 import { applyReviewDeadlines, planReviewDeadlines } from "../review/reconcile.ts";
 import { sha256 } from "../hash.ts";
 import { reconcileStalls } from "../reconcile/stall.ts";
+import { reconcileIdleWorkers } from "../reconcile/idle.ts";
+import { reconcileSteers } from "../reconcile/steer.ts";
+import { collectHostSamples, reconcileHostHealth } from "../reconcile/host.ts";
+import { reconcileVerdicts } from "../reconcile/verdict.ts";
 
 export type ServiceHealth = {
   schema: "fm-linear.health.v1";
@@ -49,6 +53,13 @@ export type ServiceCycleResult = {
   stalls: number;
 };
 
+class LinearPollFailure extends Error {
+  constructor(error: unknown) {
+    super(error instanceof Error ? error.message : String(error));
+    this.name = "LinearPollFailure";
+  }
+}
+
 function intervalSeconds(env: NodeJS.ProcessEnv): number {
   const value = Number(env.FM_LINEAR_POLL_INTERVAL_SECONDS ?? 30);
   return Number.isFinite(value) && value >= 5 ? Math.floor(value) : 30;
@@ -77,6 +88,17 @@ export function activationActive(env: NodeJS.ProcessEnv = process.env): boolean 
 }
 
 function resumeEvent(db: StateDatabase, config: WorkflowConfig, previous: ServiceHealth | null, env: NodeJS.ProcessEnv): boolean {
+  const restartReason = db.serviceState("restart_reason");
+  if (restartReason) {
+    const created = nowIso(env);
+    db.observe({
+      id: `obs:${sha256(`service-restarted:${restartReason}:${created}`)}`,
+      source: "summary", task: "service", issue: "SYSTEM-0", verb: "service-restarted",
+      key: "watchdog", note: restartReason, observed_at: created,
+    });
+    db.raw.query("DELETE FROM service_state WHERE key='restart_reason'").run();
+    return true;
+  }
   if (!previous?.cycle_completed_at) return false;
   const completed = parseIso(previous.cycle_completed_at);
   if (completed === null || nowEpoch(env) - completed <= intervalSeconds(env) * 2) return false;
@@ -104,12 +126,15 @@ export async function serviceCycle(options: {
   }
   const skipCapture = env.FM_LINEAR_SKIP_CAPTURE === "1";
   const transport = options.transport ?? new LinearTransport({ apiKey: skipCapture ? "offline-spike" : loadKey(resolveHome(env), env) });
-  const capture = skipCapture
-    ? { captured: 0, ignored: 0, waiting: 0, jobs: 0, commentsMax: null, issuesMax: {} }
-    : await captureCycle({ config: options.config, db: options.db, env, transport });
+  let capture: CaptureCycleResult = { captured: 0, ignored: 0, waiting: 0, jobs: 0, commentsMax: null, issuesMax: {} };
+  if (!skipCapture) {
+    try { capture = await captureCycle({ config: options.config, db: options.db, env, transport }); }
+    catch (error) { throw new LinearPollFailure(error); }
+  }
   const scan = scanFleet(resolveHome(env), options.db, env);
   const pr = env.FM_LINEAR_SKIP_GH ? { observations: [], findings: [] } : scanPullRequests(resolveHome(env), options.db, undefined, env);
   const mirror = planMirror(options.db, options.config, [...scan.observations, ...pr.observations]);
+  const verdicts = reconcileVerdicts(options.db, options.config, pr.observations, env);
   const mirrorActions = applyMirrorPlan(options.db, options.config, mirror);
   const review = planReviewDeadlines(resolveHome(env), options.db, options.config, env);
   const reviewActions = applyReviewDeadlines(options.db, options.config, review);
@@ -121,7 +146,12 @@ export async function serviceCycle(options: {
       key: finding.code, note: finding.detail, observed_at: nowIso(env),
     });
   }
-  const stalls = reconcileStalls(resolveHome(env), options.db, options.config, env);
+  const home = resolveHome(env);
+  collectHostSamples(home, options.db, options.config, env);
+  const hostHealth = reconcileHostHealth(options.db, options.config, env);
+  const idle = reconcileIdleWorkers(home, options.db, options.config, env, hostHealth.degraded);
+  const steers = reconcileSteers(home, options.db, options.config, env, hostHealth.degraded);
+  const stalls = reconcileStalls(home, options.db, options.config, env, hostHealth.degraded);
   const escalations = applyEscalations(options.db, options.config, env);
   const before = await processJobs({ db: options.db, config: options.config, env, transport });
   const after = await processJobs({ db: options.db, config: options.config, env, transport });
@@ -134,8 +164,19 @@ export async function serviceCycle(options: {
     mirrorActions: mirrorActions + reviewActions,
     findings: scan.findings.length + pr.findings.length + mirror.findings.length + review.findings.length,
     escalations,
-    stalls: stalls.emitted,
+    stalls: stalls.emitted + hostHealth.emitted + idle.stalled + steers.stalled + verdicts.stalled,
   };
+}
+
+export async function controlProbe(url: string, fetchImpl: (input: string, init?: RequestInit) => Promise<Response> = fetch): Promise<boolean> {
+  try {
+    const response = await fetchImpl(url, { method: "GET", signal: AbortSignal.timeout(10_000) });
+    return response.ok;
+  } catch { return false; }
+}
+
+export function watchdogShouldRestart(failures: number, threshold: number, probeSucceeded: boolean): boolean {
+  return failures >= threshold && probeSucceeded;
 }
 
 export async function runServiceOnce(options: { env?: NodeJS.ProcessEnv; transport?: LinearTransport } = {}): Promise<ServiceCycleResult> {
@@ -201,7 +242,9 @@ export async function runService(env: NodeJS.ProcessEnv = process.env): Promise<
   process.once("SIGTERM", () => { cleanup(); process.exit(0); });
   process.once("SIGINT", () => { cleanup(); process.exit(130); });
   let first = true;
+  let consecutivePollFailures = 0;
   while (true) {
+    let delay = intervalSeconds(env);
     const started = nowIso(env);
     const health = readHealth(paths.serviceHealth);
     try {
@@ -215,6 +258,7 @@ export async function runService(env: NodeJS.ProcessEnv = process.env): Promise<
         findings: result.findings, escalations: result.escalations, stalls: result.stalls,
       });
       log(paths.serviceLog, `ok captured=${result.captured} jobs=${result.jobsDone} retry=${result.jobsRetried} dead=${result.jobsDead} mirror=${result.mirrorActions} stalls=${result.stalls} escalations=${result.escalations} findings=${result.findings}`);
+      consecutivePollFailures = 0;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       writeHealth(paths.serviceHealth, {
@@ -225,8 +269,19 @@ export async function runService(env: NodeJS.ProcessEnv = process.env): Promise<
         mirrorActions: 0, findings: 0, escalations: 0, stalls: 0,
       });
       log(paths.serviceLog, `fail ${message}`);
+      consecutivePollFailures = error instanceof LinearPollFailure ? consecutivePollFailures + 1 : 0;
+      const thresholdReached = consecutivePollFailures >= config.service.poll_failures_before_restart;
+      const probeSucceeded = thresholdReached ? await controlProbe(config.service.probe_url) : false;
+      if (watchdogShouldRestart(consecutivePollFailures, config.service.poll_failures_before_restart, probeSucceeded)) {
+        const reason = `${consecutivePollFailures} consecutive Linear poll failures while control probe succeeded: ${message}`;
+        db.setServiceState("restart_reason", reason, nowIso(env));
+        log(paths.serviceLog, `watchdog restart ${reason}`);
+        cleanup();
+        throw new Error(reason);
+      }
+      if (thresholdReached && !probeSucceeded) delay = Math.min(5 * 60, intervalSeconds(env) * (2 ** Math.min(4, consecutivePollFailures - config.service.poll_failures_before_restart + 1)));
     }
     first = false;
-    await Bun.sleep(intervalSeconds(env) * 1000);
+    await Bun.sleep(delay * 1000);
   }
 }

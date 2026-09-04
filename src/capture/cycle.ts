@@ -1,4 +1,5 @@
 import type { WorkflowConfig } from "../config/schema.ts";
+import { roleForState } from "../config/load.ts";
 import { StateDatabase } from "../db/database.ts";
 import { loadKey, resolveHome } from "../env.ts";
 import { sha256 } from "../hash.ts";
@@ -69,6 +70,7 @@ export async function captureCycle(options: {
     apiKey: loadKey(resolveHome(env), env),
     fixtureDir: env.FM_LINEAR_FIXTURE_DIR,
     fixtureLog: env.FM_LINEAR_FIXTURE_LOG,
+    gatePhrases: Object.values(options.config.gates).flatMap((gate) => gate.phrases),
   });
   const commentsByTeam = new Map<string, Awaited<ReturnType<typeof fetchComments>>>();
   const commentCutoffs = new Map<string, string | null>();
@@ -145,16 +147,18 @@ export async function captureCycle(options: {
     allHistory.push(...managedHistory);
     for (const item of managedHistory) {
       if (!item.issue || !item.toState?.name) continue;
+      const role = roleForState(team, item.toState.name);
+      if (!role) continue;
       options.db.observe({
         id: `obs:${sha256(`linear-board:${item.id}`)}`,
-        source: "linear", task: null, issue: item.issue, verb: "board-transition", key: item.toState.name,
-        note: item.fromState?.name ?? null, observed_at: item.createdAt,
+        source: "linear", task: null, issue: item.issue, verb: "board-transition", key: role,
+        note: roleForState(team, item.fromState?.name) ?? null, observed_at: item.createdAt,
       });
     }
     for (const issue of result.issues) {
       const isManaged = managedIds.has(issue.identifier);
       if (isManaged || options.db.latestSnapshot(issue.identifier)) {
-        options.db.snapshot(snapshotFromLinearIssue(issue, team.agent_labels, observedAt, isManaged, options.config.captain.display_name));
+        options.db.snapshot(snapshotFromLinearIssue(issue, team, observedAt, isManaged, options.config.captain.display_name));
       }
     }
     allEvents.push(...deriveHistory(managedHistory, seen, observedAt, eventCutoff, self, bootstrapCutoff !== null));

@@ -1,7 +1,16 @@
 import { cutover, install, uninstall } from "../install/install.ts";
 import { optionValues } from "./args.ts";
+import { optionValue } from "./args.ts";
+import { installRemoteRing } from "../install/remote-ring.ts";
 
 export function runInstall(args: string[], env: NodeJS.ProcessEnv = process.env): number {
+  let remoteRing: string | null;
+  try { remoteRing = optionValue(args, "--remote-ring"); }
+  catch (error) { process.stderr.write(`fm-linear install: ${error instanceof Error ? error.message : String(error)}\n`); return 2; }
+  if (remoteRing) {
+    try { installRemoteRing(remoteRing, env); process.stdout.write(`fm-linear install: remote ring installed for ${remoteRing}\n`); return 0; }
+    catch (error) { process.stderr.write(`fm-linear install: remote ring failed: ${error instanceof Error ? error.message : String(error)}\n`); return 1; }
+  }
   let harnesses: string[];
   try { harnesses = optionValues(args, "--harness"); }
   catch (error) { process.stderr.write(`fm-linear install: ${error instanceof Error ? error.message : String(error)}\n`); return 2; }

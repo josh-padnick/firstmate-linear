@@ -11,6 +11,20 @@ export type PrSnapshot = {
   headRefOid: string;
   baseRefName: string;
   requiredChecks: Array<{ name: string; state: string }>;
+  verdict?: {
+    verdict: "auto-mergeable" | "needs-human" | "changes-requested";
+    risk: "low" | "medium" | "high" | null;
+    reason: string;
+    findingsCount?: number;
+    reviewers?: string[];
+    reviewCost?: number;
+    gateConclusion?: string;
+    checkName?: string;
+    checkConclusions?: Record<string, string>;
+    source?: "check" | "labels" | "review";
+  };
+  changedFiles?: Array<{ path: string; additions: number; deletions: number }>;
+  autoMergeArmed?: boolean;
 };
 
 export type PrInspect = (url: string) => PrSnapshot;
@@ -43,7 +57,7 @@ function prSourceIdentity(generation: string | null, url: string, snapshot: PrSn
   const checks = [...snapshot.requiredChecks]
     .map((check) => ({ name: check.name, state: check.state.toLowerCase() }))
     .sort((left, right) => left.name.localeCompare(right.name) || left.state.localeCompare(right.state));
-  return `pr:${sha256(JSON.stringify({ generation, url, state: snapshot.state, head: snapshot.headRefOid, base: snapshot.baseRefName, checks }))}`;
+  return `pr:${sha256(JSON.stringify({ generation, url, state: snapshot.state, head: snapshot.headRefOid, base: snapshot.baseRefName, checks, verdict: snapshot.verdict ?? null }))}`;
 }
 
 function prReportedIdentity(generation: string | null, url: string): string {
@@ -71,7 +85,7 @@ export function capturePrSourceWatermarks(home: string, db: StateDatabase, issue
 }
 
 export function inspectPr(url: string, run: CommandRunner = runCommand): PrSnapshot {
-  const view = run("gh", ["pr", "view", url, "--json", "state,mergedAt,baseRefName,headRefOid"], { encoding: "utf8", timeout: 20_000 });
+  const view = run("gh", ["pr", "view", url, "--json", "state,mergedAt,baseRefName,headRefOid,statusCheckRollup,files,additions,deletions,autoMergeRequest,labels,reviews"], { encoding: "utf8", timeout: 20_000 });
   if (view.status !== 0) throw new Error((view.stderr || view.stdout || view.error?.message || "gh pr view failed").trim());
   const checks = run("gh", ["pr", "checks", url, "--required", "--json", "name,state,bucket"], { encoding: "utf8", timeout: 20_000 });
   if (!checks.stdout.trim()) throw new Error((checks.stderr || checks.error?.message || "gh pr checks failed").trim());
@@ -79,8 +93,47 @@ export function inspectPr(url: string, run: CommandRunner = runCommand): PrSnaps
   try {
     requiredChecks = (JSON.parse(checks.stdout) as Array<{ name?: string; state?: string; bucket?: string }>).map((item) => ({ name: item.name ?? "check", state: item.bucket ?? item.state ?? "unknown" }));
   } catch { throw new Error("gh pr checks returned malformed JSON"); }
-  const data = JSON.parse(view.stdout) as { state: "OPEN" | "MERGED" | "CLOSED"; mergedAt?: string | null; baseRefName: string; headRefOid: string };
-  return { state: data.mergedAt ? "MERGED" : data.state, headRefOid: data.headRefOid, baseRefName: data.baseRefName, requiredChecks };
+  const data = JSON.parse(view.stdout) as any;
+  const checksRollup = data.statusCheckRollup ?? [];
+  const summaryCheck = checksRollup.find((item: any) => /\bverdict=/.test(item.output?.summary ?? item.summary ?? ""));
+  const summary = summaryCheck?.output?.summary ?? summaryCheck?.summary;
+  const reviewBody = [...(data.reviews ?? [])].reverse().map((item: any) => item.body ?? "").find((item: string) => /\bverdict=/.test(item));
+  const text = typeof summary === "string" ? summary : typeof reviewBody === "string" ? reviewBody : "";
+  const match = /\bverdict=(auto-mergeable|needs-human|changes-requested)\s+risk=(low|medium|high)\s+reason=([^\n]+)/.exec(text);
+  const verdictLabel = (data.labels ?? []).map((item: any) => item.name).find((name: string) => /^verdict:/.test(name));
+  const riskLabel = (data.labels ?? []).map((item: any) => item.name).find((name: string) => /^risk:/.test(name));
+  const labeledVerdict = verdictLabel?.slice("verdict:".length);
+  const labeledRisk = riskLabel?.slice("risk:".length);
+  const allowedVerdicts = ["auto-mergeable", "needs-human", "changes-requested"];
+  const allowedRisks = ["low", "medium", "high"];
+  const checkConclusions = Object.fromEntries(checksRollup
+    .filter((item: any) => typeof (item.name ?? item.context) === "string")
+    .map((item: any) => [item.name ?? item.context, String(item.conclusion ?? item.state ?? "")]));
+  const verdict = match ? {
+    verdict: match[1] as "auto-mergeable" | "needs-human" | "changes-requested",
+    risk: match[2] as "low" | "medium" | "high",
+    reason: match[3]!.trim(),
+    gateConclusion: checksRollup.find((item: any) => (item.name ?? item.context) === "fleet-merge-gate")?.conclusion ?? null,
+    checkName: summaryCheck?.name ?? summaryCheck?.context,
+    checkConclusions,
+    source: typeof summary === "string" ? "check" as const : "review" as const,
+  } : allowedVerdicts.includes(labeledVerdict) ? {
+    verdict: labeledVerdict as "auto-mergeable" | "needs-human" | "changes-requested",
+    risk: allowedRisks.includes(labeledRisk) ? labeledRisk as "low" | "medium" | "high" : null,
+    reason: "published as PR labels",
+    gateConclusion: checksRollup.find((item: any) => (item.name ?? item.context) === "fleet-merge-gate")?.conclusion ?? null,
+    checkConclusions,
+    source: "labels" as const,
+  } : undefined;
+  return {
+    state: data.mergedAt ? "MERGED" : data.state,
+    headRefOid: data.headRefOid,
+    baseRefName: data.baseRefName,
+    requiredChecks,
+    verdict,
+    changedFiles: (data.files ?? []).map((file: any) => ({ path: file.path, additions: Number(file.additions ?? 0), deletions: Number(file.deletions ?? 0) })),
+    autoMergeArmed: Boolean(data.autoMergeRequest),
+  };
 }
 
 function record(db: StateDatabase, observation: Observation, out: Observation[]): void {
@@ -148,6 +201,7 @@ function prLinkIdentity(link: TaskLink): string {
     role: link.role,
     worktree: link.worktree,
     harness: link.harness,
+    host: link.host,
     spawnedAt: link.spawned_at,
     blockedMetaGeneration: link.blocked_meta_generation,
   });
@@ -168,6 +222,29 @@ function recordPreparedLinks(db: StateDatabase, prepared: PreparedPrLink[], obse
         id: `obs:${sha256(`${lifecycle}:${url}:reported`)}`, source: "pr", task: link.task,
         task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id, issue: link.issue, verb: "pr-reported", key: "pr", note: url, source_identity: reportedIdentity, observed_at: observedAt,
       }, observations);
+      if (snapshot.verdict) {
+        const detail = {
+          ...snapshot.verdict,
+          url,
+          headSha: snapshot.headRefOid,
+          changedFiles: snapshot.changedFiles ?? [],
+          lines: (snapshot.changedFiles ?? []).reduce((sum, file) => sum + file.additions + file.deletions, 0),
+          autoMergeArmed: snapshot.autoMergeArmed ?? false,
+        };
+        const verdictObservation: Observation = {
+          id: `obs:${sha256(`${lifecycle}:${url}:${snapshot.headRefOid}:verdict:${JSON.stringify(snapshot.verdict)}`)}`,
+          source: "pr", task: link.task, task_spawned_at: link.spawned_at, task_lifecycle_id: link.lifecycle_id,
+          issue: link.issue, verb: "verdict", key: snapshot.verdict.verdict, note: JSON.stringify(detail),
+          source_identity: sourceIdentity, observed_at: observedAt,
+        };
+        record(db, verdictObservation, observations);
+        db.raw.query(`INSERT OR IGNORE INTO pr_events(id,issue,pr_url,head_sha,verdict,risk,reason,findings_count,reviewers,review_cost,policy_downgrade,observed_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,0,?)`).run(
+          verdictObservation.id, link.issue, url, snapshot.headRefOid, snapshot.verdict.verdict,
+          snapshot.verdict.risk, snapshot.verdict.reason, snapshot.verdict.findingsCount ?? null,
+          JSON.stringify(snapshot.verdict.reviewers ?? []), snapshot.verdict.reviewCost ?? null, observedAt,
+        );
+      }
       if (snapshot.state === "MERGED" && base && snapshot.baseRefName === base) {
         record(db, {
           id: `obs:${sha256(`${lifecycle}:${url}:${snapshot.headRefOid}:merged:${snapshot.baseRefName}`)}`, source: "pr", task: link.task,

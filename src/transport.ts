@@ -3,7 +3,8 @@
 
 import { appendFileSync, copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isExactApproval } from "./classify/classify.ts";
+import { isExactGatePhrase } from "./classify/classify.ts";
+import { DEFAULT_GATES } from "./config/schema.ts";
 import { classifyFailure, type Classification, type GraphqlError } from "./errors.ts";
 import { sha256 } from "./hash.ts";
 import { redactedIdentity } from "./identity.ts";
@@ -45,6 +46,7 @@ export type TransportOptions = {
   recordDir?: string;
   timeoutSeconds?: number;
   fetchImpl?: FetchImplementation;
+  gatePhrases?: string[];
 };
 
 function fail(
@@ -68,7 +70,7 @@ function fail(
   return { ok: false, error };
 }
 
-export function redactFixture(value: unknown): unknown {
+export function redactFixture(value: unknown, gatePhrases: readonly string[] = Object.values(DEFAULT_GATES).flatMap((gate) => gate.phrases)): unknown {
   const identifiers = new Map<string, string>();
   const visit = (current: unknown, key = "", parents: string[] = []): unknown => {
     if (Array.isArray(current)) return current.map((item) => visit(item, key, parents));
@@ -76,7 +78,7 @@ export function redactFixture(value: unknown): unknown {
       return Object.fromEntries(Object.entries(current).map(([childKey, child]) => [childKey, visit(child, childKey, [...parents, key])]));
     }
     if (typeof current !== "string") return current;
-    if (/^body$/i.test(key) && isExactApproval(current)) return "approved";
+    if (/^body$/i.test(key) && isExactGatePhrase(current, gatePhrases)) return current;
     if (/^(?:body|description|text|content|title)$/i.test(key)) return "[redacted]";
     if (/email/i.test(key)) return "redacted@example.invalid";
     if (/url/i.test(key)) return "https://example.invalid/redacted";
@@ -263,7 +265,7 @@ export class LinearTransport {
       this.recordIndex += 1;
       const safeOperation = operation.replace(/[^a-z0-9._-]+/gi, "-").slice(0, 64);
       const path = join(recordDir, `${String(this.recordIndex).padStart(4, "0")}-${safeOperation}.json`);
-      writeFileSync(path, `${JSON.stringify(redactFixture(parsed), null, 2)}\n`, { mode: 0o600 });
+      writeFileSync(path, `${JSON.stringify(redactFixture(parsed, this.options.gatePhrases), null, 2)}\n`, { mode: 0o600 });
     }
     return this.interpretGraphql(operation, parsed);
   }

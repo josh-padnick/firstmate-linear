@@ -4,7 +4,7 @@ import { runContract } from "./commands/contract.ts";
 import { runCutover, runInstall, runUninstall } from "./commands/install.ts";
 import { runDoctor } from "./commands/doctor.ts";
 import { runInboxV6 } from "./commands/inbox-v6.ts";
-import { runInit } from "./commands/init.ts";
+import { runInitWithDiscovery } from "./commands/init.ts";
 import { runMirror } from "./commands/mirror.ts";
 import { runReport } from "./commands/report.ts";
 import { runReview } from "./commands/review.ts";
@@ -17,15 +17,15 @@ const USAGE = `fm-linear - Linear as the system of record for Firstmate
 
 Usage:
   fm-linear init --captain NAME --team KEY
-  fm-linear install [--harness claude|grok|codex] [--no-bind]
+  fm-linear install [--harness claude|grok|codex] [--no-bind] [--remote-ring HOME]
   fm-linear service run|once
   fm-linear inbox list|show [EVENT]|handle EVENT --receipt RECEIPT
-  fm-linear act <verb> ISSUE --receipt RECEIPT [--next EVENT --by DURATION] [flags]
+  fm-linear act <verb> ISSUE --receipt RECEIPT [--next EVENT --by DURATION] [--task TASK] [flags]
   fm-linear report
   fm-linear mirror --plan|apply
   fm-linear task link|close|list
   fm-linear review scaffold|check
-  fm-linear contract lint|apply-states --team KEY|apply-labels
+  fm-linear contract lint|apply-states --team KEY --role ROLE [--name STATUS]|apply-labels
   fm-linear config show --effective|import DIR
   fm-linear cutover enable|disable
   fm-linear doctor [--offline]
@@ -35,7 +35,7 @@ Usage:
 
 type Handler = (args: string[]) => number | Promise<number>;
 const commands: Record<string, Handler> = {
-  init: runInit,
+  init: runInitWithDiscovery,
   install: runInstall,
   uninstall: runUninstall,
   cutover: runCutover,

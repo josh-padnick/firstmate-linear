@@ -3,6 +3,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { join } from "node:path";
 import { classifyEvent } from "../classify/classify.ts";
 import { runTask } from "../commands/task.ts";
+import { testWorkflowConfig } from "../testing/config.ts";
 import type { WorkflowConfig } from "../config/schema.ts";
 import { StateDatabase } from "../db/database.ts";
 import { redactedIdentity } from "../identity.ts";
@@ -14,8 +15,7 @@ import { nextAttempt, processJobs } from "./worker.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-const statuses = { backlog: "Backlog", todo: "ToDo", prioritized: "Prioritized", waiting: "Waiting", plan_in_progress: "Plan In Progress", approve_plan: "Approve Plan", building: "Building", validating_code: "Validating Code", approve_deliverable: "Approve Deliverable", needs_decision: "Needs Decision", needs_firstmate_decision: "Needs Firstmate Decision", done: "Done", canceled: "Canceled", duplicate: "Duplicate" } as const;
-const config: WorkflowConfig = { version: 1, captain: { display_name: "Captain" }, teams: [{ key: "ABC", projects: [], managed: "all", statuses: { ...statuses }, agent_labels: {} }], features: { relay: "off", mirror: "off", escalation: "off" }, templates: { reply: "", report: "", review_walkthrough: "" }, sourcePath: "test" };
+const config = testWorkflowConfig();
 
 describe("job worker", () => {
   test("Retry-After extends exponential backoff", () => {
@@ -32,15 +32,16 @@ describe("job worker", () => {
     await Bun.write(join(fixtures, "03-resolve-comment.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { id: "issue-id", identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null } } }));
     await Bun.write(join(fixtures, "04-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
-    db.enqueue({ key: "approve:1", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Validating Code", expected_state: "Approve Deliverable", comment: "Approved.", requires_managed: true } }, "2026-01-01T00:00:00Z");
+    db.snapshot({ issue: "ABC-1", role: "review-gate", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    db.enqueue({ key: "approve:1", kind: "linear.issue-role", target: "ABC-1", payload: { issue: "ABC-1", role: "validating", expected_role: "review-gate", comment: "Approved.", requires_managed: true } }, "2026-01-01T00:00:00Z");
     const transport = new LinearTransport({ fixtureDir: fixtures });
     expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
-    expect(db.jobs().map((job) => [job.kind, job.state])).toEqual([["linear.issue-state", "done"], ["linear.comment", "pending"]]);
-    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ source: "linear", verb: "board-transition", key: "Validating Code" }));
+    expect(db.jobs().map((job) => [job.kind, job.state])).toEqual([["linear.issue-role", "done"], ["linear.comment", "pending"], ["promise.implicit", "pending"]]);
+    expect(db.observations("ABC-1")).toContainEqual(expect.objectContaining({ source: "linear", verb: "board-transition", key: "validating" }));
     expect(JSON.parse(db.jobs()[1]!.payload).requires_managed).toBe(true);
-    expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
-    expect(db.jobs().map((job) => job.state)).toEqual(["done", "done"]);
+    expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(2);
+    expect(db.jobs().map((job) => job.state)).toEqual(["done", "done", "done"]);
+    expect(db.promises("ABC-1", ["open"])[0]?.expected_event).toBe("pr-green");
     db.close();
   });
 
@@ -48,12 +49,12 @@ describe("job worker", () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const log = join(root, "calls.log");
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "review-gate", assignee: "Captain", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
     const classification = classifyEvent({ id: "event:approval", team: "ABC", issue: "ABC-1", type: "comment", author: "Captain", body: "approved", created_at: "2026-01-01T00:00:01Z" }, config, db.latestSnapshot("ABC-1"));
     const job = db.enqueue(classification.jobs[0]!, "2026-01-01T00:00:01Z");
     db.claimDueJobs(1, "2026-01-01T00:00:01Z");
     db.retryJob(job.id, "temporary failure", "2026-01-01T00:00:02Z");
-    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:02Z" });
+    db.snapshot({ issue: "ABC-1", role: "review-gate", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:02Z" });
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
     await Bun.write(join(fixtures, "01-managed.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { identifier: "ABC-1", assignee: { displayName: "Someone Else" }, project: null } } }));
     const scopedConfig: WorkflowConfig = { ...config, teams: config.teams.map((team) => ({ ...team, managed: "assignee:self" })) };
@@ -76,8 +77,8 @@ describe("job worker", () => {
     await Bun.write(join(fixtures, "01-managed.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null } } }));
     await Bun.write(join(fixtures, "02-resolve-state.json"), JSON.stringify({ data: { viewer: { id: "me", displayName: "Firstmate" }, issue: { id: "issue-id", identifier: "ABC-1", assignee: { displayName: "Someone Else" }, project: null, state: { name: "Approve Deliverable" }, team: { states: { nodes: [{ id: "building", name: "Building" }] }, members: { nodes: [] } } } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
-    db.enqueue({ key: "state:race", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Building", requires_managed: true } }, "2026-01-01T00:00:00Z");
+    db.snapshot({ issue: "ABC-1", role: "review-gate", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    db.enqueue({ key: "state:race", kind: "linear.issue-role", target: "ABC-1", payload: { issue: "ABC-1", role: "building", requires_managed: true } }, "2026-01-01T00:00:00Z");
 
     const result = await processJobs({ db, config: { ...config, teams: config.teams.map((team) => ({ ...team, managed: "assignee:self" })) }, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" }, maxAttempts: 1 });
 
@@ -98,7 +99,7 @@ describe("job worker", () => {
     await Bun.write(join(fixtures, "06-resolve-comment.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
     await Bun.write(join(fixtures, "07-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.enqueue({ key: "state:done", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Done", comment: "Finished." } }, "2026-01-01T00:00:00Z");
+    db.enqueue({ key: "state:done", kind: "linear.issue-role", target: "ABC-1", payload: { issue: "ABC-1", role: "done", comment: "Finished." } }, "2026-01-01T00:00:00Z");
     const transport = new LinearTransport({ fixtureDir: fixtures, fixtureLog: log });
     await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
     expect((await processJobs({ db, config, transport, env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).retried).toBe(1);
@@ -340,7 +341,7 @@ describe("job worker", () => {
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
     await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { viewer: { id: "me" }, issue: { id: "issue-id", state: { name: "Done" }, team: { states: { nodes: [] }, members: { nodes: [] } } } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    const job = db.enqueue({ key: "state:retry", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Done" } }, "2026-01-01T00:00:00Z");
+    const job = db.enqueue({ key: "state:retry", kind: "linear.issue-role", target: "ABC-1", payload: { issue: "ABC-1", role: "done" } }, "2026-01-01T00:00:00Z");
     db.claimDueJobs(1, "2026-01-01T00:00:00Z");
     db.retryJob(job.id, "lost acknowledgement", "2026-01-01T00:00:01Z");
 
@@ -353,7 +354,7 @@ describe("job worker", () => {
   test("a managed-scope skip fails its staged promise without progress", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Someone Else", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: false, observed_at: "2026-01-01T00:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Someone Else", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: false, observed_at: "2026-01-01T00:00:00Z" });
     const job = db.enqueue({ key: "comment:skipped", kind: "linear.comment", target: "ABC-1", payload: { issue: "ABC-1", body: "Not delivered", actor: "core", requires_managed: true } }, "2026-01-01T00:00:00Z");
     const promise = db.stagePromise({ issue: "ABC-1", source_event_id: "event:one", expected_event: "comment", deadline_at: "2026-01-01T00:30:00Z", reply_job_id: job.id, created_at: "2026-01-01T00:00:00Z" });
 
@@ -449,6 +450,45 @@ describe("job worker", () => {
     db.close();
   });
 
+  test("fleet send uses the linked remote home and records recipient-side evidence", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const bin = join(root, "bin"); mkdirSync(bin, { recursive: true });
+    const calls = join(root, "remote-calls");
+    const script = join(bin, "fm-send.sh");
+    writeFileSync(script, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${calls}"\nprintf '/remote/state/worker.inbox/one.json\\n'\n`); chmodSync(script, 0o755);
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", host: "mini", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.enqueue({ key: "remote-send", kind: "fleet.send", target: "worker", payload: { task: "worker", issue: "ABC-1", message: "Report status" } }, "2026-01-01T00:00:00Z");
+
+    expect((await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env: { FM_HOME: root, FM_ROOT_OVERRIDE: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
+    const firstCall = readFileSync(calls, "utf8").trim();
+    const deliveryId = firstCall.match(/^worker --fire-and-forget ([a-f0-9]{16}) Report status$/)?.[1];
+    expect(deliveryId).toBeTruthy();
+    const steer = db.steers()[0]!;
+    expect(steer).toMatchObject({ home: "mini", task: "worker", record_path: "/remote/state/worker.inbox/one.json", delivery_id: deliveryId });
+
+    db.enqueue({
+      key: `${steer.id}:redeliver`, kind: "fleet.send", target: "worker",
+      payload: { task: "worker", issue: "ABC-1", home: "mini", record_path: steer.record_path, message: "Report status", delivery_id: steer.delivery_id },
+    }, "2026-01-01T00:01:00Z");
+    expect((await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env: { FM_HOME: root, FM_ROOT_OVERRIDE: root, FM_LINEAR_NOW_EPOCH: "1767225660" } })).done).toBe(1);
+    expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([firstCall, firstCall]);
+    db.close();
+  });
+
+  test("a local steer redelivery reuses the durable inbox record", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const inbox = join(root, "state", "worker.inbox"); mkdirSync(inbox, { recursive: true });
+    const record = join(inbox, "001.msg"); writeFileSync(record, "schema=fm-task-inbox.v1\n--\nReport status");
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.enqueue({ key: "redeliver", kind: "fleet.send", target: "worker", payload: { task: "worker", issue: "ABC-1", home: "local", record_path: record, message: "Report status" } }, "2026-01-01T00:00:00Z");
+
+    expect((await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: join(root, "unused") }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
+    expect(db.steers()).toContainEqual(expect.objectContaining({ record_path: record, message: "Report status" }));
+    expect(readFileSync(record, "utf8")).toContain("Report status");
+    db.close();
+  });
+
   test("a terminal relay failure falls back to a core-visible event", async () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const bin = join(root, "bin"); mkdirSync(bin, { recursive: true });
@@ -491,7 +531,7 @@ describe("job worker", () => {
     await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { viewer: { id: "me" }, issue: { id: "issue-id", state: { name: "Building" }, team: { states: { nodes: [{ id: "decision", name: "Needs Decision" }] }, members: { nodes: [{ id: "captain-id", displayName: redactedIdentity("Captain") }] } } } } }));
     await Bun.write(join(fixtures, "02-update.json"), JSON.stringify({ data: { issueUpdate: { success: true } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.enqueue({ key: "state:captain", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Needs Decision" } }, "2026-01-01T00:00:00Z");
+    db.enqueue({ key: "state:captain", kind: "linear.issue-role", target: "ABC-1", payload: { issue: "ABC-1", role: "decision-captain" } }, "2026-01-01T00:00:00Z");
     expect((await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } })).done).toBe(1);
     expect(db.jobs()[0]?.state).toBe("done");
     db.close();
@@ -504,7 +544,7 @@ describe("job worker", () => {
     await Bun.write(join(fixtures, "01-team.json"), JSON.stringify({ data: { teams: { nodes: [{ id: "team-uuid", key: "ABC", states: { nodes: [] } }] } } }));
     await Bun.write(join(fixtures, "02-state.json"), JSON.stringify({ data: { workflowStateCreate: { success: true, workflowState: { id: "state-id", name: "Building" } } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.enqueue({ key: "state:building", kind: "linear.workflow-state", target: "ABC", payload: { team: "ABC", status_key: "building", name: "Building" } }, "2026-01-01T00:00:00Z");
+    db.enqueue({ key: "state:building", kind: "linear.workflow-state", target: "ABC", payload: { team: "ABC", role: "building", name: "Building" } }, "2026-01-01T00:00:00Z");
 
     const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
 
@@ -529,7 +569,7 @@ describe("job worker", () => {
     } }));
     await Bun.write(join(fixtures, "03-update.json"), JSON.stringify({ data: { issueUpdate: { success: true } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: ["Agent: Old"], agent_label: "Agent: Old", last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: ["Agent: Old"], agent_label: "Agent: Old", last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
     db.enqueue({ key: "label:codex", kind: "linear.agent-label", target: "ABC-1", payload: { issue: "ABC-1", label: "Agent: Codex", known_labels: ["Agent: Old", "Agent: Codex"], requires_managed: true } }, "2026-01-01T00:00:00Z");
 
     const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" } });
@@ -555,7 +595,7 @@ describe("job worker", () => {
       ] },
     } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
     db.enqueue({ key: "label:ambiguous", kind: "linear.agent-label", target: "ABC-1", payload: { issue: "ABC-1", label: "Agent: Codex", known_labels: ["Agent: Codex"], requires_managed: true } }, "2026-01-01T00:00:00Z");
 
     const result = await processJobs({ db, config, transport: new LinearTransport({ fixtureDir: fixtures }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" }, maxAttempts: 1 });

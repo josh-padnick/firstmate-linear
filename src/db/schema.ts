@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 16;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -61,7 +61,7 @@ CREATE INDEX IF NOT EXISTS jobs_due_idx ON jobs(state, next_attempt_at);
 
 CREATE TABLE IF NOT EXISTS issue_snapshots (
   issue TEXT NOT NULL,
-  state TEXT NOT NULL,
+  role TEXT,
   assignee TEXT,
   labels TEXT NOT NULL,
   agent_label TEXT,
@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS task_links (
   role TEXT NOT NULL CHECK (role IN ('primary', 'support')),
   worktree TEXT,
   harness TEXT,
+  host TEXT,
   spawned_at TEXT NOT NULL,
   torn_down_at TEXT,
   status_start_offset INTEGER,
@@ -143,6 +144,82 @@ CREATE TABLE IF NOT EXISTS promises (
 );
 
 CREATE INDEX IF NOT EXISTS promises_issue_state_idx ON promises(issue,state,created_at);
+
+CREATE TABLE IF NOT EXISTS steers (
+  id TEXT PRIMARY KEY,
+  issue TEXT,
+  home TEXT NOT NULL,
+  task TEXT NOT NULL,
+  record_path TEXT NOT NULL,
+  message TEXT,
+  delivery_id TEXT,
+  sent_at TEXT NOT NULL,
+  acked_at TEXT,
+  redelivered_at TEXT,
+  stalled_event_id TEXT,
+  waiting_on_host INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(home,task,record_path)
+);
+
+CREATE TABLE IF NOT EXISTS idle_episodes (
+  id TEXT PRIMARY KEY,
+  issue TEXT NOT NULL,
+  task TEXT NOT NULL,
+  lifecycle_id TEXT NOT NULL,
+  turn_ended_at TEXT NOT NULL,
+  status_identity TEXT,
+  status_offset INTEGER NOT NULL,
+  nudged_at TEXT,
+  proxied_at TEXT,
+  closed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS host_samples (
+  host TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  load1 REAL NOT NULL,
+  cores INTEGER NOT NULL,
+  free_mb REAL NOT NULL,
+  top_processes TEXT NOT NULL,
+  PRIMARY KEY(host,observed_at)
+);
+
+CREATE TABLE IF NOT EXISTS host_states (
+  host TEXT PRIMARY KEY,
+  degraded_at TEXT,
+  recovery_started_at TEXT,
+  cleared_at TEXT,
+  signature TEXT,
+  event_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS service_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS remote_rings (
+  home TEXT PRIMARY KEY,
+  installed_at TEXT,
+  last_error TEXT,
+  checked_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pr_events (
+  id TEXT PRIMARY KEY,
+  issue TEXT NOT NULL,
+  pr_url TEXT NOT NULL,
+  head_sha TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  risk TEXT,
+  reason TEXT,
+  findings_count INTEGER,
+  reviewers TEXT,
+  review_cost REAL,
+  policy_downgrade INTEGER NOT NULL DEFAULT 0,
+  observed_at TEXT NOT NULL
+);
 `;
 
 export const MIGRATE_TO_V2_SQL = `
@@ -260,4 +337,69 @@ INSERT INTO observations(id,source,task,task_spawned_at,task_lifecycle_id,issue,
 SELECT id,source,task,task_spawned_at,task_lifecycle_id,issue,verb,key,note,observed_at FROM observations_v10;
 DROP TABLE observations_v10;
 CREATE INDEX observations_issue_idx ON observations(issue, observed_at);
+`;
+
+export const MIGRATE_TO_V12_SQL = `
+ALTER TABLE issue_snapshots RENAME TO issue_snapshots_v11;
+DROP INDEX issue_snapshots_latest_idx;
+CREATE TABLE issue_snapshots (
+  issue TEXT NOT NULL,
+  role TEXT,
+  assignee TEXT,
+  labels TEXT NOT NULL,
+  agent_label TEXT,
+  last_actor TEXT,
+  last_signal TEXT,
+  managed INTEGER NOT NULL DEFAULT 1,
+  observed_at TEXT NOT NULL,
+  PRIMARY KEY (issue, observed_at)
+);
+INSERT INTO issue_snapshots(issue,role,assignee,labels,agent_label,last_actor,last_signal,managed,observed_at)
+SELECT issue,NULL,assignee,labels,agent_label,last_actor,last_signal,managed,observed_at FROM issue_snapshots_v11;
+DROP TABLE issue_snapshots_v11;
+CREATE INDEX issue_snapshots_latest_idx ON issue_snapshots(issue, observed_at DESC);
+`;
+
+export const MIGRATE_TO_V13_SQL = `
+CREATE TABLE IF NOT EXISTS steers (
+  id TEXT PRIMARY KEY, issue TEXT, home TEXT NOT NULL, task TEXT NOT NULL, record_path TEXT NOT NULL,
+  sent_at TEXT NOT NULL, acked_at TEXT, redelivered_at TEXT, stalled_event_id TEXT,
+  waiting_on_host INTEGER NOT NULL DEFAULT 0, UNIQUE(home,task,record_path)
+);
+CREATE TABLE IF NOT EXISTS idle_episodes (
+  id TEXT PRIMARY KEY, issue TEXT NOT NULL, task TEXT NOT NULL, lifecycle_id TEXT NOT NULL,
+  turn_ended_at TEXT NOT NULL, status_identity TEXT, status_offset INTEGER NOT NULL,
+  nudged_at TEXT, proxied_at TEXT, closed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS host_samples (
+  host TEXT NOT NULL, observed_at TEXT NOT NULL, load1 REAL NOT NULL, cores INTEGER NOT NULL,
+  free_mb REAL NOT NULL, top_processes TEXT NOT NULL, PRIMARY KEY(host,observed_at)
+);
+CREATE TABLE IF NOT EXISTS host_states (
+  host TEXT PRIMARY KEY, degraded_at TEXT, recovery_started_at TEXT, cleared_at TEXT,
+  signature TEXT, event_id TEXT
+);
+CREATE TABLE IF NOT EXISTS service_state (
+  key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS remote_rings (
+  home TEXT PRIMARY KEY, installed_at TEXT, last_error TEXT, checked_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pr_events (
+  id TEXT PRIMARY KEY, issue TEXT NOT NULL, pr_url TEXT NOT NULL, head_sha TEXT NOT NULL,
+  verdict TEXT NOT NULL, risk TEXT, reason TEXT, findings_count INTEGER, reviewers TEXT,
+  review_cost REAL, policy_downgrade INTEGER NOT NULL DEFAULT 0, observed_at TEXT NOT NULL
+);
+`;
+
+export const MIGRATE_TO_V14_SQL = `
+ALTER TABLE task_links ADD COLUMN host TEXT;
+`;
+
+export const MIGRATE_TO_V15_SQL = `
+ALTER TABLE steers ADD COLUMN message TEXT;
+`;
+
+export const MIGRATE_TO_V16_SQL = `
+ALTER TABLE steers ADD COLUMN delivery_id TEXT;
 `;

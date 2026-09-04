@@ -38,9 +38,9 @@ export function buildStatus(env: NodeJS.ProcessEnv = process.env): { text: strin
   } finally { db.close(); }
 }
 
-export function isCaptainStatusQuery(body: string): boolean {
-  const normalized = normalizedComment(body).replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
-  return new Set(["status", "current status", "update"]).has(normalized);
+export function isCaptainStatusQuery(body: string, queries: readonly string[] = ["status", "status?", "current status", "update?"]): boolean {
+  const normalized = normalizedComment(body);
+  return queries.some((query) => normalizedComment(query) === normalized);
 }
 
 export function buildIssueStatus(home: string, db: StateDatabase, issue: string): string {

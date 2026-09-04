@@ -3,6 +3,8 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, unlinkSync, w
 import { join } from "node:path";
 import { runTask } from "../commands/task.ts";
 import { StateDatabase } from "../db/database.ts";
+import { testWorkflowConfig } from "../testing/config.ts";
+import { planMirror } from "./plan.ts";
 import { parseStatusLine, scanFleet } from "./scan.ts";
 
 const roots: string[] = [];
@@ -330,4 +332,18 @@ describe("fleet scanner", () => {
     expect(observations.map((item) => item.note)).toEqual(["before close"]);
     db.close();
   });
+});
+
+test("a denied merge reported as blocked becomes a blocked signal in one scan", () => {
+  const home = mkdtempSync("/private/tmp/fml-denied-merge-"); roots.push(home);
+  mkdirSync(join(home, "state"));
+  writeFileSync(join(home, "state", "worker.status"), "blocked [key=permission]: gh pr merge 251\n");
+  const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+  db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: "codex", spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+  db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+
+  const scan = scanFleet(home, db, { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:01:00Z") / 1000) });
+  expect(scan.observations).toContainEqual(expect.objectContaining({ source: "status", verb: "blocked", key: "permission", note: "gh pr merge 251" }));
+  expect(planMirror(db, testWorkflowConfig(), scan.observations).actions).toContainEqual(expect.objectContaining({ description: "building -> decision-firstmate" }));
+  db.close();
 });

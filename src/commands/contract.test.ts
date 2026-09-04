@@ -42,4 +42,14 @@ describe("contract commands", () => {
     expect(db.jobs()[0]).toMatchObject({ state: "pending", attempts: 0, done_at: null });
     db.close();
   });
+
+  test("apply-states creates only one explicitly approved role", () => {
+    const home = mkdtempSync("/private/tmp/fml-contract-"); roots.push(home);
+    expect(runInit(["--captain", "Captain", "--team", "ABC"], { FM_HOME: home })).toBe(0);
+    expect(runContract(["apply-states", "--team", "ABC", "--role", "decision-captain", "--name", "Needs Decision", "--yes"], { FM_HOME: home })).toBe(0);
+    const db = StateDatabase.open({ FM_HOME: home });
+    expect(db.jobs()).toHaveLength(1);
+    expect(JSON.parse(db.jobs()[0]!.payload)).toMatchObject({ team: "ABC", role: "decision-captain", name: "Needs Decision" });
+    db.close();
+  });
 });

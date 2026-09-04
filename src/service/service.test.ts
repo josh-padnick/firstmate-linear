@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import type { WorkflowConfig } from "../config/schema.ts";
+import { testWorkflowConfig } from "../testing/config.ts";
 import { StateDatabase } from "../db/database.ts";
 import { planEscalations } from "../escalation/escalation.ts";
 import { processJobs } from "../jobs/worker.ts";
@@ -13,8 +13,7 @@ import { activationActive, serviceCycle } from "./service.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-const statuses = { backlog: "Backlog", todo: "ToDo", prioritized: "Prioritized", waiting: "Waiting", plan_in_progress: "Plan In Progress", approve_plan: "Approve Plan", building: "Building", validating_code: "Validating Code", approve_deliverable: "Approve Deliverable", needs_decision: "Needs Decision", needs_firstmate_decision: "Needs Firstmate Decision", done: "Done", canceled: "Canceled", duplicate: "Duplicate" } as const;
-const config: WorkflowConfig = { version: 1, captain: { display_name: "Captain" }, teams: [{ key: "ABC", projects: [], managed: "all", statuses: { ...statuses }, agent_labels: {} }], features: { relay: "on", mirror: "on", escalation: "on" }, templates: { reply: "", report: "", review_walkthrough: "" }, sourcePath: "test" };
+const config = testWorkflowConfig({ features: { relay: "on", mirror: "on", escalation: "on" } });
 
 describe("service activation", () => {
   test("installation is inert until cutover is enabled", async () => {
@@ -113,14 +112,14 @@ describe("service activation", () => {
     mkdirSync(join(root, "config"), { recursive: true });
     mkdirSync(join(root, "state"), { recursive: true });
     const configPath = join(root, "config", "linear-workflow.yaml");
-    const yaml = (mirror: "shadow" | "on") => `version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\nfeatures: { relay: off, mirror: ${mirror}, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n`;
+    const yaml = (mirror: "shadow" | "on") => `version: 1\ncaptain: { display_name: Captain }\nteams:\n  - key: ABC\n    projects: []\n    managed: all\n    roles: { building: Building, review-gate: "Approve Deliverable", validating: "Validating Code", done: Done, canceled: Canceled }\nfeatures: { relay: off, mirror: ${mirror}, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n`;
     writeFileSync(configPath, yaml("shadow"));
     writeFileSync(join(root, "state", "worker.meta"), "model=codex\n");
     const statusPath = join(root, "state", "worker.status");
     writeFileSync(statusPath, "working: old lifecycle\n");
     writeFileSync(join(root, "state", "home-summary.json"), JSON.stringify({ generated: "2026-01-01T00:01:00Z", active_children: [{ id: "worker", state: "done" }] }));
     let db = StateDatabase.open({ FM_HOME: root });
-    db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
+    db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
     db.close();
     const command = join(process.cwd(), "bin", "fm-linear");
     const env = { ...process.env, FM_HOME: root, FM_LINEAR_FORCE_ACTIVE: "1", FM_LINEAR_SKIP_CAPTURE: "1", FM_LINEAR_SKIP_GH: "1", FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T00:00:00Z") / 1000) };
@@ -136,7 +135,7 @@ describe("service activation", () => {
     const result = spawnSync(command, ["service", "once"], { env: { ...env, FM_LINEAR_FIXTURE_DIR: fixtures, FM_LINEAR_FIXTURE_LOG: log }, encoding: "utf8" });
     expect(result.status).toBe(0);
     db = StateDatabase.open({ FM_HOME: root });
-    expect(db.jobs().filter((job) => job.kind === "linear.issue-state")).toHaveLength(0);
+    expect(db.jobs().filter((job) => job.kind === "linear.issue-role")).toHaveLength(0);
     expect(existsSync(log)).toBe(false);
     db.close();
   });

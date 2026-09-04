@@ -5,7 +5,8 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, MIGRATE_TO_V11_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, MIGRATE_TO_V11_SQL, MIGRATE_TO_V12_SQL, MIGRATE_TO_V13_SQL, MIGRATE_TO_V14_SQL, MIGRATE_TO_V15_SQL, MIGRATE_TO_V16_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import type { WorkflowRole } from "../config/schema.ts";
 
 export type EventDisposition =
   | "captured"
@@ -95,7 +96,7 @@ export type NewPromise = Pick<PromiseRecord, "issue" | "source_event_id" | "expe
 
 export type IssueSnapshot = {
   issue: string;
-  state: string;
+  role: WorkflowRole | null;
   assignee: string | null;
   labels: string[];
   agent_label: string | null;
@@ -114,6 +115,7 @@ export type TaskLink = {
   role: "primary" | "support";
   worktree: string | null;
   harness: string | null;
+  host: string | null;
   spawned_at: string;
   torn_down_at: string | null;
   status_start_offset: number | null;
@@ -126,8 +128,9 @@ export type TaskLink = {
   blocked_busy_generation: string | null;
 };
 
-export type NewTaskLink = Omit<TaskLink, "lifecycle_id" | "status_start_offset" | "status_end_offset" | "status_start_identity" | "status_end_identity" | "meta_generation" | "busy_generation" | "blocked_meta_generation" | "blocked_busy_generation"> & {
+export type NewTaskLink = Omit<TaskLink, "lifecycle_id" | "host" | "status_start_offset" | "status_end_offset" | "status_start_identity" | "status_end_identity" | "meta_generation" | "busy_generation" | "blocked_meta_generation" | "blocked_busy_generation"> & {
   lifecycle_id?: string;
+  host?: string | null;
   status_start_offset?: number | null;
   status_end_offset?: number | null;
   status_start_identity?: string | null;
@@ -151,6 +154,43 @@ export type Observation = {
   source_identity?: string | null;
   source_offset?: number | null;
   observed_at: string;
+};
+
+export type SteerRecord = {
+  id: string;
+  issue: string | null;
+  home: string;
+  task: string;
+  record_path: string;
+  message: string | null;
+  delivery_id: string | null;
+  sent_at: string;
+  acked_at: string | null;
+  redelivered_at: string | null;
+  stalled_event_id: string | null;
+  waiting_on_host: number;
+};
+
+export type IdleEpisode = {
+  id: string;
+  issue: string;
+  task: string;
+  lifecycle_id: string;
+  turn_ended_at: string;
+  status_identity: string | null;
+  status_offset: number;
+  nudged_at: string | null;
+  proxied_at: string | null;
+  closed_at: string | null;
+};
+
+export type HostSample = {
+  host: string;
+  observed_at: string;
+  load1: number;
+  cores: number;
+  free_mb: number;
+  top_processes: string;
 };
 
 export function observationBelongsToTaskLink(observation: Observation, link: TaskLink): boolean {
@@ -219,6 +259,11 @@ export class StateDatabase {
         if (from > 0 && from < 10 && !tableHasColumn(db, "task_links", "status_start_identity")) db.exec(MIGRATE_TO_V10_SQL);
         if (from > 0 && from < 11 && !tableHasColumn(db, "observations", "source_identity")) db.exec(MIGRATE_TO_V11_SQL);
         if (from > 0 && from < 11 && !tableHasColumn(db, "promises", "source_watermarks")) db.exec("ALTER TABLE promises ADD COLUMN source_watermarks TEXT");
+        if (from > 0 && from < 12 && !tableHasColumn(db, "issue_snapshots", "role")) db.exec(MIGRATE_TO_V12_SQL);
+        if (from > 0 && from < 13) db.exec(MIGRATE_TO_V13_SQL);
+        if (from > 0 && from < 14 && !tableHasColumn(db, "task_links", "host")) db.exec(MIGRATE_TO_V14_SQL);
+        if (from > 0 && from < 15 && !tableHasColumn(db, "steers", "message")) db.exec(MIGRATE_TO_V15_SQL);
+        if (from > 0 && from < 16 && !tableHasColumn(db, "steers", "delivery_id")) db.exec(MIGRATE_TO_V16_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {
@@ -612,11 +657,11 @@ export class StateDatabase {
 
   snapshot(value: NewIssueSnapshot): void {
     this.raw.query(`INSERT INTO issue_snapshots(
-      issue,state,assignee,labels,agent_label,last_actor,last_signal,managed,observed_at
+      issue,role,assignee,labels,agent_label,last_actor,last_signal,managed,observed_at
     ) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(issue,observed_at) DO UPDATE SET
-      state=excluded.state,assignee=excluded.assignee,labels=excluded.labels,agent_label=excluded.agent_label,
+      role=excluded.role,assignee=excluded.assignee,labels=excluded.labels,agent_label=excluded.agent_label,
       last_actor=excluded.last_actor,last_signal=excluded.last_signal,managed=excluded.managed`).run(
-      value.issue, value.state, value.assignee, JSON.stringify(value.labels), value.agent_label,
+      value.issue, value.role, value.assignee, JSON.stringify(value.labels), value.agent_label,
       value.last_actor, value.last_signal, value.managed === false ? 0 : 1, value.observed_at,
     );
   }
@@ -645,8 +690,8 @@ export class StateDatabase {
           ORDER BY spawned_at LIMIT 1`).get(value.task, value.issue) as TaskLink | null;
         if (active) {
           if (active.role === value.role) {
-            this.raw.query("UPDATE task_links SET worktree=?,harness=? WHERE lifecycle_id=?")
-              .run(value.worktree, value.harness, active.lifecycle_id);
+            this.raw.query("UPDATE task_links SET worktree=?,harness=?,host=? WHERE lifecycle_id=?")
+              .run(value.worktree, value.harness, value.host ?? active.host ?? "local", active.lifecycle_id);
             this.raw.query("DELETE FROM task_links WHERE task=? AND issue=? AND torn_down_at IS NULL AND lifecycle_id<>?")
               .run(active.task, active.issue, active.lifecycle_id);
             return;
@@ -658,15 +703,15 @@ export class StateDatabase {
             .run(value.spawned_at, value.status_start_offset ?? null, value.status_start_identity ?? null, value.meta_generation ?? null, value.busy_generation ?? null, value.task, value.issue);
         }
       }
-      this.raw.query(`INSERT INTO task_links(lifecycle_id,task,issue,role,worktree,harness,spawned_at,torn_down_at,status_start_offset,status_end_offset,status_start_identity,status_end_identity,meta_generation,busy_generation,blocked_meta_generation,blocked_busy_generation)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lifecycle_id) DO UPDATE SET
+      this.raw.query(`INSERT INTO task_links(lifecycle_id,task,issue,role,worktree,harness,host,spawned_at,torn_down_at,status_start_offset,status_end_offset,status_start_identity,status_end_identity,meta_generation,busy_generation,blocked_meta_generation,blocked_busy_generation)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lifecycle_id) DO UPDATE SET
         task=excluded.task,issue=excluded.issue,role=excluded.role,worktree=excluded.worktree,
-        harness=excluded.harness,spawned_at=excluded.spawned_at,torn_down_at=excluded.torn_down_at,
+        harness=excluded.harness,host=excluded.host,spawned_at=excluded.spawned_at,torn_down_at=excluded.torn_down_at,
         status_start_offset=excluded.status_start_offset,status_end_offset=excluded.status_end_offset,
         status_start_identity=excluded.status_start_identity,status_end_identity=excluded.status_end_identity,
         meta_generation=excluded.meta_generation,busy_generation=excluded.busy_generation,
         blocked_meta_generation=excluded.blocked_meta_generation,blocked_busy_generation=excluded.blocked_busy_generation`).run(
-          value.lifecycle_id ?? `link:${uuid()}`, value.task, value.issue, value.role, value.worktree, value.harness,
+          value.lifecycle_id ?? `link:${uuid()}`, value.task, value.issue, value.role, value.worktree, value.harness, value.host ?? "local",
           value.spawned_at, value.torn_down_at, value.status_start_offset ?? null, value.status_end_offset ?? null,
           value.status_start_identity ?? null, value.status_end_identity ?? null, value.meta_generation ?? null,
           value.busy_generation ?? null, value.blocked_meta_generation ?? null, value.blocked_busy_generation ?? null,
@@ -796,5 +841,68 @@ export class StateDatabase {
   cancelPromise(id: string): void {
     this.raw.query("UPDATE promises SET state='superseded',superseded_by=NULL WHERE id=? AND state IN ('pending','open','overdue')")
       .run(id);
+  }
+
+  recordSteer(value: Omit<SteerRecord, "id" | "message" | "delivery_id" | "acked_at" | "redelivered_at" | "stalled_event_id" | "waiting_on_host"> & { message?: string | null; delivery_id?: string | null }): SteerRecord {
+    const id = `steer:${sha256(`${value.home}:${value.task}:${value.record_path}`)}`;
+    this.raw.query(`INSERT INTO steers(id,issue,home,task,record_path,message,delivery_id,sent_at)
+      VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+        message=COALESCE(steers.message,excluded.message),delivery_id=COALESCE(steers.delivery_id,excluded.delivery_id)`)
+      .run(id, value.issue, value.home, value.task, value.record_path, value.message ?? null, value.delivery_id ?? null, value.sent_at);
+    return this.raw.query("SELECT * FROM steers WHERE id=?").get(id) as SteerRecord;
+  }
+
+  steers(openOnly = false): SteerRecord[] {
+    return this.raw.query(`SELECT * FROM steers${openOnly ? " WHERE acked_at IS NULL" : ""} ORDER BY sent_at,id`).all() as SteerRecord[];
+  }
+
+  acknowledgeSteer(id: string, at: string): void {
+    this.raw.query("UPDATE steers SET acked_at=?,waiting_on_host=0 WHERE id=? AND acked_at IS NULL").run(at, id);
+  }
+
+  updateSteer(id: string, values: { redeliveredAt?: string; stalledEventId?: string; waitingOnHost?: boolean }): void {
+    if (values.redeliveredAt) this.raw.query("UPDATE steers SET redelivered_at=? WHERE id=?").run(values.redeliveredAt, id);
+    if (values.stalledEventId) this.raw.query("UPDATE steers SET stalled_event_id=? WHERE id=?").run(values.stalledEventId, id);
+    if (values.waitingOnHost !== undefined) this.raw.query("UPDATE steers SET waiting_on_host=? WHERE id=?").run(values.waitingOnHost ? 1 : 0, id);
+  }
+
+  releaseHeldSteers(home: string): void {
+    this.raw.query("UPDATE steers SET waiting_on_host=0,redelivered_at=NULL WHERE home=? AND waiting_on_host=1 AND acked_at IS NULL").run(home);
+  }
+
+  idleEpisode(id: string): IdleEpisode | null {
+    return this.raw.query("SELECT * FROM idle_episodes WHERE id=?").get(id) as IdleEpisode | null;
+  }
+
+  openIdleEpisodes(): IdleEpisode[] {
+    return this.raw.query("SELECT * FROM idle_episodes WHERE closed_at IS NULL ORDER BY turn_ended_at,id").all() as IdleEpisode[];
+  }
+
+  createIdleEpisode(value: Omit<IdleEpisode, "nudged_at" | "proxied_at" | "closed_at">): IdleEpisode {
+    this.raw.query(`INSERT OR IGNORE INTO idle_episodes(id,issue,task,lifecycle_id,turn_ended_at,status_identity,status_offset)
+      VALUES(?,?,?,?,?,?,?)`).run(value.id, value.issue, value.task, value.lifecycle_id, value.turn_ended_at, value.status_identity, value.status_offset);
+    return this.idleEpisode(value.id)!;
+  }
+
+  updateIdleEpisode(id: string, field: "nudged_at" | "proxied_at" | "closed_at", at: string): void {
+    this.raw.query(`UPDATE idle_episodes SET ${field}=? WHERE id=? AND ${field} IS NULL`).run(at, id);
+  }
+
+  recordHostSample(value: HostSample): void {
+    this.raw.query(`INSERT OR REPLACE INTO host_samples(host,observed_at,load1,cores,free_mb,top_processes)
+      VALUES(?,?,?,?,?,?)`).run(value.host, value.observed_at, value.load1, value.cores, value.free_mb, value.top_processes);
+  }
+
+  hostSamples(host: string): HostSample[] {
+    return this.raw.query("SELECT * FROM host_samples WHERE host=? ORDER BY observed_at").all(host) as HostSample[];
+  }
+
+  serviceState(key: string): string | null {
+    return (this.raw.query("SELECT value FROM service_state WHERE key=?").get(key) as { value: string } | null)?.value ?? null;
+  }
+
+  setServiceState(key: string, value: string, at = nowIso()): void {
+    this.raw.query(`INSERT INTO service_state(key,value,updated_at) VALUES(?,?,?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).run(key, value, at);
   }
 }
