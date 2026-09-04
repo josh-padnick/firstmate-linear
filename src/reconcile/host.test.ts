@@ -14,7 +14,11 @@ test("sustained host starvation emits once and clears only after a healthy windo
   const root = mkdtempSync("/private/tmp/fml-host-"); roots.push(root);
   const db = new StateDatabase(join(root, "db"), join(root, "backups"));
   const config = testWorkflowConfig();
-  const steer = db.recordSteer({ issue: "ABC-1", home: "mini", task: "worker", record_path: "/remote/state/worker.inbox/one.json", sent_at: "2026-01-01T11:50:00Z" });
+  db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", host: "mini", worktree: null, harness: null, spawned_at: "2026-01-01T11:00:00Z", torn_down_at: null });
+  const steer = db.recordSteer({
+    issue: "ABC-1", home: "mini", task: "worker", record_path: "/remote/state/worker.inbox/one.json",
+    lifecycle_id: db.taskLinks("ABC-1", true)[0]!.lifecycle_id, sent_at: "2026-01-01T11:50:00Z",
+  });
   db.updateSteer(steer.id, { waitingOnHost: true, redeliveredAt: "2026-01-01T11:53:00Z" });
   db.raw.query("INSERT INTO remote_rings(home,installed_at,checked_at) VALUES(?,?,?)").run("mini", "2026-01-01T11:00:00Z", "2026-01-01T11:00:00Z");
   db.recordHostSample({ host: "mini", observed_at: "2026-01-01T12:00:00Z", load1: 181, cores: 10, free_mb: 60, top_processes: JSON.stringify(["95 node big-plan review"]) });

@@ -25,6 +25,18 @@ function recordMessage(path: string): string | null {
   } catch { return null; }
 }
 
+function lifecycleAt(db: StateDatabase, task: string, sentAt: string) {
+  const sent = parseIso(sentAt);
+  if (sent === null) return null;
+  const candidates = db.taskLinks().filter((link) => {
+    if (link.task !== task) return false;
+    const spawned = parseIso(link.spawned_at);
+    const closed = link.torn_down_at ? parseIso(link.torn_down_at) : null;
+    return spawned !== null && spawned <= sent && (closed === null || sent <= closed);
+  });
+  return candidates.length === 1 ? candidates[0]! : null;
+}
+
 export type RemoteSteerProbe = (steer: SteerRecord, home: string, env: NodeJS.ProcessEnv) => "acknowledged" | "unacknowledged" | "failed";
 
 function shellQuote(value: string): string {
@@ -65,7 +77,7 @@ export function discoverLocalSteers(home: string, db: StateDatabase): number {
     for (const record of records) {
       const path = join(directory, record);
       const sentAt = statSync(path).mtime.toISOString().replace(/\.\d{3}Z$/, "Z");
-      const link = db.taskLinks(undefined, true).find((item) => item.task === task) ?? null;
+      const link = lifecycleAt(db, task, sentAt);
       const issue = link?.issue ?? null;
       const before = db.steers().length;
       db.recordSteer({ issue, home: "local", task, record_path: path, message: recordMessage(path), lifecycle_id: link?.lifecycle_id ?? null, sent_at: sentAt });
@@ -108,6 +120,7 @@ export function reconcileSteers(home: string, db: StateDatabase, config: Workflo
       acked += 1;
       continue;
     }
+    if (!steer.lifecycle_id) continue;
     const sent = parseIso(steer.sent_at);
     if (sent === null) continue;
     if (degradedHosts.has(steer.home)) {

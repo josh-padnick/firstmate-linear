@@ -333,16 +333,46 @@ describe("state database", () => {
   test("v16 migration adds steer lifecycle identity", () => {
     const db = database();
     const path = db.path;
+    db.linkTask({
+      lifecycle_id: "link:one", task: "worker", issue: "ABC-1", role: "primary",
+      worktree: null, harness: null, spawned_at: "2025-12-31T23:00:00Z", torn_down_at: null,
+    });
+    db.recordSteer({
+      issue: "ABC-1", home: "local", task: "worker", record_path: "/local/legacy.msg",
+      lifecycle_id: "link:one", sent_at: "2026-01-01T00:00:00Z",
+    });
     db.close();
     const legacy = new Database(path);
     legacy.exec("ALTER TABLE steers DROP COLUMN lifecycle_id; PRAGMA user_version = 16;");
     legacy.close();
 
     const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.steers()[0]?.lifecycle_id).toBe("link:one");
     expect(migrated.recordSteer({
       issue: "ABC-1", home: "local", task: "worker", record_path: "/local/001.msg",
       lifecycle_id: "link:one", sent_at: "2026-01-01T00:00:00Z",
     }).lifecycle_id).toBe("link:one");
+    migrated.close();
+  });
+
+  test("v17 migration backfills an unambiguous legacy steer lifecycle", () => {
+    const db = database();
+    const path = db.path;
+    db.linkTask({
+      lifecycle_id: "link:one", task: "worker", issue: "ABC-1", role: "primary",
+      worktree: null, harness: null, spawned_at: "2025-12-31T23:00:00Z", torn_down_at: null,
+    });
+    db.recordSteer({
+      issue: "ABC-1", home: "local", task: "worker", record_path: "/local/unresolved.msg",
+      sent_at: "2026-01-01T00:00:00Z",
+    });
+    db.close();
+    const legacy = new Database(path);
+    legacy.exec("PRAGMA user_version = 17;");
+    legacy.close();
+
+    const migrated = new StateDatabase(path, join(path, "..", "backups"));
+    expect(migrated.steers()[0]?.lifecycle_id).toBe("link:one");
     migrated.close();
   });
 

@@ -5,7 +5,7 @@ import { ensurePrivateDir } from "../fsutil.ts";
 import { sha256, uuid } from "../hash.ts";
 import { runtimePaths } from "../paths.ts";
 import { compareIso, formatIso, nowIso, parseIso } from "../time.ts";
-import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, MIGRATE_TO_V11_SQL, MIGRATE_TO_V12_SQL, MIGRATE_TO_V13_SQL, MIGRATE_TO_V14_SQL, MIGRATE_TO_V15_SQL, MIGRATE_TO_V16_SQL, MIGRATE_TO_V17_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATE_TO_V2_SQL, MIGRATE_TO_V4_SQL, MIGRATE_TO_V5_SQL, MIGRATE_TO_V6_SQL, MIGRATE_TO_V7_SQL, MIGRATE_TO_V8_SQL, MIGRATE_TO_V9_SQL, MIGRATE_TO_V10_SQL, MIGRATE_TO_V11_SQL, MIGRATE_TO_V12_SQL, MIGRATE_TO_V13_SQL, MIGRATE_TO_V14_SQL, MIGRATE_TO_V15_SQL, MIGRATE_TO_V16_SQL, MIGRATE_TO_V17_SQL, MIGRATE_TO_V18_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 import type { WorkflowRole } from "../config/schema.ts";
 
 export type EventDisposition =
@@ -266,6 +266,7 @@ export class StateDatabase {
         if (from > 0 && from < 15 && !tableHasColumn(db, "steers", "message")) db.exec(MIGRATE_TO_V15_SQL);
         if (from > 0 && from < 16 && !tableHasColumn(db, "steers", "delivery_id")) db.exec(MIGRATE_TO_V16_SQL);
         if (from > 0 && from < 17 && !tableHasColumn(db, "steers", "lifecycle_id")) db.exec(MIGRATE_TO_V17_SQL);
+        if (from > 0 && from < 18) db.exec(MIGRATE_TO_V18_SQL);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       } catch (error) {

@@ -11,10 +11,26 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 describe("installer", () => {
   test("LaunchAgent embeds the selected home and one compiled service binary", () => {
     const plist = renderLaunchAgent("/opt/fm-linear", "/srv/firstmate", "/srv/firstmate/state/linear/service.log");
-    expect(plist).toContain("/opt/fm-linear");
-    expect(plist).toContain("/srv/firstmate");
-    expect(plist).toContain("<string>service</string><string>run</string>");
-    expect(plist).toContain("<key>KeepAlive</key><true/>");
+    const parsed = spawnSync("plutil", ["-convert", "json", "-o", "-", "-"], { input: plist, encoding: "utf8" });
+    expect(parsed.status).toBe(0);
+    const launchAgent = JSON.parse(parsed.stdout) as {
+      Label: string;
+      KeepAlive: boolean;
+      RunAtLoad: boolean;
+      ProgramArguments: string[];
+      EnvironmentVariables: Record<string, string>;
+      StandardOutPath: string;
+      StandardErrorPath: string;
+    };
+    expect(launchAgent).toMatchObject({
+      Label: "com.firstmate.linear",
+      KeepAlive: true,
+      RunAtLoad: true,
+      ProgramArguments: ["/opt/fm-linear", "service", "run"],
+      EnvironmentVariables: { FM_HOME: "/srv/firstmate" },
+      StandardOutPath: "/srv/firstmate/state/linear/service.log",
+      StandardErrorPath: "/srv/firstmate/state/linear/service.log",
+    });
   });
 
   test("the installed linear-axi shim permits reads and refuses writes", () => {

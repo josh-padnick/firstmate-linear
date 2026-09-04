@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS source_cursors (
@@ -407,4 +407,20 @@ ALTER TABLE steers ADD COLUMN delivery_id TEXT;
 
 export const MIGRATE_TO_V17_SQL = `
 ALTER TABLE steers ADD COLUMN lifecycle_id TEXT;
+`;
+
+export const MIGRATE_TO_V18_SQL = `
+UPDATE steers SET lifecycle_id=(
+  SELECT lifecycle_id FROM task_links
+  WHERE task=steers.task AND issue=steers.issue
+    AND spawned_at<=steers.sent_at
+    AND (torn_down_at IS NULL OR torn_down_at>=steers.sent_at)
+  ORDER BY spawned_at,lifecycle_id LIMIT 1
+)
+WHERE issue IS NOT NULL AND 1=(
+  SELECT COUNT(*) FROM task_links
+  WHERE task=steers.task AND issue=steers.issue
+    AND spawned_at<=steers.sent_at
+    AND (torn_down_at IS NULL OR torn_down_at>=steers.sent_at)
+);
 `;

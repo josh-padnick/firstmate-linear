@@ -59,11 +59,16 @@ function validationBoundary(db: StateDatabase, issue: string, links: TaskLink[])
 }
 
 function currentPrHead(db: StateDatabase, issue: string, lifecycleId: string, url: string): string | null {
-  const state = db.observations(issue)
+  const observations = db.observations(issue)
+    .filter((item) => item.source === "pr" && item.task_lifecycle_id === lifecycleId);
+  const reported = observations.filter((item) => item.verb === "pr-reported").at(-1);
+  if (reported?.note !== url) return null;
+  const state = observations
     .filter((item) => item.source === "pr" && item.task_lifecycle_id === lifecycleId
-      && ["pr-green", "pr-withdrawn"].includes(item.verb) && item.note?.startsWith(`${url} `))
+      && ["pr-green", "pr-withdrawn", "pr-merged"].includes(item.verb)
+      && (item.note === url || item.note?.startsWith(`${url} `)))
     .at(-1);
-  if (!state?.note) return null;
+  if (state?.verb !== "pr-green" || !state.note) return null;
   return /(?:head|current)=([^\s]+)/.exec(state.note)?.[1] ?? null;
 }
 
@@ -75,7 +80,7 @@ function configuredVerdict(config: WorkflowConfig, observation: Observation): Ve
 }
 
 export function reconcileVerdicts(db: StateDatabase, config: WorkflowConfig, observations: Observation[], env: NodeJS.ProcessEnv = process.env): { handled: number; stalled: number } {
-  if (config.validation.mode !== "verdict") return { handled: 0, stalled: 0 };
+  if (config.validation.mode !== "verdict" || config.features.mirror !== "on") return { handled: 0, stalled: 0 };
   let handled = 0;
   let stalled = 0;
   const at = nowIso(env);
@@ -99,18 +104,46 @@ export function reconcileVerdicts(db: StateDatabase, config: WorkflowConfig, obs
         });
       }
     }
-    if (byLifecycle.size !== links.length) continue;
-    const candidates = links.map((link) => byLifecycle.get(link.lifecycle_id)!);
-    const aggregateId = sha256(JSON.stringify({
+    const team = config.teams.find((item) => item.key === snapshot.issue.split("-")[0]);
+    if (!team) continue;
+    const available = links.flatMap((link) => {
+      const candidate = byLifecycle.get(link.lifecycle_id);
+      return candidate ? [candidate] : [];
+    });
+    const aggregateIdentity = (candidates: ActiveVerdict[]) => sha256(JSON.stringify({
       issue: snapshot.issue,
       boundary,
       lifecycles: candidates.map((item) => item.link.lifecycle_id),
       verdicts: candidates.map((item) => item.observation.id),
     }));
+    const changesRequested = available.filter((item) => item.detail.verdict === "changes-requested");
+    if (changesRequested.length) {
+      const aggregateId = aggregateIdentity(changesRequested);
+      const handledKey = `verdict-aggregate-handled:${aggregateId}`;
+      if (db.serviceState(handledKey)) continue;
+      db.enqueueReconciliation({
+        key: `verdict-aggregate:${aggregateId}:building`, kind: "linear.issue-role", target: snapshot.issue,
+        payload: { issue: snapshot.issue, role: "building", expected_role: "validating", actor: "service", requires_managed: true },
+      }, at);
+      for (const candidate of changesRequested) {
+        db.enqueueReconciliation({
+          key: `verdict-aggregate:${aggregateId}:findings:${candidate.link.lifecycle_id}`,
+          kind: "fleet.send", target: candidate.link.task,
+          payload: {
+            task: candidate.link.task, issue: snapshot.issue, lifecycle_id: candidate.link.lifecycle_id,
+            message: `Validation requested changes on ${candidate.detail.url}: ${candidate.detail.reason}`,
+          },
+        }, at);
+      }
+      db.setServiceState(handledKey, at, at);
+      handled += available.length;
+      continue;
+    }
+    if (byLifecycle.size !== links.length) continue;
+    const candidates = links.map((link) => byLifecycle.get(link.lifecycle_id)!);
+    const aggregateId = aggregateIdentity(candidates);
     const handledKey = `verdict-aggregate-handled:${aggregateId}`;
     if (db.serviceState(handledKey)) continue;
-    const team = config.teams.find((item) => item.key === snapshot.issue.split("-")[0]);
-    if (!team) continue;
     for (const candidate of candidates.filter((item) => item.policy)) {
       db.raw.query("UPDATE pr_events SET policy_downgrade=1,reason=? WHERE id=?")
         .run(candidate.policy, candidate.observation.id);
@@ -127,26 +160,6 @@ export function reconcileVerdicts(db: StateDatabase, config: WorkflowConfig, obs
           }),
         });
       }
-    }
-    const changesRequested = candidates.filter((item) => item.detail.verdict === "changes-requested");
-    if (changesRequested.length) {
-      db.enqueueReconciliation({
-        key: `verdict-aggregate:${aggregateId}:building`, kind: "linear.issue-role", target: snapshot.issue,
-        payload: { issue: snapshot.issue, role: "building", expected_role: "validating", actor: "service", requires_managed: true },
-      }, at);
-      for (const candidate of changesRequested) {
-        db.enqueueReconciliation({
-          key: `verdict-aggregate:${aggregateId}:findings:${candidate.link.lifecycle_id}`,
-          kind: "fleet.send", target: candidate.link.task,
-          payload: {
-            task: candidate.link.task, issue: snapshot.issue, lifecycle_id: candidate.link.lifecycle_id,
-            message: `Validation requested changes on ${candidate.detail.url}: ${candidate.detail.reason}`,
-          },
-        }, at);
-      }
-      db.setServiceState(handledKey, at, at);
-      handled += candidates.length;
-      continue;
     }
     const needsHuman = candidates.filter((item) => item.detail.verdict === "needs-human" || item.policy);
     if (needsHuman.length) {

@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StateDatabase } from "../db/database.ts";
 import { testWorkflowConfig } from "../testing/config.ts";
-import { reconcileSteers } from "./steer.ts";
+import { discoverLocalSteers, reconcileSteers } from "./steer.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -25,7 +25,11 @@ test("an unacknowledged steer redelivers once and then stalls once", () => {
   const inbox = join(home, "state", "worker.inbox"); mkdirSync(inbox, { recursive: true });
   const record = join(inbox, "one.json"); writeFileSync(record, "{}\n");
   const db = new StateDatabase(join(home, "db"), join(home, "backups"));
-  db.recordSteer({ issue: "ABC-1", home: "local", task: "worker", record_path: record, sent_at: "2026-01-01T12:00:00Z" });
+  db.linkTask({ task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T11:00:00Z", torn_down_at: null });
+  db.recordSteer({
+    issue: "ABC-1", home: "local", task: "worker", record_path: record,
+    lifecycle_id: db.taskLinks("ABC-1", true)[0]!.lifecycle_id, sent_at: "2026-01-01T12:00:00Z",
+  });
   const config = testWorkflowConfig();
   expect(reconcileSteers(home, db, config, { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:04:00Z") / 1000) }).redelivered).toBe(1);
   expect(reconcileSteers(home, db, config, { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:05:00Z") / 1000) }).redelivered).toBe(0);
@@ -69,6 +73,38 @@ test("redelivery does not cross a replacement task lifecycle", () => {
   db.closeTask("worker", "2026-01-01T12:01:00Z");
   db.linkTask({ task: "worker", issue: "ABC-2", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:02:00Z", torn_down_at: null });
   expect(reconcileSteers(home, db, testWorkflowConfig(), { FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:04:00Z") / 1000) }).redelivered).toBe(0);
+  expect(db.jobs()).toHaveLength(0);
+  db.close();
+});
+
+test("local discovery attributes a record to the lifecycle active when it was written", () => {
+  const home = mkdtempSync("/private/tmp/fml-steer-"); roots.push(home);
+  const inbox = join(home, "state", "worker.inbox"); mkdirSync(inbox, { recursive: true });
+  const record = join(inbox, "one.msg"); writeFileSync(record, "schema=fm-task-inbox.v1\n--\nOld request\n");
+  utimesSync(record, new Date("2026-01-01T12:00:00Z"), new Date("2026-01-01T12:00:00Z"));
+  const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+  db.linkTask({ lifecycle_id: "link:old", task: "worker", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T11:00:00Z", torn_down_at: null });
+  db.closeTask("worker", "2026-01-01T12:01:00Z");
+  db.linkTask({ lifecycle_id: "link:new", task: "worker", issue: "ABC-2", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:02:00Z", torn_down_at: null });
+
+  expect(discoverLocalSteers(home, db)).toBe(1);
+  expect(db.steers()[0]).toMatchObject({ issue: "ABC-1", lifecycle_id: "link:old" });
+  expect(reconcileSteers(home, db, testWorkflowConfig(), {
+    FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:04:00Z") / 1000),
+  }).redelivered).toBe(0);
+  expect(db.jobs()).toHaveLength(0);
+  db.close();
+});
+
+test("an unresolved legacy steer is never redelivered to a current task", () => {
+  const home = mkdtempSync("/private/tmp/fml-steer-"); roots.push(home);
+  const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+  db.linkTask({ lifecycle_id: "link:new", task: "worker", issue: "ABC-2", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T12:02:00Z", torn_down_at: null });
+  db.recordSteer({ issue: "ABC-1", home: "local", task: "worker", record_path: join(home, "missing.msg"), sent_at: "2026-01-01T12:00:00Z" });
+
+  expect(reconcileSteers(home, db, testWorkflowConfig(), {
+    FM_HOME: home, FM_LINEAR_NOW_EPOCH: String(Date.parse("2026-01-01T12:04:00Z") / 1000),
+  }).redelivered).toBe(0);
   expect(db.jobs()).toHaveLength(0);
   db.close();
 });

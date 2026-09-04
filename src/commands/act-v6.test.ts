@@ -62,11 +62,24 @@ describe("v6 act read gate", async () => {
 
   test("send records a durable fleet delivery job without inventing a promise", async () => {
     const { env, receipt } = setup({ liveState: "Building", liveAssignee: "Firstmate" });
+    const before = StateDatabase.open(env);
+    before.linkTask({ task: "worker", issue: "ABC-1", role: "support", host: "mini", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    const lifecycle = before.taskLinks("ABC-1", true)[0]!.lifecycle_id;
+    before.close();
     expect(await runActV6(["send", "ABC-1", "--receipt", receipt, "--task", "worker", "--home", "mini", "--comment", "Please report status"], env)).toBe(0);
     const db = StateDatabase.open(env);
     expect(db.jobs()[0]?.kind).toBe("fleet.send");
-    expect(JSON.parse(db.jobs()[0]!.payload)).toMatchObject({ issue: "ABC-1", task: "worker", home: "mini", message: "Please report status" });
+    expect(JSON.parse(db.jobs()[0]!.payload)).toMatchObject({ issue: "ABC-1", task: "worker", home: "mini", lifecycle_id: lifecycle, message: "Please report status" });
     expect(db.promises("ABC-1")).toHaveLength(0);
+    db.close();
+  });
+
+  test("send refuses an unlinked task without consuming the receipt", async () => {
+    const { env, receipt } = setup({ liveState: "Building", liveAssignee: "Firstmate" });
+    expect(await runActV6(["send", "ABC-1", "--receipt", receipt, "--task", "missing", "--comment", "Please report status"], env)).toBe(1);
+    const db = StateDatabase.open(env);
+    expect(db.jobs()).toHaveLength(0);
+    expect(db.receipt(receipt)?.consumed_at).toBeNull();
     db.close();
   });
 

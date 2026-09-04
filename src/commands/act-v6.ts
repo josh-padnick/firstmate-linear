@@ -127,13 +127,20 @@ export async function runActV6(args: string[], env: NodeJS.ProcessEnv = process.
     }
     if (TEXT_VERBS.has(verb) && !text) throw new Error(`${verb} requires --comment or --comment-file`);
     if (verb === "send" && (!text || !task)) throw new Error("send requires --task and --comment or --comment-file");
+    const sendLinks = verb === "send" ? db.taskLinks(issue, true).filter((link) => link.task === task) : [];
+    if (verb === "send" && sendLinks.length !== 1) {
+      throw new Error(`send requires exactly one active task link for ${issue}/${task}`);
+    }
     const nextLine = expected ? (expected === "none" ? "none" : `${expected} by ${by}`) : null;
     const rendered = TEXT_VERBS.has(verb) ? renderReply(text, verdict, nextLine, config.templates.reply) : "";
     if (TEXT_VERBS.has(verb)) lintReply(rendered);
     const target = roleForAction(verb, verdict, owner, team, explicitRole);
     const keyBase = `${receipt}:${verb}:${issue}`;
     const jobs: NewJob[] = [];
-    if (verb === "send") jobs.push({ key: `${keyBase}:send:${task}`, kind: "fleet.send", target: task!, payload: { issue, task, home: taskHome, message: text } });
+    if (verb === "send") jobs.push({
+      key: `${keyBase}:send:${task}`, kind: "fleet.send", target: task!,
+      payload: { issue, task, home: taskHome, lifecycle_id: sendLinks[0]!.lifecycle_id, message: text },
+    });
     if (text) {
       if (verb !== "send") jobs.push({ key: `${keyBase}:comment:${sha256(rendered)}`, kind: "linear.comment", target: issue, payload: { issue, body: rendered, actor: "core", requires_managed: true } });
     }

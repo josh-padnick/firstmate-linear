@@ -22,6 +22,11 @@ function setup() {
 
 function recordHead(db: StateDatabase, lifecycle: string, task: string, url: string, head: string): void {
   db.observe({
+    id: `reported:${lifecycle}:${url}`, source: "pr", task, task_lifecycle_id: lifecycle,
+    issue: "ABC-1", verb: "pr-reported", key: "pr", note: url,
+    observed_at: "2026-01-01T12:01:00Z",
+  });
+  db.observe({
     id: `head:${lifecycle}:${head}`, source: "pr", task, task_lifecycle_id: lifecycle,
     issue: "ABC-1", verb: "pr-green", key: "pr", note: `${url} head=${head}`,
     observed_at: "2026-01-01T12:01:00Z",
@@ -37,9 +42,13 @@ function observation(detail: Record<string, unknown>, fields: Partial<Observatio
   };
 }
 
+function verdictConfig(options: Parameters<typeof testWorkflowConfig>[0] = {}) {
+  return testWorkflowConfig({ ...options, validationMode: "verdict", features: { ...options.features, mirror: "on" } });
+}
+
 test("auto-mergeable verdict waits visibly until the configured gate check succeeds", () => {
   const { db } = setup();
-  const config = testWorkflowConfig({ validationMode: "verdict" });
+  const config = verdictConfig();
   expect(reconcileVerdicts(db, config, [observation({ verdict: "auto-mergeable" })]).handled).toBe(1);
   expect(db.listEvents(["waiting-for-core"])[0]?.note).toContain("is not successful");
   expect(db.jobs()).toHaveLength(0);
@@ -48,7 +57,7 @@ test("auto-mergeable verdict waits visibly until the configured gate check succe
 
 test("service policy downgrades auto merge to the merge gate", () => {
   const { db } = setup();
-  const base = testWorkflowConfig({ validationMode: "verdict" });
+  const base = verdictConfig();
   const config = { ...base, merge: { ...base.merge, never_auto_paths: ["infra/**"] } };
   reconcileVerdicts(db, config, [observation({ verdict: "auto-mergeable", changedFiles: [{ path: "infra/prod.tf", additions: 1, deletions: 0 }] })]);
   expect(db.listEvents(["waiting-for-core"])).toHaveLength(0);
@@ -59,14 +68,14 @@ test("service policy downgrades auto merge to the merge gate", () => {
 
 test("changes-requested relays findings to a live primary task and returns to building", () => {
   const { db } = setup();
-  reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [observation({ verdict: "changes-requested", reason: "fix tests" })]);
+  reconcileVerdicts(db, verdictConfig(), [observation({ verdict: "changes-requested", reason: "fix tests" })]);
   expect(db.jobs().map((job) => job.kind).sort()).toEqual(["fleet.send", "linear.issue-role"]);
   db.close();
 });
 
 test("hands-off auto merge stays silent only when the configured gate check is green", () => {
   const { db } = setup();
-  const config = testWorkflowConfig({ validationMode: "verdict" });
+  const config = verdictConfig();
   reconcileVerdicts(db, config, [observation({ verdict: "auto-mergeable", autoMergeArmed: true, checkConclusions: { "fleet-merge-gate": "success" } })]);
   expect(db.listEvents(["waiting-for-core"])).toHaveLength(0);
   expect(db.jobs().map((job) => job.kind)).toEqual(["promise.implicit"]);
@@ -84,10 +93,10 @@ test("a durable verdict is consumed after the issue reaches validating", () => {
   recordHead(db, "link:worker", "worker", "https://github.test/pr/1", "abc");
   const item = observation({ verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" } });
   db.observe(item);
-  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [item]).handled).toBe(0);
+  expect(reconcileVerdicts(db, verdictConfig(), [item]).handled).toBe(0);
   db.snapshot({ issue: "ABC-1", role: "validating", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:03:00Z" });
-  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), []).handled).toBe(1);
-  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), []).handled).toBe(0);
+  expect(reconcileVerdicts(db, verdictConfig(), []).handled).toBe(1);
+  expect(reconcileVerdicts(db, verdictConfig(), []).handled).toBe(0);
   db.close();
 });
 
@@ -100,7 +109,7 @@ test("a verdict cannot cross into a replacement primary lifecycle", () => {
     lifecycle_id: "link:replacement", task: "worker", issue: "ABC-1", role: "primary",
     worktree: null, harness: null, spawned_at: "2026-01-01T12:03:00Z", torn_down_at: null,
   });
-  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), []).handled).toBe(0);
+  expect(reconcileVerdicts(db, verdictConfig(), []).handled).toBe(0);
   expect(db.jobs()).toHaveLength(0);
   db.close();
 });
@@ -111,7 +120,7 @@ test("a verdict cannot cross into a later validation episode", () => {
   db.observe(item);
   db.snapshot({ issue: "ABC-1", role: "building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:02:00Z" });
   db.snapshot({ issue: "ABC-1", role: "validating", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T12:03:00Z" });
-  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), []).handled).toBe(0);
+  expect(reconcileVerdicts(db, verdictConfig(), []).handled).toBe(0);
   expect(db.jobs()).toHaveLength(0);
   db.close();
 });
@@ -128,7 +137,7 @@ test("changes requested dominates an auto-mergeable sibling PR", () => {
     verdict: "auto-mergeable", url: "https://github.test/pr/2", headSha: "def",
     checkConclusions: { "fleet-merge-gate": "success" },
   }, { id: "obs:sibling", task: "sibling", task_lifecycle_id: "link:sibling" });
-  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [requested, safe]).handled).toBe(2);
+  expect(reconcileVerdicts(db, verdictConfig(), [requested, safe]).handled).toBe(2);
   expect(db.listEvents(["waiting-for-core"])).toHaveLength(0);
   expect(db.jobs().map((job) => job.kind).sort()).toEqual(["fleet.send", "linear.issue-role"]);
   expect(JSON.parse(db.jobs().find((job) => job.kind === "fleet.send")!.payload)).toMatchObject({ lifecycle_id: "link:worker" });
@@ -141,7 +150,7 @@ test("merge authorization waits for every active primary verdict", () => {
     lifecycle_id: "link:sibling", task: "sibling", issue: "ABC-1", role: "primary",
     worktree: null, harness: null, spawned_at: "2026-01-01T11:30:00Z", torn_down_at: null,
   });
-  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [observation({
+  expect(reconcileVerdicts(db, verdictConfig(), [observation({
     verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" },
   })]).handled).toBe(0);
   expect(db.jobs()).toHaveLength(0);
@@ -155,16 +164,46 @@ test("a verdict must match the latest observed PR head", () => {
     issue: "ABC-1", verb: "pr-withdrawn", key: "pr",
     note: "https://github.test/pr/1 current=def expected=def", observed_at: "2026-01-01T12:02:00Z",
   });
-  expect(reconcileVerdicts(db, testWorkflowConfig({ validationMode: "verdict" }), [observation({
+  expect(reconcileVerdicts(db, verdictConfig(), [observation({
     verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" },
   })]).handled).toBe(0);
   expect(db.jobs()).toHaveLength(0);
   db.close();
 });
 
+test("a verdict for a superseded PR cannot authorize its replacement", () => {
+  const { db } = setup();
+  db.observe({
+    id: "reported:replacement", source: "pr", task: "worker", task_lifecycle_id: "link:worker",
+    issue: "ABC-1", verb: "pr-reported", key: "pr", note: "https://github.test/pr/2",
+    observed_at: "2026-01-01T12:02:00Z",
+  });
+  recordHead(db, "link:worker", "worker", "https://github.test/pr/2", "def");
+  expect(reconcileVerdicts(db, verdictConfig(), [observation({
+    verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" },
+  })]).handled).toBe(0);
+  expect(db.jobs()).toHaveLength(0);
+  expect(db.listEvents(["waiting-for-core"])).toHaveLength(0);
+  db.close();
+});
+
+test("changes requested acts before every sibling has published a verdict", () => {
+  const { db } = setup();
+  db.linkTask({
+    lifecycle_id: "link:sibling", task: "sibling", issue: "ABC-1", role: "primary",
+    worktree: null, harness: null, spawned_at: "2026-01-01T11:30:00Z", torn_down_at: null,
+  });
+  recordHead(db, "link:sibling", "sibling", "https://github.test/pr/2", "def");
+  expect(reconcileVerdicts(db, verdictConfig(), [observation({
+    verdict: "changes-requested", reason: "fix security",
+  })]).handled).toBe(1);
+  expect(db.jobs().map((job) => job.kind).sort()).toEqual(["fleet.send", "linear.issue-role"]);
+  db.close();
+});
+
 test("needs-human remains visible when no captain gate is mapped", () => {
   const { db } = setup();
-  const config = testWorkflowConfig({ validationMode: "verdict", roles: {
+  const config = verdictConfig({ roles: {
     building: "Building", validating: "Validating", done: "Done", canceled: "Canceled",
   } });
   expect(reconcileVerdicts(db, config, [observation({ verdict: "needs-human", reason: "security review" })]).handled).toBe(1);
@@ -175,8 +214,21 @@ test("needs-human remains visible when no captain gate is mapped", () => {
 
 test("a verdict from a differently named check is ignored", () => {
   const { db } = setup();
-  const config = testWorkflowConfig({ validationMode: "verdict" });
+  const config = verdictConfig();
   expect(reconcileVerdicts(db, config, [observation({ verdict: "auto-mergeable", source: "check", checkName: "untrusted-check" })]).handled).toBe(0);
   expect(db.jobs()).toHaveLength(0);
   db.close();
+});
+
+test("verdict actions obey mirror off and shadow modes", () => {
+  for (const mirror of ["off", "shadow"] as const) {
+    const { db } = setup();
+    const config = testWorkflowConfig({ validationMode: "verdict", features: { mirror } });
+    expect(reconcileVerdicts(db, config, [observation({
+      verdict: "auto-mergeable", checkConclusions: { "fleet-merge-gate": "success" },
+    })])).toEqual({ handled: 0, stalled: 0 });
+    expect(db.jobs()).toHaveLength(0);
+    expect(db.listEvents(["waiting-for-core"])).toHaveLength(0);
+    db.close();
+  }
 });
