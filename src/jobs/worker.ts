@@ -11,16 +11,16 @@ import { capturePrSourceWatermarks, type PrInspect } from "../mirror/pr.ts";
 import { formatIso, nowEpoch, nowIso } from "../time.ts";
 import { LinearTransport, type TransportResult } from "../transport.ts";
 
-const RESOLVE_STATE = `query($issue:String!){viewer{id displayName} issue(id:$issue){id state{id name} team{states{nodes{id name}} members{nodes{id displayName}}}}}`;
+const RESOLVE_STATE = `query($issue:String!){viewer{id displayName} issue(id:$issue){id identifier assignee{displayName} project{name slugId} state{id name} team{states{nodes{id name}} members{nodes{id displayName}}}}}`;
 const UPDATE_STATE = `mutation($issue:String!,$state:String!,$assignee:String){issueUpdate(id:$issue,input:{stateId:$state,assigneeId:$assignee}){success issue{id state{name} assignee{displayName}}}}`;
 const CREATE_COMMENT = `mutation($id:String!,$issue:String!,$body:String!){commentCreate(input:{id:$id,issueId:$issue,body:$body}){success comment{id createdAt}}}`;
 const VERIFY_COMMENT = `query($id:String!){comment(id:$id){id createdAt}}`;
-const RESOLVE_ISSUE = `query($issue:String!){issue(id:$issue){id}}`;
-const RESOLVE_ATTACHMENTS = `query($issue:String!){issue(id:$issue){id attachments{nodes{id url}}}}`;
+const RESOLVE_ISSUE = `query($issue:String!){viewer{displayName} issue(id:$issue){id identifier assignee{displayName} project{name slugId}}}`;
+const RESOLVE_ATTACHMENTS = `query($issue:String!){viewer{displayName} issue(id:$issue){id identifier assignee{displayName} project{name slugId} attachments{nodes{id url}}}}`;
 const CREATE_ATTACHMENT = `mutation($issue:String!,$url:String!,$title:String!){attachmentCreate(input:{issueId:$issue,url:$url,title:$title}){success attachment{id url}}}`;
 const RESOLVE_TEAM_STATES = `query($team:String!){teams(first:2,filter:{key:{eq:$team}}){pageInfo{hasNextPage} nodes{id key states{nodes{id name type}}}}}`;
 const CREATE_WORKFLOW_STATE = `mutation($team:String!,$name:String!,$type:String!,$color:String!){workflowStateCreate(input:{teamId:$team,name:$name,type:$type,color:$color}){success workflowState{id name}}}`;
-const RESOLVE_LABELS = `query($issue:String!,$label:String!){issue(id:$issue){id labels{nodes{id name}}} issueLabels(first:50,filter:{name:{eq:$label}}){pageInfo{hasNextPage} nodes{id name team{id}}}}`;
+const RESOLVE_LABELS = `query($issue:String!,$label:String!){viewer{displayName} issue(id:$issue){id identifier assignee{displayName} project{name slugId} labels{nodes{id name}}} issueLabels(first:50,filter:{name:{eq:$label}}){pageInfo{hasNextPage} nodes{id name team{id}}}}`;
 const UPDATE_LABELS = `mutation($issue:String!,$added:[String!],$removed:[String!]){issueUpdate(id:$issue,input:{addedLabelIds:$added,removedLabelIds:$removed}){success issue{id labels{nodes{name}}}}}`;
 const RESOLVE_LABEL_GROUP = `query($name:String!){issueLabels(first:50,filter:{name:{eq:$name}}){nodes{id name isGroup team{id}}}}`;
 const CREATE_LABEL_GROUP = `mutation($name:String!){issueLabelCreate(input:{name:$name,isGroup:true,color:"#6B7280"}){success issueLabel{id name isGroup}}}`;
@@ -57,11 +57,23 @@ function value(result: TransportResult): any {
   return result.value.data;
 }
 
+function mutationRemainsManaged(body: JobPayload, resolved: any, config: WorkflowConfig, fallbackIssue: string): boolean {
+  if (body.requires_managed !== true) return true;
+  const issue = resolved?.issue;
+  const identifier = typeof issue?.identifier === "string" ? issue.identifier : fallbackIssue;
+  const separator = identifier.indexOf("-");
+  const teamKey = separator > 0 ? identifier.slice(0, separator).toUpperCase() : "";
+  const team = config.teams.find((item) => item.key === teamKey);
+  return Boolean(team && issue && typeof resolved?.viewer?.displayName === "string"
+    && isManagedIssue(team, resolved.viewer.displayName, issue));
+}
+
 async function updateIssueState(job: Job, body: JobPayload, transport: LinearTransport, config: WorkflowConfig): Promise<JobOutcome> {
   const issue = requiredString(body.issue ?? job.target, "issue");
   const target = requiredString(body.state, "state");
   const resolved = value(await transport.call("job-resolve-state", { query: RESOLVE_STATE, variables: { issue } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
+  if (!mutationRemainsManaged(body, resolved, config, issue)) return { skipped: "issue is outside managed scope" };
   const note = typeof body.comment === "string" ? body.comment.trim() : "";
   const outcome = (): JobOutcome => ({
     nativeId: resolved.issue.id,
@@ -134,6 +146,7 @@ async function createComment(
   job: Job,
   body: JobPayload,
   transport: LinearTransport,
+  config: WorkflowConfig,
   db?: StateDatabase,
   captureDeliveryBoundary?: (phase: "request" | "confirmed" | "recovered", deliveredAt?: string) => void,
 ): Promise<JobOutcome> {
@@ -148,6 +161,7 @@ async function createComment(
   const id = nativeUuid(job.key);
   const resolved = value(await transport.call("job-resolve-comment-issue", { query: RESOLVE_ISSUE, variables: { issue } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
+  if (!mutationRemainsManaged(body, resolved, config, issue)) return { skipped: "issue is outside managed scope" };
   if (!stillWaiting()) return { skipped: "waiting event is no longer open" };
   captureDeliveryBoundary?.("request");
   const result = await transport.call("job-comment", { query: CREATE_COMMENT, variables: { id, issue: resolved.issue.id, body: text } });
@@ -172,17 +186,19 @@ async function createComment(
   throw new Error(result.error.message);
 }
 
-async function createAttachment(job: Job, body: JobPayload, transport: LinearTransport): Promise<JobOutcome> {
+async function createAttachment(job: Job, body: JobPayload, transport: LinearTransport, config: WorkflowConfig): Promise<JobOutcome> {
   const issue = requiredString(body.issue ?? job.target, "issue");
   const url = requiredString(body.url, "url");
   const title = typeof body.title === "string" ? body.title : url;
   const resolve = async (): Promise<{ issueId: string; attachmentId: string | null }> => {
     const found = value(await transport.call("job-resolve-attachments", { query: RESOLVE_ATTACHMENTS, variables: { issue } }));
     if (!found?.issue?.id) throw new Error(`issue not found: ${issue}`);
+    if (!mutationRemainsManaged(body, found, config, issue)) return { issueId: "", attachmentId: null };
     const attachment = found.issue.attachments?.nodes?.find((item: any) => item.url === url);
     return { issueId: found.issue.id, attachmentId: attachment?.id ?? null };
   };
   const before = await resolve();
+  if (!before.issueId) return { skipped: "issue is outside managed scope" };
   if (before.attachmentId) return { nativeId: before.attachmentId };
   const created = await transport.call("job-attachment", {
     query: CREATE_ATTACHMENT,
@@ -256,12 +272,13 @@ async function ensureWorkflowState(job: Job, body: JobPayload, transport: Linear
   return { nativeId: created.workflowStateCreate.workflowState?.id ?? name };
 }
 
-async function setAgentLabel(job: Job, body: JobPayload, transport: LinearTransport): Promise<JobOutcome> {
+async function setAgentLabel(job: Job, body: JobPayload, transport: LinearTransport, config: WorkflowConfig): Promise<JobOutcome> {
   const issue = requiredString(body.issue ?? job.target, "issue");
   const label = requiredString(body.label, "label");
   const known = Array.isArray(body.known_labels) ? body.known_labels.filter((item): item is string => typeof item === "string") : [];
   const resolved = value(await transport.call("job-resolve-labels", { query: RESOLVE_LABELS, variables: { issue, label } }));
   if (!resolved?.issue?.id) throw new Error(`issue not found: ${issue}`);
+  if (!mutationRemainsManaged(body, resolved, config, issue)) return { skipped: "issue is outside managed scope" };
   if (resolved?.issueLabels?.pageInfo?.hasNextPage) throw new Error(`workspace Agent label lookup exceeded limit: ${label}`);
   const matches = (resolved?.issueLabels?.nodes ?? []).filter((item: any) => item.name === label && !item.team);
   if (matches.length > 1) throw new Error(`multiple workspace Agent labels named: ${label}`);
@@ -316,8 +333,8 @@ export async function executeJob(job: Job, options: {
   }
   switch (job.kind) {
     case "linear.issue-state": return updateIssueState(job, body, options.transport, options.config);
-    case "linear.comment": return createComment(job, body, options.transport, options.db, options.captureCommentDeliveryBoundary);
-    case "linear.attachment": return createAttachment(job, body, options.transport);
+    case "linear.comment": return createComment(job, body, options.transport, options.config, options.db, options.captureCommentDeliveryBoundary);
+    case "linear.attachment": return createAttachment(job, body, options.transport, options.config);
     case "relay": {
       if (!options.db) throw new Error("relay requires the state database");
       return relay(job, body, options.db, options.env ?? process.env);
@@ -327,7 +344,7 @@ export async function executeJob(job: Job, options: {
       return acknowledgeCore(job, body, options.db, options.env ?? process.env);
     }
     case "linear.workflow-state": return ensureWorkflowState(job, body, options.transport);
-    case "linear.agent-label": return setAgentLabel(job, body, options.transport);
+    case "linear.agent-label": return setAgentLabel(job, body, options.transport, options.config);
     case "linear.label-group": return ensureLabelGroup(job, body, options.transport);
     default: throw new Error(`unknown job kind: ${job.kind}`);
   }

@@ -32,6 +32,24 @@ describe("PR signals", () => {
     db.close();
   });
 
+  test("one failed PR inspection does not suppress another lifecycle", () => {
+    const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
+    writeFileSync(join(home, "state", "broken.meta"), "pr=https://github.com/acme/repo/pull/1\npr_head=broken\npr_base=main\n");
+    writeFileSync(join(home, "state", "healthy.meta"), "pr=https://github.com/acme/repo/pull/2\npr_head=healthy\npr_base=main\n");
+    const db = new StateDatabase(join(home, "db"), join(home, "backups"));
+    db.linkTask({ task: "broken", issue: "ABC-1", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+    db.linkTask({ task: "healthy", issue: "ABC-2", role: "primary", worktree: null, harness: null, spawned_at: "2026-01-01T00:00:00Z", torn_down_at: null });
+
+    const result = scanPullRequests(home, db, (url) => {
+      if (url.endsWith("/1")) throw new Error("invalid PR reference");
+      return { state: "OPEN", headRefOid: "healthy", baseRefName: "main", requiredChecks: [{ name: "ci", state: "pass" }] };
+    });
+
+    expect(result.findings).toContainEqual({ code: "PR_INSPECTION_FAILED", issue: "ABC-1", detail: "invalid PR reference" });
+    expect(result.observations.map((item) => [item.issue, item.verb])).toEqual([["ABC-2", "pr-reported"], ["ABC-2", "pr-green"]]);
+    db.close();
+  });
+
   test("a later head withdraws an earlier green signal", () => {
     const home = mkdtempSync("/private/tmp/fml-pr-"); roots.push(home); mkdirSync(join(home, "state"));
     writeFileSync(join(home, "state", "task.meta"), "pr=https://github.com/acme/repo/pull/1\npr_head=new456\n");

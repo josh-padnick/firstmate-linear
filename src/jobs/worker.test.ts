@@ -26,10 +26,10 @@ describe("job worker", () => {
     const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
     await Bun.write(join(fixtures, "00-managed-state.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null } } }));
-    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { viewer: { id: "me", displayName: "Firstmate" }, issue: { id: "issue-id", state: { id: "old", name: "Approve Deliverable" }, team: { states: { nodes: [{ id: "new", name: "Validating Code" }] }, members: { nodes: [] } } } } }));
+    await Bun.write(join(fixtures, "01-resolve.json"), JSON.stringify({ data: { viewer: { id: "me", displayName: "Firstmate" }, issue: { id: "issue-id", identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null, state: { id: "old", name: "Approve Deliverable" }, team: { states: { nodes: [{ id: "new", name: "Validating Code" }] }, members: { nodes: [] } } } } }));
     await Bun.write(join(fixtures, "02-update.json"), JSON.stringify({ data: { issueUpdate: { success: true, issue: { id: "issue-id", state: { name: "Validating Code" } } } } }));
     await Bun.write(join(fixtures, "02z-managed-comment.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null } } }));
-    await Bun.write(join(fixtures, "03-resolve-comment.json"), JSON.stringify({ data: { issue: { id: "issue-id" } } }));
+    await Bun.write(join(fixtures, "03-resolve-comment.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { id: "issue-id", identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null } } }));
     await Bun.write(join(fixtures, "04-comment.json"), JSON.stringify({ data: { commentCreate: { success: true, comment: { id: "comment-id" } } } }));
     const db = new StateDatabase(join(root, "db"), join(root, "backups"));
     db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
@@ -66,6 +66,23 @@ describe("job worker", () => {
     expect(result.done).toBe(1);
     expect(db.jobs()[0]?.state).toBe("done");
     expect(readFileSync(log, "utf8").split("\n")[0]).toStartWith("job-resolve-managed\t");
+    db.close();
+  });
+
+  test("a mutation-specific read closes the managed-scope race", async () => {
+    const root = mkdtempSync("/private/tmp/fml-jobs-"); roots.push(root);
+    const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
+    const log = join(root, "calls.log");
+    await Bun.write(join(fixtures, "01-managed.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null } } }));
+    await Bun.write(join(fixtures, "02-resolve-state.json"), JSON.stringify({ data: { viewer: { id: "me", displayName: "Firstmate" }, issue: { id: "issue-id", identifier: "ABC-1", assignee: { displayName: "Someone Else" }, project: null, state: { name: "Approve Deliverable" }, team: { states: { nodes: [{ id: "building", name: "Building" }] }, members: { nodes: [] } } } } }));
+    const db = new StateDatabase(join(root, "db"), join(root, "backups"));
+    db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Firstmate", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: true, observed_at: "2026-01-01T00:00:00Z" });
+    db.enqueue({ key: "state:race", kind: "linear.issue-state", target: "ABC-1", payload: { issue: "ABC-1", state: "Building", requires_managed: true } }, "2026-01-01T00:00:00Z");
+
+    const result = await processJobs({ db, config: { ...config, teams: config.teams.map((team) => ({ ...team, managed: "assignee:self" })) }, transport: new LinearTransport({ fixtureDir: fixtures, fixtureLog: log }), env: { FM_HOME: root, FM_LINEAR_NOW_EPOCH: "1767225600" }, maxAttempts: 1 });
+
+    expect(result.done).toBe(1);
+    expect(readFileSync(log, "utf8")).not.toContain("job-update-state");
     db.close();
   });
 
@@ -503,7 +520,8 @@ describe("job worker", () => {
     const log = join(root, "calls.log");
     await Bun.write(join(fixtures, "01-managed.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null } } }));
     await Bun.write(join(fixtures, "02-labels.json"), JSON.stringify({ data: {
-      issue: { id: "issue-id", labels: { nodes: [{ id: "old-label", name: "Agent: Old" }] } },
+      viewer: { displayName: "Firstmate" },
+      issue: { id: "issue-id", identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null, labels: { nodes: [{ id: "old-label", name: "Agent: Old" }] } },
       issueLabels: { nodes: [
         { id: "workspace-label", name: "Agent: Codex", team: null },
         { id: "team-label", name: "Agent: Codex", team: { id: "team-uuid" } },
@@ -529,7 +547,8 @@ describe("job worker", () => {
     const fixtures = join(root, "fixtures"); mkdirSync(fixtures);
     await Bun.write(join(fixtures, "01-managed.json"), JSON.stringify({ data: { viewer: { displayName: "Firstmate" }, issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null } } }));
     await Bun.write(join(fixtures, "02-labels.json"), JSON.stringify({ data: {
-      issue: { id: "issue-id", labels: { nodes: [] } },
+      viewer: { displayName: "Firstmate" },
+      issue: { id: "issue-id", identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null, labels: { nodes: [] } },
       issueLabels: { pageInfo: { hasNextPage: false }, nodes: [
         { id: "workspace-one", name: "Agent: Codex", team: null },
         { id: "workspace-two", name: "Agent: Codex", team: null },

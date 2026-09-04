@@ -225,7 +225,10 @@ function prepareLinks(home: string, db: StateDatabase, links: TaskLink[], inspec
       const currentState = db.taskLinks(undefined, true).filter((link) => links.some((item) => item.task === link.task)).map(prLinkIdentity).sort().join("\0");
       return currentState === linkState && sourcesValid();
     },
-    record: (at = observedAt) => findings.length ? { observations: [], findings } : recordPreparedLinks(db, prepared, at),
+    record: (at = observedAt) => {
+      const recorded = recordPreparedLinks(db, prepared, at);
+      return { observations: recorded.observations, findings: [...findings, ...recorded.findings] };
+    },
   };
 }
 
@@ -236,7 +239,6 @@ export function preparePullRequestsAtBoundary(home: string, db: StateDatabase, t
 export function scanPullRequests(home: string, db: StateDatabase, inspect: PrInspect = inspectPr, env: NodeJS.ProcessEnv = process.env): PrScanResult {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const prepared = prepareLinks(home, db, db.taskLinks(undefined, true), inspect, env);
-    if (prepared.findings.length) return { observations: [], findings: prepared.findings };
     if (prepared.valid()) return prepared.record();
   }
   return { observations: [], findings: [{ code: "PR_METADATA_CHANGED", issue: "fleet", detail: "PR metadata changed during inspection" }] };

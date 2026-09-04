@@ -9,8 +9,10 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 
 function setup(): { home: string; env: NodeJS.ProcessEnv; receipt: string } {
   const home = mkdtempSync("/private/tmp/fml-act-"); roots.push(home); mkdirSync(join(home, "config"));
+  const fixtures = join(home, "fixtures"); mkdirSync(fixtures);
+  writeFileSync(join(fixtures, "01-comments.json"), JSON.stringify({ data: { comments: { pageInfo: { hasNextPage: false }, nodes: [] } } }));
   writeFileSync(join(home, "config", "linear-workflow.yaml"), `version: 1\ncaptain:\n  display_name: Captain\nteams:\n  - key: ABC\n    managed: all\n    projects: []\n    statuses:\n      approve_deliverable: Approve Deliverable\n      building: Building\n      validating_code: Validating Code\nfeatures: { relay: off, mirror: off, escalation: off }\ntemplates: { reply: reply.md, report: report.md, review_walkthrough: review.html }\n`);
-  const env = { FM_HOME: home };
+  const env = { FM_HOME: home, FM_LINEAR_FIXTURE_DIR: fixtures };
   const db = StateDatabase.open(env);
   db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Captain", labels: [], agent_label: null, last_actor: "Captain", last_signal: null, observed_at: "2026-01-01T00:00:00Z" });
   db.capture({ id: "event:one", team: "ABC", issue: "ABC-1", type: "comment", token: "comment", author: "Captain", body_sha: null, created_at: "2026-01-01T00:00:01Z", captured_at: "2026-01-01T00:00:02Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
@@ -18,14 +20,14 @@ function setup(): { home: string; env: NodeJS.ProcessEnv; receipt: string } {
   return { home, env, receipt };
 }
 
-describe("v6 act read gate", () => {
-  test("captain-facing replies on firstmate-owned issues require a next promise", () => {
+describe("v6 act read gate", async () => {
+  test("captain-facing replies on firstmate-owned issues require a next promise", async () => {
     const { env, receipt } = setup();
     const db = StateDatabase.open(env);
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
     db.close();
 
-    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "I will validate it"], env)).toBe(1);
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "I will validate it"], env)).toBe(1);
 
     const after = StateDatabase.open(env);
     expect(after.receipt(receipt)?.consumed_at).toBeNull();
@@ -33,13 +35,13 @@ describe("v6 act read gate", () => {
     after.close();
   });
 
-  test("next none allows a reply without recording a promise", () => {
+  test("next none allows a reply without recording a promise", async () => {
     const { env, receipt } = setup();
     const db = StateDatabase.open(env);
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
     db.close();
 
-    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Nothing else is expected", "--next", "none"], env)).toBe(0);
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Nothing else is expected", "--next", "none"], env)).toBe(0);
 
     const after = StateDatabase.open(env);
     expect(after.promises("ABC-1")).toHaveLength(0);
@@ -47,7 +49,7 @@ describe("v6 act read gate", () => {
     after.close();
   });
 
-  test("next and by create a durable promise with the rendered commitment", () => {
+  test("next and by create a durable promise with the rendered commitment", async () => {
     const { env, receipt } = setup();
     const db = StateDatabase.open(env);
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
@@ -55,7 +57,7 @@ describe("v6 act read gate", () => {
     db.close();
     env.FM_LINEAR_NOW_EPOCH = String(Date.parse("2026-01-01T00:02:00Z") / 1000);
 
-    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Validation is running", "--next", "pr-green", "--by", "30m"], env)).toBe(0);
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Validation is running", "--next", "pr-green", "--by", "30m"], env)).toBe(0);
 
     const after = StateDatabase.open(env);
     const pending = after.promises("ABC-1").find((item) => item.expected_event === "pr-green")!;
@@ -74,12 +76,12 @@ describe("v6 act read gate", () => {
     after.close();
   });
 
-  test("next none rejects a meaningless deadline", () => {
+  test("next none rejects a meaningless deadline", async () => {
     const { env, receipt } = setup();
     const db = StateDatabase.open(env);
     db.snapshot({ issue: "ABC-1", state: "Building", assignee: "Firstmate", labels: [], agent_label: null, last_actor: "Firstmate", last_signal: null, observed_at: "2026-01-01T00:01:00Z" });
     db.close();
-    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "No follow-up", "--next", "none", "--by", "30m"], env)).toBe(1);
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "No follow-up", "--next", "none", "--by", "30m"], env)).toBe(1);
     const after = StateDatabase.open(env);
     expect(after.receipt(receipt)?.consumed_at).toBeNull();
     after.close();
@@ -87,12 +89,12 @@ describe("v6 act read gate", () => {
 
   test("gate replies require a verdict and ownership", async () => {
     const { env, receipt } = setup();
-    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it"], env)).toBe(1);
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it"], env)).toBe(1);
   });
 
   test("a valid gate reply enqueues jobs and consumes exact receipt", async () => {
     const { env, receipt } = setup();
-    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"], env)).toBe(0);
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"], env)).toBe(0);
     const db = StateDatabase.open(env);
     expect(db.jobs()).toHaveLength(2);
     expect(db.jobs().map((job) => job.kind)).not.toContain("core.ack");
@@ -102,28 +104,28 @@ describe("v6 act read gate", () => {
 
   test("reply policy rejects status-verb leads", async () => {
     const { env, receipt } = setup();
-    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Done: fixed", "--verdict", "approved", "--to", "firstmate"], env)).toBe(1);
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Done: fixed", "--verdict", "approved", "--to", "firstmate"], env)).toBe(1);
   });
 
-  test("reply policy rejects more than eight rendered lines", () => {
+  test("reply policy rejects more than eight rendered lines", async () => {
     const { env, receipt } = setup();
     const text = Array.from({ length: 9 }, (_, index) => `line ${index + 1}`).join("\n");
-    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", text, "--verdict", "approved", "--to", "firstmate"], env)).toBe(1);
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", text, "--verdict", "approved", "--to", "firstmate"], env)).toBe(1);
   });
 
-  test("the public CLI cannot claim the service actor exemption", () => {
+  test("the public CLI cannot claim the service actor exemption", async () => {
     const { env } = setup();
-    expect(runActV6(["status", "ABC-1", "--status", "Building", "--actor", "service"], env)).toBe(1);
+    expect(await runActV6(["status", "ABC-1", "--status", "Building", "--actor", "service"], env)).toBe(1);
     const db = StateDatabase.open(env);
     expect(db.jobs()).toHaveLength(0);
     db.close();
   });
 
-  test("status requires a non-empty target before consuming its receipt", () => {
+  test("status requires a non-empty target before consuming its receipt", async () => {
     const { env, receipt } = setup();
-    expect(runActV6(["status", "ABC-1", "--receipt", receipt], env)).toBe(1);
-    expect(runActV6(["status", "ABC-1", "--receipt", receipt, "--status", "   "], env)).toBe(1);
-    expect(runActV6(["status", "ABC-1", "--status", "--receipt", receipt], env)).toBe(1);
+    expect(await runActV6(["status", "ABC-1", "--receipt", receipt], env)).toBe(1);
+    expect(await runActV6(["status", "ABC-1", "--receipt", receipt, "--status", "   "], env)).toBe(1);
+    expect(await runActV6(["status", "ABC-1", "--status", "--receipt", receipt], env)).toBe(1);
     const db = StateDatabase.open(env);
     expect(db.receipt(receipt)?.consumed_at).toBeNull();
     expect(db.event("event:one")?.disposition).toBe("waiting-for-core");
@@ -131,25 +133,43 @@ describe("v6 act read gate", () => {
     db.close();
   });
 
-  test("a newer captain comment makes a receipt stale", () => {
+  test("a newer captain comment makes a receipt stale", async () => {
     const { env, receipt } = setup();
     const db = StateDatabase.open(env);
     db.capture({ id: "event:new", team: "ABC", issue: "ABC-1", type: "comment", token: "comment", author: "Captain", body_sha: null, created_at: "2026-01-01T00:00:04Z", captured_at: "2026-01-01T00:00:05Z", disposition: "waiting-for-core", note: null, raw_ref: "{}" });
     db.close();
-    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"], env)).toBe(1);
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"], env)).toBe(1);
     const after = StateDatabase.open(env);
     expect(after.jobs()).toHaveLength(0);
     expect(after.receipt(receipt)?.consumed_at).toBeNull();
     after.close();
   });
 
-  test("an action receipt cannot mutate an issue after it leaves scope", () => {
+  test("an uncaptured captain comment makes an action receipt stale", async () => {
+    const { home, env, receipt } = setup();
+    writeFileSync(join(home, "fixtures", "01-comments.json"), JSON.stringify({ data: { comments: {
+      pageInfo: { hasNextPage: false }, nodes: [{
+        id: "linear-comment-new", createdAt: "2026-01-01T00:00:04Z", updatedAt: "2026-01-01T00:00:04Z", body: "Use the other approach",
+        user: { displayName: "Captain" }, issue: { identifier: "ABC-1", assignee: { displayName: "Firstmate" }, project: null }, parent: null,
+      }],
+    } } }));
+
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"], env)).toBe(1);
+
+    const after = StateDatabase.open(env);
+    expect(after.jobs()).toHaveLength(0);
+    expect(after.receipt(receipt)?.consumed_at).toBeNull();
+    expect(after.listEvents().some((event) => event.author === "Captain" && event.created_at === "2026-01-01T00:00:04Z")).toBe(true);
+    after.close();
+  });
+
+  test("an action receipt cannot mutate an issue after it leaves scope", async () => {
     const { env, receipt } = setup();
     const db = StateDatabase.open(env);
     db.snapshot({ issue: "ABC-1", state: "Approve Deliverable", assignee: "Someone Else", labels: [], agent_label: null, last_actor: null, last_signal: null, managed: false, observed_at: "2026-01-01T00:01:00Z" });
     db.close();
 
-    expect(runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"], env)).toBe(1);
+    expect(await runActV6(["reply", "ABC-1", "--receipt", receipt, "--comment", "Please fix it", "--verdict", "changes-requested", "--to", "firstmate"], env)).toBe(1);
     const after = StateDatabase.open(env);
     expect(after.receipt(receipt)?.consumed_at).toBeNull();
     expect(after.jobs()).toHaveLength(0);

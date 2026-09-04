@@ -2,8 +2,11 @@ import { readFileSync } from "node:fs";
 import { loadConfig } from "../config/load.ts";
 import type { TeamConfig } from "../config/schema.ts";
 import { StateDatabase, type NewJob } from "../db/database.ts";
+import { loadKey, resolveHome } from "../env.ts";
 import { sha256 } from "../hash.ts";
+import { identityMatches } from "../identity.ts";
 import { formatIso, nowEpoch, nowIso } from "../time.ts";
+import { LinearTransport } from "../transport.ts";
 import { renderEvent } from "./inbox-v6.ts";
 import { optionValue } from "./args.ts";
 
@@ -11,6 +14,9 @@ const TEXT_VERBS = new Set(["reply", "comment", "handoff-to-captain", "complete"
 const VERDICTS = new Set(["approved", "changes-requested", "question"]);
 const OWNERS = new Set(["captain", "firstmate", "none"]);
 const PROMISE_VERBS = new Set(["reply", "comment", "handoff-to-captain"]);
+function receiptCommentsQuery(since: string): string {
+  return `query($issue:String!,$after:String){comments(first:50,after:$after,orderBy:updatedAt,filter:{issue:{identifier:{eq:$issue}},updatedAt:{gte:${JSON.stringify(since)}}}){pageInfo{hasNextPage endCursor} nodes{id createdAt updatedAt body user{displayName} issue{identifier} parent{id}}}}`;
+}
 
 function body(args: string[]): string {
   const file = optionValue(args, "--comment-file");
@@ -70,7 +76,38 @@ function statusFor(verb: string, verdict: string | null, owner: string | null, t
   return null;
 }
 
-export function runActV6(args: string[], env: NodeJS.ProcessEnv = process.env): number {
+async function syncCaptainComments(db: StateDatabase, issue: string, teamKey: string, captain: string, since: string, transport: LinearTransport, env: NodeJS.ProcessEnv): Promise<void> {
+  let after: string | null = null;
+  const maxPages = Number(env.FM_LINEAR_MAX_PAGES ?? 100);
+  for (let page = 1; page <= maxPages; page += 1) {
+    const result = await transport.call("receipt-comments", { query: receiptCommentsQuery(since), variables: { issue, after } });
+    if (!result.ok) throw new Error(result.error.message);
+    const comments = (result.value.data as any)?.comments;
+    if (!Array.isArray(comments?.nodes)) throw new Error("malformed receipt comments response");
+    for (const comment of comments.nodes) {
+      if (!comment?.id || !comment.updatedAt || comment.issue?.identifier !== issue || !identityMatches(comment.user?.displayName, captain)) continue;
+      const body = typeof comment.body === "string" ? comment.body : "";
+      const bodySha = sha256(body);
+      const raw = {
+        type: "comment", issue, author: captain, comment_id: comment.id, history_id: null,
+        parent_id: comment.parent?.id ?? null, body_sha256: bodySha, excerpt: body.slice(0, 300), body,
+        from_state: null, to_state: null, from_assignee: null, to_assignee: null,
+        description_updated: false, added_labels: [], removed_labels: [], title: null, labels: [],
+      };
+      db.capture({
+        id: `linear:${sha256(`comment:${comment.id}:${comment.updatedAt}:${bodySha}`)}`,
+        team: teamKey, issue, type: "comment", token: "comment", author: captain,
+        body_sha: bodySha, created_at: comment.updatedAt, captured_at: nowIso(env), disposition: "waiting-for-core", note: null, raw_ref: JSON.stringify(raw),
+      });
+    }
+    if (!comments.pageInfo?.hasNextPage) return;
+    if (!comments.pageInfo.endCursor) throw new Error("receipt comments pagination omitted endCursor");
+    after = comments.pageInfo.endCursor;
+  }
+  throw new Error("receipt comments pagination exceeded limit");
+}
+
+export async function runActV6(args: string[], env: NodeJS.ProcessEnv = process.env, dependencies: { transport?: LinearTransport } = {}): Promise<number> {
   const verb = args[0] ?? "";
   const issue = args[1] ?? "";
   if (!TEXT_VERBS.has(verb) && verb !== "status") {
@@ -119,6 +156,15 @@ export function runActV6(args: string[], env: NodeJS.ProcessEnv = process.env): 
     const target = statusFor(verb, verdict, owner, team, explicitStatus);
     const receipt = optionValue(args, "--receipt");
     if (!receipt) throw new Error(`${verb} requires an inbox receipt`);
+    const receiptState = db.receipt(receipt);
+    if (!receiptState || receiptState.consumed_at) throw new Error(`receipt missing or already consumed: ${receipt}`);
+    const fixtureDir = env.FM_LINEAR_FIXTURE_DIR;
+    const transport = dependencies.transport ?? new LinearTransport({
+      apiKey: fixtureDir ? undefined : loadKey(resolveHome(env), env),
+      fixtureDir,
+      fixtureLog: env.FM_LINEAR_FIXTURE_LOG,
+    });
+    await syncCaptainComments(db, issue, team.key, config.captain.display_name, receiptState.issued_at, transport, env);
     const keyBase = `${receipt}:${verb}:${issue}`;
     const jobs: NewJob[] = [];
     if (text) {
