@@ -2,13 +2,11 @@
 
 ## Status and scope
 
-This document describes the intended architecture of FM Linear.
-It defines subsystem responsibilities rather than a final directory structure or a claim that every capability exists.
+This document describes FM Linear's intended subsystem responsibilities, relationships, and ownership.
+It does not claim that every capability is implemented.
 The [design principles](../AGENTS.md#design-principles) guide these responsibilities.
-
-The initial assessment examined FM Linear's `feat/comment-threading` branch at `0325c6cbfa0b7adf8dbee74d65c54e349b411461` and upstream FirstMate at `b84e0e362face25f3dd8945297a3df1320d7668c`.
-Those revisions are reference points, not a supported-version guarantee.
-Verify compatibility against the FirstMate versions supported by each release.
+Technology selections and their rationale are maintained in [TECH_STACK.md](TECH_STACK.md).
+Concrete implementation guidance, configuration paths, compatibility findings, and verification expectations are in [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md).
 
 ## System ownership
 
@@ -33,10 +31,13 @@ It asks agents to supply interpretations or semantic reports when available evid
 
 The eight subsystems are logical modules that can run within one local service.
 They do not imply eight separately deployed processes or eight databases.
+FM Linear targets macOS, Windows, and Linux.
+Keep platform-specific installation, process control, filesystem handling, and local communication behind explicit interfaces so subsystem behavior stays consistent across operating systems.
 
 ```mermaid
 flowchart LR
-    linear[Linear] --> intake[1. Linear intake]
+    intake[1. Linear intake] -->|Authenticated API polling| linear[Linear]
+    linear -->|Fetched records| intake
     intake --> context[3. Work and conversation context]
     context --> workflow[4. Workflow requirements and rules]
     workflow --> fm[2. FirstMate integration]
@@ -58,13 +59,11 @@ The FirstMate integration owns the external interfaces; FirstMate continues to d
 
 ## 1. Linear intake
 
-Capture comments, reactions, issue creation, and relevant field changes.
-Preserve author identity, workspace, issue, thread, entity revision, and available occurrence timestamps.
-Record input durably and deduplicate repeated delivery.
+Fetch comments, reactions, issue creation, and relevant field changes directly from Linear's authenticated API.
 
-Use prompt notifications where available, with reconciliation to recover missed changes and downtime.
-The notification transport and its deployment are separate implementation decisions.
-Verify incoming notifications and identify integration-authored updates so they do not create feedback loops.
+Polling is the sole intake mechanism and requires only outbound API access.
+Intake owns reliable capture of source records; it preserves their provenance and enforces configured access boundaries.
+Fetched content does not grant permissions beyond the author's configured authority.
 
 Intake establishes what Linear reported.
 Workflow rules or an agent determine what the input means and what action follows.
@@ -78,10 +77,6 @@ Normalize those observations for the rest of FM Linear while preserving their so
 Keep upstream-specific commands, state formats, and compatibility checks in this adapter.
 Prefer FirstMate's structured state interfaces over independent interpretations of raw status history.
 Keep unknown execution state explicitly unknown.
-
-FirstMate's process-event extension is the established candidate for inbound evidence delivery.
-That extension does not provide a general instruction-injection or worker-launch capability.
-The dispatch integration described below requires further verification.
 
 This module does not take over worker supervision or write synthetic execution states into FirstMate's records.
 When execution evidence is missing, deliver an inspection request through FirstMate.
@@ -98,7 +93,7 @@ Several questions and answers may share one review conversation.
 
 Assemble the issue context a newly assigned crewmate needs, including plans, decisions, current artifacts, and remaining work.
 Preserve accessible artifact references and identify their versions.
-Artifact storage or hosting is a separate choice; a temporary local path is not sufficient for future retrieval.
+Artifact access must survive the originating conversation and worktree.
 
 This module owns correspondence and collected context, while FirstMate owns the execution queue.
 Agents supply substantive summaries and interpretations; code preserves and publishes their recorded results.
@@ -126,16 +121,14 @@ They return actions for delivery rather than performing external writes themselv
 ## 5. Linear publication and reconciliation
 
 Apply intended comments, status changes, assignments, managed labels, and artifact links to Linear.
-Use stable action identities and verify ambiguous results before repeating a write.
 Record confirmed effects for subsequent processing.
 
 Keep replies in their originating thread unless an explicit decision starts a distinct conversation.
 Preserve unrelated labels and respect configured handling of captain edits.
-Check the current issue state before applying an action that could have become stale.
 
 Reconcile status, assignee, and managed labels independently.
 A matching status must not prevent repair of an incorrect assignee.
-Periodic checks repair missed or incomplete effects under the same workflow rules used for event-driven updates.
+Periodic checks repair missed or incomplete effects under the same workflow rules used when new facts arrive.
 
 This module owns how to publish an intended result correctly; workflow rules own which result is intended.
 
@@ -148,16 +141,15 @@ Keep captured, delivered, acknowledged, and resolved states distinct.
 Use stable identities to make repeated processing safe.
 Preserve pending work across schema upgrades and configuration changes.
 Escalate persistent delivery failures without reporting success or discarding the original input.
-
-Schedule intake, FirstMate delivery, observations, external checks, and outgoing writes independently with bounded work per cycle.
-Slow PR checks or an unavailable source must not prevent unrelated queued work from progressing.
-Measure capture and delivery delays separately from agent scheduling and response time.
+Keep independent work progressing when a source or destination is slow or unavailable.
 
 ## 7. Setup and configuration
 
 Own installation, credential configuration, team and user mappings, workflow profiles, instruction templates, and configuration versions.
 Provide supported operations that FirstMate can invoke when the user requests a workflow change.
 Persist those changes so they survive the conversation.
+Configuration belongs to the user installation and can serve multiple projects and FirstMate homes.
+Keep workflow configuration, credentials, and operational state separate.
 
 Validate configuration before activation and preserve a usable configuration when an edit is invalid.
 Provide opinionated defaults with explicit, replaceable mappings.
@@ -194,25 +186,14 @@ A review guide illustrates how requirements should accompany execution.
 5. FM Linear records the artifacts and checks the required handoff evidence.
 6. Linear publication links the guide and applies the configured captain handoff.
 
+The supported mechanism for including requirements before dispatch remains unverified; see [the implementation notes](IMPLEMENTATION_NOTES.md#firstmate-compatibility-and-dispatch).
 Missing-output detection is recovery for an incomplete assignment, not the normal time to introduce the requirement.
 FirstMate chooses a replacement worker if the original crewmate is unavailable.
-
-### Integration question to resolve
-
-The inspected FirstMate version launches workers with task briefs.
-Its [extension contract](https://github.com/kunchenguid/firstmate/blob/b84e0e362face25f3dd8945297a3df1320d7668c/docs/extension-bindings.md) explicitly excludes instruction injection and before/after hooks.
-The brief is a candidate integration point.
-We have not demonstrated a reliable way for the plugin to include its requirements before dispatch.
-
-Verify a supported path that includes the applicable requirements before the worker begins, including restart and alternate-dispatch cases.
-An instruction telling FirstMate to remember a template is insufficient proof.
-If the existing interfaces cannot enforce inclusion, document the limitation and revisit the mechanism without making upstream changes a prerequisite.
 
 ## Persistence and the wider tool suite
 
 FM Linear owns one operational SQLite database for its integration state.
 Subsystems share that database through owned interfaces rather than introducing separate databases for each module.
-Retain SQLite as the default unless a demonstrated requirement justifies another engine.
 
 Each independently useful tool owns its operational data and migrations.
 FirstMate retains its existing storage.
@@ -229,12 +210,3 @@ Retain reporting history deliberately because current snapshots cannot reconstru
 
 A shared database service is not required for this design.
 SQLite remains an implementation choice within each tool, rather than the interface connecting the suite.
-
-## Relationship to existing work
-
-The [reference implementation](https://github.com/josh-padnick/fm-linear/tree/0325c6cbfa0b7adf8dbee74d65c54e349b411461) already contains intake, classification, task links, publication, retryable jobs, configuration, and diagnostics.
-Its [insights plan](https://github.com/josh-padnick/fm-linear/blob/0325c6cbfa0b7adf8dbee74d65c54e349b411461/docs/insights-plan.md) separates analytics from operational synchronization.
-Preserve those useful foundations while evaluating behavior against the responsibilities in this document.
-
-The proposed subsystem names do not assert that matching directories or public interfaces already exist.
-The next design work is to define those interfaces and demonstrate the dispatch integration, rather than assuming the current implementation satisfies the architecture.

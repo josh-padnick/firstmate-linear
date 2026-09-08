@@ -14,7 +14,10 @@ FM Linear reliably translates between FirstMate's work and the user's Linear wor
 ## Architecture
 
 Before designing or changing subsystem responsibilities, workflow integration, or data ownership, read [_internal/ARCHITECTURE.md](_internal/ARCHITECTURE.md).
-It describes the intended architecture, integration constraints, and questions that still require verification.
+It describes the core architectural concepts, subsystem responsibilities, and ownership boundaries.
+Read [_internal/TECH_STACK.md](_internal/TECH_STACK.md) before choosing dependencies or changing runtime, storage, or transport technologies.
+It describes the recommended technologies and unresolved choices for the new design.
+Read [_internal/IMPLEMENTATION_NOTES.md](_internal/IMPLEMENTATION_NOTES.md) for concrete implementation guidance, configuration paths, compatibility findings, and verification expectations.
 
 ## Design principles
 
