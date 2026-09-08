@@ -84,3 +84,9 @@ Include the objective, requirements, acceptance criteria, plans, decisions, arti
 Identify the current plan and artifact versions while preserving the history behind them.
 A future first mate or crewmate should be able to retrieve what it needs without access to an earlier agent's conversation or temporary worktree.
 Use durable links accessible to the intended participants, and keep secrets out of issue content.
+
+### 11. Give agents the workflow requirements before they need to act on them.
+
+Include applicable instructions and expected outputs in the task assignment.
+Make later changes explicit.
+Check required outputs before handing work to the next participant, so missing requirements become visible.
