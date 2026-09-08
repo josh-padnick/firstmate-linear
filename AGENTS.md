@@ -11,6 +11,11 @@ It also lets users communicate with FirstMate through Linear, including requesti
 FirstMate remains responsible for orchestration and execution.
 FM Linear reliably translates between FirstMate's work and the user's Linear workflow, so tracking stays current without relying on agents to remember bookkeeping.
 
+## Architecture
+
+Before designing or changing subsystem responsibilities, workflow integration, or data ownership, read [_internal/ARCHITECTURE.md](_internal/ARCHITECTURE.md).
+It describes the intended architecture, integration constraints, and questions that still require verification.
+
 ## Design principles
 
 Use these principles to guide implementation and review.
