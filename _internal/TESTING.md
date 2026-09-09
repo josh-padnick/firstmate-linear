@@ -1,190 +1,140 @@
 # Testing FM Linear
 
 **Status: Proposed.**
-This document specifies the testing approach to implement; the runtime test harness, fault-injection fakes, and compatibility suite do not exist yet.
+This guide describes the intended testing approach.
+Runtime test commands and fixtures still need implementation; the existing docs commands are listed below.
 
 ## Purpose
 
-Tests should let us change FM Linear confidently without losing work, repeating actions, or sending information to the wrong task.
-Choose tests by the likelihood and consequence of failure, then use the lowest layer that can prove the behavior.
-Do not optimize for a coverage percentage or test private implementation details.
+Use this guide to decide which tests a change needs and where those tests belong.
+Use [TEST_REQUIREMENTS.md](TEST_REQUIREMENTS.md) to find the verification requirements for the capability you are changing.
+Consult only the relevant sections after choosing a test level.
+Harness construction belongs in [the implementation notes](IMPLEMENTATION_NOTES.md#test-harness-construction).
 
-Read [ARCHITECTURE.md](ARCHITECTURE.md) for subsystem ownership, [ERRORS.md](ERRORS.md) for failure and recovery semantics, and [LOGGING.md](LOGGING.md) for diagnostic contracts.
-Those documents state what must hold; this document states where and how it is proven.
-When a test and a source document disagree, identify the intended behavior before changing either.
-Correct an inaccurate document or implementation explicitly; do not weaken a contract merely to make a test pass.
+Read [ARCHITECTURE.md](ARCHITECTURE.md) for subsystem ownership, [ERRORS.md](ERRORS.md) for failure semantics, and [LOGGING.md](LOGGING.md) for diagnostic contracts.
+When a test and a source document disagree, establish the intended behavior before changing either.
+Do not weaken a contract merely to make a test pass.
 
-## Test at the layer that owns the promise
+## Philosophy: agility requires safety
 
-| Layer | What it proves | Approach |
+FM Linear's testing approach follows the argument in Yevgeniy Brikman's "Agility Requires Safety": **you can't go faster by being reckless - speed is limited by safety.**
+A car can only drive fast because it has brakes.
+For software, automated tests are the brakes: a self-testing build that runs on every commit stops buggy code before it reaches users, which is exactly what gives us the confidence to change code quickly.
+Without it, "your software is broken until somebody proves it works"; with it, the software is proven to work with every change and you know the moment it breaks.
+
+Three principles fall out of that framing:
+
+1. **The build is self-testing.**
+   As runtime implementation lands, every commit should receive the required checks (lint, typecheck, unit and integration tests, and build) in CI.
+   A red build is fixed ASAP or the commit is reverted - never left red.
+   Small, frequent commits keep each failure easy to bisect and revert.
+2. **What to test is a trade-off**, weighing three factors:
+
+   - **Likelihood of bugs** - higher for complex logic (parsing, tree building, draft/version/archive/Trash lifecycle, sync) than for declarative glue.
+   - **Cost of bugs** - higher where users lose data (drafts, versions, Trash restore/purge, migrations) or where web and desktop transports can silently diverge.
+   - **Cost of tests** - unit tests are cheap to write and run; integration tests cost more; browser/UI tests cost the most to write, run, and maintain.
+     Spend accordingly: many unit tests, some integration tests, few end-to-end tests.
+
+3. **Tests are code, and code is the enemy.**
+   Every test has a maintenance cost.
+   A test earns its place only if it would fail on a plausible real regression.
+   Do not write tests that restate the implementation, re-test the framework, or chase a coverage number - delete tests like that when you find them.
+
+## The testing ladder
+
+**Start at the lowest rung that can prove the behavior.**
+Move higher only when the behavior depends on something the lower rung cannot exercise.
+A type check cannot prove a transaction commits, and a mocked store cannot prove recovery after a process crash.
+
+| Rung | What it proves | Approach |
 | --- | --- | --- |
-| Pure decisions | Workflow transitions, approval scope, configuration resolution, deduplication keys, incident fingerprints, condition transitions, and notification policy. | Colocated `bun:test` tests with explicit inputs and outcomes. |
-| Structured contracts | Stable error codes, operation-specific results, event definitions, serialized CLI output, and incident export schemas. | Schema validation and versioned fixtures that prove required fields, meanings, and reader compatibility. |
-| SQLite integration | Constraints, atomic capture, pending actions, cursor advancement, incidents, metric observations, migrations, and recovery. | Real `bun:sqlite`, production migrations, and an isolated temporary database. |
-| External adapters | Linear response handling and Firstmate command, file, and event contracts. | Controlled HTTP responses; actual Firstmate scripts in isolated homes with fake harnesses. |
-| Service and CLI journeys | Startup checks, routing, persistence, delivery, restart, diagnostics, and user-visible failure handling work together. | Launch the real executable with a temporary configuration and database, a local Linear test server, and an isolated Firstmate fixture. |
-| Documentation journeys | Navigation, examples, links, and essential interactions work in the built site. | A small browser suite plus focused visual inspection. |
-| Live integration checks | Selected assumptions still hold against the real external service. | Explicitly enabled checks in a disposable Linear team and Firstmate home, separate from ordinary CI. |
+| 1. Static and schema checks | Type consistency, accepted configuration shapes, and compatibility of documented serialized contracts. | Strict typechecking, lint, schema validation, and versioned reader fixtures. |
+| 2. Unit tests | Workflow decisions, approval scope, identity rules, configuration resolution, and notification policy. | Colocated `bun:test` tests with explicit inputs and outcomes, without real external I/O. |
+| 3. Component integration tests | A storage component or external adapter satisfies its observable contract. | Real SQLite with production migrations; controlled HTTP responses; actual Firstmate scripts in isolated homes with fake harnesses. |
+| 4. Process smoke tests | The executable starts, loads configuration, and exposes basic service and diagnostic commands. | Launch the real executable with temporary configuration and state; check startup, command results, and shutdown. |
+| 5. Service journeys | Routing, persistence, delivery, and restart recovery work together across components. | Real service processes and SQLite, a local Linear test server, and isolated Firstmate fixtures. |
+| 6. Controlled live checks | Selected assumptions hold against the actual external system. | Explicitly enabled checks in disposable Linear and Firstmate resources, separate from ordinary CI. |
 
-Mock the external boundary, not the modules whose composition the test is intended to prove.
-A fake HTTP server can prove retry handling; it cannot prove that Linear supports a particular query or mutation.
-A fake Firstmate script can prove our parser; it cannot prove the upstream script's behavior.
-Label those limits in test names and reports.
+The ladder guides test selection; it is not a requirement to repeat every assertion at all six rungs.
+A higher-level journey may verify composition while lower-level tests cover detailed cases.
+Explain the additional failure a higher-level test catches in the [validation handoff](#explain-the-test-choice).
+Do not move an assertion downward if doing so removes the dependency that actually causes the bug.
 
-## Shared fault injection
+FM Linear depends heavily on persistence and external interfaces, so substantial integration coverage is appropriate.
+Do not prescribe a fixed ratio of unit tests to integration tests.
+As working tests are added, link one representative example per rung here so contributors can follow an established pattern.
 
-Build small controllable fakes at external I/O boundaries as the corresponding adapters are implemented.
-Reuse fixture builders and failure scenarios where they express the same contract, while giving each test isolated state.
-Do not require a complete integration simulator before the first subsystem can be tested.
-Each fake exposes relevant failure modes from ERRORS.md so tests can name the scenario without duplicating response construction.
-Use explicit fault injection at these boundaries instead of production flags that manufacture failures on real tasks.
+Browser testing is a separate concern for the docs site.
+Use a small set of browser journeys for essential navigation and interactions, with focused visual inspection for layout changes.
+A browser test does not prove the background service's synchronization behavior.
 
-| Boundary | Scenarios to exercise as support is implemented |
+## What to test where
+
+### When adding or changing a feature
+
+Identify the behavior promised by the change and the plausible failures that would violate it.
+Check whether existing tests already protect those behaviors.
+Extend the smallest suitable test before adding a new journey or fixture framework.
+
+| Change | Test to choose |
 | --- | --- |
-| Linear test server | Validated success; GraphQL errors in a successful HTTP response; partial effects; rate limits with verified retry guidance; timeout before or after a write takes effect; interrupted pagination; malformed responses; unresolved write outcomes. Model duplicate-submission and history-gap behavior only for interfaces whose contracts establish it. |
-| Firstmate fixture | Parseable task and backlog files; schema-changed files; `fm-crew-state.sh` non-zero exit or unparseable output; `fm-procevent.sh` exit 0 without capture confirmation; `fm-send.sh` path with unverified confirmation; report that is incomplete, mismatched, or for a stale attempt; installed checkout change during a run. |
-| Real SQLite and storage fault injection | Transaction rollback, lock contention, read-only access, capacity limits, interrupted migrations, and corrupt temporary files. Exercise SQLite behavior with real databases; inject failures at the storage boundary when the physical condition is impractical to reproduce. |
-| Log sink and stderr | Unwritable file; unavailable stderr; both sinks failing; buffer exhaustion; serialization failure; control characters and terminal escapes. |
-| GitHub submission | Success with URL; auth unavailable; timeout after creation; search unavailable. |
-| Clock | Injected wall clock and monotonic clock; backwards wall-clock step across a restart. |
+| Approval, workflow, mapping, or notification rule | A unit test with relevant allowed, rejected, and uncertain cases. Extract the decision from I/O code if needed. |
+| Configuration schema or serialized output | Schema and reader-compatibility tests for documented fields and meanings, including supported prior versions. |
+| SQL, constraints, cursor persistence, or migrations | A component integration test against real SQLite. Include upgrades when existing records or obligations are affected. |
+| Linear parsing, pagination, or retry classification | An adapter test at the HTTP boundary. Use a live check only for an assumption that local responses cannot establish. |
+| Firstmate command, file, or extension behavior | An adapter contract test using the actual relevant upstream code in an isolated fixture. A fake script tests only our handling of its response. |
+| Executable startup, configuration loading, or command wiring | A process smoke test. Do not duplicate every workflow case through the CLI. |
+| Cross-component routing or crash recovery | A service journey that exercises the real composition, including the process or persistence boundary relevant to the failure. |
+| A docs navigation or interaction bug | A browser regression when a lower layer cannot reproduce the problem. |
+| Simple documentation wording or visual styling | Content and link checks, plus focused visual inspection where relevant. Do not add tests that merely repeat the edited markup. |
 
-Record relevant calls at controlled boundaries so tests can assert that prohibited mutations, launches, or notifications were not attempted through them.
-Call recording supplements isolation; it does not prove that code could not bypass a fake.
-Remove inherited credentials and live destinations, constrain filesystem and process access, and restrict network access to the test endpoints.
-Verify those restrictions with negative probes before running upstream behavioral fixtures.
-If the required isolation cannot be established, do not run the probe or report its contract as verified.
+Use the [validation handoff](#explain-the-test-choice) to record which regression the test catches and why its rung is necessary.
+A test without a distinct answer needs a better assertion, a different layer, or no new test.
 
-## High-value failure cases
+### When fixing a bug
 
-Cover these cases as the corresponding subsystem is implemented.
-Avoid duplicating every case at every layer.
+1. Reproduce the problem through the user's actual entry point as closely as possible.
+2. Add the smallest meaningful regression test at the lowest rung that reproduces the failure.
+3. Observe the regression test fail for the expected reason, then fix the implementation.
+4. Run the relevant checks and verify the fix through the user's entry point again.
 
-| Risk | Required evidence |
-| --- | --- |
-| Duplicate input | Repeated polls and overlapping pages produce one logical action. |
-| Lost input | A crash between capture and cursor advancement loses no accepted record. |
-| History gap | When a source exposes evidence of missing history, record the gap and reconcile current state where possible. Preserve historical coverage limits even after reconciliation succeeds; absent evidence does not prove complete history. |
-| Uncertain writes | A timeout after a remote effect triggers verification before another write. Exercise each supported mutation's verified recovery strategy, including duplicates and intervening edits; an outcome with no reliable verification path stays held. |
-| Restart recovery | Kill and restart around persistence, delivery, incident creation, notification, and report submission. Safe work resumes without duplicate effects; unresolved effects remain held and visible. |
-| Obsolete action | A workflow, attempt, or artifact revision change while an action is pending causes re-evaluation, not a blind retry. |
-| Exhausted retry budget | The action remains held, preserved, visible in `status`, and associated with the relevant incident. Automatic retries stop until an explicit recovery policy or authorized decision permits resumption. |
-| Wrong recipient | Identical task names in different homes, old execution attempts, and different issue threads cannot cross-route messages; a reply lands in its originating thread. |
-| False completion | Worker exit, message acknowledgment, artifact availability, approval, and merged delivery remain distinct facts. |
-| Invalid approval | An unauthorized actor or an approval for an earlier artifact revision cannot authorize the current action. |
-| Incorrect synchronization | Status, assignee, labels, PR links, and dependency relationships reconcile independently while preserving unmanaged data and respecting the manual-edit policy. |
-| Missing evidence | An unreadable dependency source or unknown outcome does not become an empty dependency set or a successful result. |
-| Expected states | Ordinary waits, settling, temporarily unresolved mappings, and stale observations do not automatically become errors or incidents. A persistent condition that blocks promised delivery escalates according to its impact and policy. |
-| Agent noise | Repeated observations produce one outstanding report request, bounded follow-ups, and accurate notification counts. |
-| Broken compatibility | A failed or unverified required contract holds affected operations and preserves work. A revision change refreshes evidence without creating a duplicate incident for the same ongoing failure; unused optional capabilities do not trigger urgent alerts. |
-| Checkout change | Installed code changes pause affected operations and trigger bounded settling and rechecking. Resume only after a successful check of the matching installation fingerprint, without restarting the service; unstable or unverified code remains held. |
-| Invalid configuration | The field and constraint are named; the last valid configuration remains active. |
-| Duplicate incidents | Repeated and concurrent failures with one fingerprint produce one incident, bounded notifications, and one operational Linear issue; recovery requires evidence. |
-| Alert loop | Operational incident issues are never enrolled as work, even after their managed label is removed. |
-| Diagnostics failure | Normal logger calls contain sink and serialization failures. Unsaved work is never acknowledged; local status shows available failure evidence or explicitly reports that storage or diagnostic history is unavailable. |
-| Private information leakage | Credentials and sample private comments, briefs, paths, reports, and error payloads do not appear in logs, incidents, operational issues, or report exports at any level. |
-| Injection resistance | Prohibited source content is omitted, unsafe fields are removed, and control characters cannot forge entries in structured or terminal output. Sanitized external metadata remains untrusted evidence; these tests do not prove universal agent resistance to malicious instructions. |
+Reproducing a bug end to end does not require keeping every regression assertion in an end-to-end test.
+Simple reversible copy or styling fixes can use focused visual verification instead of an automated test that restates the markup.
 
-Also test partial GraphQL failures, pagination interruption, rate limits, cancellation, malformed responses, and delayed observations at the adapter boundary.
-
-## Privacy canaries
-
-Maintain reusable sentinel values: fake credentials, a comment body, a brief excerpt, a report body, a private path, and an environment value.
-Give each value a unique marker so tests can identify where it escaped.
-Use them in relevant adapter and service journeys, including failure paths.
-
-Provide a shared assertion helper for diagnostic sinks, incident records, operational alert payloads, and report exports.
-Run it during journey teardown, including when a journey fails, without hiding the original assertion failure.
-Check the surfaces exercised by the journey and report any unavailable capture surface instead of silently assuming it was clean.
-Normal task storage and authorized message delivery may legitimately contain work content; do not apply a blanket ban to those destinations.
-
-Marker scans detect the sampled leaks, not every possible disclosure.
-Also test field allowlists, nested causes, truncation, unsafe serialization, control-character escaping, and export redaction.
-Keep focused privacy tests for cases that ordinary journeys do not exercise.
-
-## SQLite and process tests
-
-Use a real file-backed database for restart, locking, and migration tests.
-An in-memory database is suitable only when file and process behavior are irrelevant to the assertion.
-Apply the same migrations and connection settings used by the service.
-
-Test both a fresh database and upgrades from supported prior schemas when stored obligations or their interpretation change.
-Verify that an interrupted or failed upgrade leaves a recoverable database and does not discard pending delivery or unresolved incidents.
-Exercise transaction rollback, locking, and migration semantics against actual SQLite connections.
-Use isolated capacity or permission constraints where practical and controlled storage-boundary failures for other cases.
-A mocked storage error proves caller handling, not SQLite durability or recovery behavior.
-
-Give every test its own home, configuration, database, and external identifiers.
-Ensure a second service process cannot deliver the same pending action concurrently.
-Clean up processes and files even when an assertion fails.
-Never load the developer's normal credentials or operate on their live Firstmate home.
-
-## Diagnostics tests
-
-Diagnostics has its own contracts and is tested at the layers above, not as an afterthought of feature tests.
-
-Prove incident grouping and notification suppression with injected repeated and concurrent failures, then restart during grouping and notification and assert one incident and one operational issue.
-Prove condition entry, aggregation at the configured interval, and recovery only on evidence.
-Prove that retained entries preceding incident grouping remain reachable through occurrence and operation IDs.
-Test rotation, installation changes, capture-level changes, dropped entries, and unavailable correlation storage.
-Missing or never-captured history must remain distinct from no matching activity.
-Verify that `fm-linear logs`, `status`, and incident inspection do not notify Firstmate, dispatch workers, retry actions, or change pending work.
-Use recording boundaries together with the isolation controls described above.
-For commands supporting `--json`, verify the documented stdout schema with diagnostics enabled on stderr.
-Check that progress output does not corrupt the structured result and that fallback diagnostics respect the documented stream format.
-Verify that an incident export contains the safe evidence and references required by the [agent reporting procedure](../docs/src/content/docs/for-agents/reporting-bugs.md).
-Unresolved references must be labeled as missing evidence, not silently replaced with guesses or private payloads.
-Test simultaneous SQLite and log-sink failure without claiming that unavailable diagnostics were saved or displayed.
-
-## Firstmate compatibility tests
-
-The Firstmate adapter owns a versioned suite reused by CI and the proposed `fm-linear test` command.
-Test observable contracts: brief creation and preservation, preparation before launch copying, worker-state output, event capture and acknowledgment, and supported message delivery.
-Include alternate launch paths as their support is added.
-
-Run behavioral probes against isolated copies of the code being checked, with controlled homes and harnesses.
-Run probes within the verified isolation controls described above.
-Assert that they neither write to live Linear nor launch live agents, and that a successful or unchanged check does not notify Firstmate.
-Message-contract probes may exercise controlled capture and send paths inside their isolated fixtures.
-Test incident notification after a failed check separately from the probe itself.
-Record the Firstmate revision, relevant local changes, adapter version, suite version, configuration, and platform with the results.
-Use known compatible fixtures for reproducible CI and the installed checkout for local compatibility checks.
-Missing required coverage is an unverified result, not a passing result.
-A relevant code or configuration change during a run prevents that result from authorizing operations on the changed installation.
-See [the compatibility-check specification](IMPLEMENTATION_NOTES.md#fm-linear-test-compatibility-command) for activation and invalidation rules.
-
-A passing prepared-brief test establishes that prepared text reaches the worker.
-It cannot establish that an agent will always call the preparation command.
-Test the skipped-preparation detection and message fallback separately, and preserve that distinction in reports.
-
-## Live integration checks
-
-Live checks verify selected assumptions that local fixtures cannot establish.
-Keep an assumption list beside each check, including its source, observed behavior, and limits.
-Use explicitly configured disposable resources, bounded requests, and cleanup of only the resources the check owns.
-These checks are separate from ordinary CI and from the safe local `fm-linear test` command.
-
-Verify the actual queries and mutations we use, permission behavior, pagination, and the remote identity used to confirm a write.
-If an operation supports client-supplied IDs, verify its duplicate-submission and lookup behavior before relying on it for recovery.
-Do not generalize that behavior to other operations.
-Verify retry metadata where it can be exercised safely; do not deliberately exhaust a user's API allowance to manufacture a rate-limit response.
-Keep unexercised behavior explicitly unverified and distinguish documented contracts from sampled observations.
-
-A successful history query does not guarantee future retention or reveal every deleted record.
-Verify the retrieval behavior we can observe, and preserve coverage uncertainty where the source offers no guarantee.
-A current-state reconciliation can repair a projection without recovering its missing history.
-
-When a live check fails, investigate whether the fixture, credentials, environment, upstream contract, or adapter assumption was wrong.
-Update the fixture and implementation according to that evidence; do not automatically redefine expected behavior to match one unexpected response.
-
-## Writing and maintaining tests
-
-Before a bug fix, reproduce the problem through the user's actual entry point as closely as possible.
 When an incident export is available, use its timeline and evidence references to help build the reproduction.
 If privacy limits or missing observations leave gaps, record them and obtain the minimum additional evidence needed.
-Then add the smallest meaningful regression test, observe it fail, and verify the fix through that entry point again.
-Name regression tests for the behavior and include an incident or GitHub issue reference when available.
-Do not make an opaque fingerprint the only description of what the test proves.
-Simple reversible copy or styling changes need focused visual verification rather than tests that merely restate the markup.
+Name the test for the behavior and include an incident or GitHub issue reference when available.
+An opaque fingerprint should not be the only description of what the test proves.
+
+### When refactoring
+
+Behavior-preserving refactors should usually leave behavioral assertions unchanged.
+If many tests break because private calls or module structure changed, examine whether they were coupled to implementation details.
+Improve those tests without removing the behavior they protect.
+Do not rewrite expected results merely to match the refactored code.
+
+## Explain the test choice
+
+For behavior whose tests you add or materially change, include the following in the PR description's **Validation** section.
+When there is no PR, include it in the implementation handoff or final summary.
+Group the rationale by behavior rather than listing every test separately.
+
+```text
+Behavior protected: Accepted comments survive a process crash.
+Test level: Service journey, because the failure depends on process termination and persisted cursor state.
+Validation: [Test file or command, result, and any coverage limits.]
+```
+
+Describe the plausible regression and why a lower rung cannot provide the needed evidence.
+For unit or static checks, name the rule or contract being checked; no elaborate defense of the lowest rung is needed.
+When existing tests already cover a change, identify that coverage instead of inventing a new test to fill out the template.
+For copy or styling changes, report the content or visual verification performed.
+
+Use descriptive test names.
+Add an in-test comment only when the failure mechanism, fixture, or choice of level is not obvious from the test.
+A mandatory `// Catches:` comment on every test is not required.
+
+## Writing assertions
 
 Use descriptive behavior names and table-driven cases where the variants matter.
 Assert results and externally visible effects, not private calls or broad snapshots.
@@ -193,7 +143,6 @@ Test backward compatibility with supported persisted and serialized versions.
 Do not make harmless additive fields, object-key order, or incidental prose into contracts unless the interface explicitly requires them.
 Inject a clock for polling, backoff, settling windows, pending age, and retention tests.
 Wait for observable conditions with bounded deadlines in process and browser tests; avoid arbitrary sleeps.
-Refactoring without a behavior change should usually leave assertions intact.
 
 ## Docs and CI
 
@@ -210,10 +159,8 @@ Browser journeys should fail on unexpected page errors and broken required resou
 Screenshots and showcase animations aid review but do not prove runtime integration behavior.
 
 As runtime code lands, wire lint, strict typechecking, unit tests, structured-contract validation, real SQLite tests, adapter contracts, service smoke tests, and builds into CI for pull requests and `main`.
-Validate FM Linear-owned error codes and catalog-backed events against their declared contracts, with separate coverage for emergency diagnostic formats.
-Use operation-specific result schemas instead of a global result-state registry.
-Exercise supported old fixtures against current readers; a version note alone does not prove compatibility.
-Intentional breaking changes require an explicit version or migration policy and tests for it.
+Verify the [error and result contracts](ERRORS.md#use-a-shared-error-contract) and [logging contracts](LOGGING.md#scopes-and-event-names) through their supported-version fixtures.
+See [structured-contract requirements](TEST_REQUIREMENTS.md#structured-contracts) for the required evidence.
 Run platform-sensitive contracts and executable smoke tests on macOS and Linux.
 Required suites must fail clearly when their fixtures cannot run; optional live checks must report their absence explicitly.
 Keep the normal suite deterministic and fast by placing assertions at the right layer, not by removing recovery coverage.

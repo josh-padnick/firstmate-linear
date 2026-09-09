@@ -406,6 +406,78 @@ Keep the guarantee bounded: tested local contracts do not prove universal brief 
 Maintain the public [Compatibility page](../docs/src/content/docs/reference/compatibility.md) around that distinction.
 Exact runtime hooks, fingerprint dependencies, report schema, and command implementation remain work to complete.
 
+## Test harness construction
+
+[TESTING.md](TESTING.md) guides test selection and [TEST_REQUIREMENTS.md](TEST_REQUIREMENTS.md) identifies the required evidence by capability.
+This section records construction guidance for the proposed fixtures; those fixtures are not implemented yet.
+Move concrete commands and helper usage beside the harness when it exists, retaining a pointer here.
+
+### Boundary fixtures
+
+Build small controllable fakes at external I/O boundaries as the corresponding adapters are implemented.
+Reuse fixture builders and failure scenarios where they express the same contract, while giving each test isolated state.
+Do not require a complete integration simulator before the first subsystem can be tested.
+Each fake exposes relevant failure modes from ERRORS.md so tests can name the scenario without duplicating response construction.
+Mock the external boundary, not the modules whose composition the test is intended to prove.
+A fake HTTP server can prove retry handling; it cannot prove that Linear accepts the query or mutation.
+Label these limits in test names and reports.
+Use explicit fault injection at these boundaries instead of production flags that manufacture failures on real tasks.
+
+| Boundary | Scenarios to exercise as support is implemented |
+| --- | --- |
+| Linear test server | Validated success; GraphQL errors in a successful HTTP response; partial effects; rate limits with verified retry guidance; timeout before or after a write takes effect; interrupted pagination; malformed responses; unresolved write outcomes. Model duplicate-submission and history-gap behavior only for interfaces whose contracts establish it. |
+| Firstmate fixture | Parseable task and backlog files; schema-changed files; `fm-crew-state.sh` non-zero exit or unparseable output; `fm-procevent.sh` exit 0 without capture confirmation; `fm-send.sh` path with unverified confirmation; report that is incomplete, mismatched, or for a stale attempt; installed checkout change during a run. |
+| Real SQLite and storage fault injection | Transaction rollback, lock contention, read-only access, capacity limits, interrupted migrations, and corrupt temporary files. Exercise SQLite behavior with real databases; inject failures at the storage boundary when the physical condition is impractical to reproduce. |
+| Log sink and stderr | Unwritable file; unavailable stderr; both sinks failing; buffer exhaustion; serialization failure; control characters and terminal escapes. |
+| GitHub submission | Success with URL; auth unavailable; timeout after creation; search unavailable. |
+| Clock | Injected wall clock and monotonic clock; backwards wall-clock step across a restart. |
+
+### Test isolation
+
+Record relevant calls at controlled boundaries so tests can assert that prohibited mutations, launches, or notifications were not attempted through them.
+Call recording supplements isolation; it does not prove that code could not bypass a fake.
+Remove inherited credentials and live destinations, constrain filesystem and process access, and restrict network access to the test endpoints.
+Verify those restrictions with negative probes before running upstream behavioral fixtures.
+If the required isolation cannot be established, do not run the probe or report its contract as verified.
+
+Give every test its own home, configuration, database, and external identifiers.
+Clean up processes and files even when an assertion fails.
+Never load the developer's normal credentials or operate on their live Firstmate home.
+
+Run Firstmate behavioral probes against isolated copies of the exact relevant code, with controlled homes and harnesses.
+Keep the code fingerprint associated with the result; a fixture must not silently test a different revision from the installation being checked.
+
+### SQLite fixtures
+
+Use a real file-backed database for restart, locking, and migration tests.
+An in-memory database is suitable only when file and process behavior are irrelevant to the assertion.
+Apply the same migrations and connection settings used by the service.
+Use isolated capacity or permission constraints where practical and controlled storage-boundary failures for other cases.
+Follow the [durable-delivery requirements](TEST_REQUIREMENTS.md#durable-delivery-and-recovery) for migration and restart evidence.
+
+### Privacy canary fixtures
+
+Maintain reusable sentinel values: fake credentials, a comment body, a brief excerpt, a report body, a private path, and an environment value.
+Give each value a unique marker so tests can identify where it escaped.
+Use them in relevant adapter and service journeys, including failure paths.
+
+Provide a shared assertion helper for diagnostic sinks, incident records, operational alert payloads, and report exports.
+Run it during journey teardown, including when a journey fails, without hiding the original assertion failure.
+Check the surfaces exercised by the journey and report any unavailable capture surface instead of silently assuming it was clean.
+Normal task storage and authorized message delivery may legitimately contain work content; do not apply a blanket ban to those destinations.
+
+Marker scans detect the sampled leaks, not every possible disclosure.
+Also test field allowlists, nested causes, truncation, unsafe serialization, control-character escaping, and export redaction.
+Keep focused privacy tests for cases that ordinary journeys do not exercise.
+
+### Live-check fixtures
+
+Use explicitly configured disposable Linear and Firstmate resources with bounded requests.
+Do not inherit the developer's normal credentials or destinations; live credentials must be explicitly supplied for the check.
+Clean up only resources the check owns, including after failures.
+Keep live checks opt-in and separate from ordinary CI and local compatibility probes.
+Follow [controlled live-check requirements](TEST_REQUIREMENTS.md#controlled-live-checks) for what their results can establish.
+
 ## Reference material
 
 The initial assessment examined FM Linear's `feat/comment-threading` branch at `0325c6cbfa0b7adf8dbee74d65c54e349b411461` and upstream FirstMate at `b84e0e362face25f3dd8945297a3df1320d7668c`.

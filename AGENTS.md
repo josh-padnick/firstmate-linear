@@ -23,7 +23,8 @@ Read [_internal/IMPLEMENTATION_NOTES.md](_internal/IMPLEMENTATION_NOTES.md) for 
 
 ## Engineering practices
 
-Before adding behavior, fixing a bug, or changing tests, read [_internal/TESTING.md](_internal/TESTING.md) for test layers and required failure evidence.
+Before adding behavior, fixing a bug, or changing tests, read [_internal/TESTING.md](_internal/TESTING.md) for the testing ladder, test-selection rules, and validation handoff requirements.
+When implementing or changing an integration capability, read its section in [_internal/TEST_REQUIREMENTS.md](_internal/TEST_REQUIREMENTS.md) for required verification evidence.
 Before adding logs or instrumentation, read [_internal/LOGGING.md](_internal/LOGGING.md) for levels, privacy, correlation, and noise controls.
 Before changing failure handling, retries, notifications, or bug reporting, read [_internal/ERRORS.md](_internal/ERRORS.md) for typed errors, recovery, incidents, and publication approval.
 
