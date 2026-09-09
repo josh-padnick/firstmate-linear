@@ -21,6 +21,7 @@ The commands below still need implementation.
 | `fm-linear test` | Check whether the installed Firstmate code satisfies FM Linear's integration assumptions. |
 | `fm-linear logs` | Show recent diagnostics to help explain a problem. |
 | `fm-linear metrics` | Summarize synchronization performance and how often FM Linear interrupts Firstmate. |
+| `fm-linear incidents` | Inspect integration problems and prepare a local report draft. |
 | `fm-linear update` | Update FM Linear while preserving your configuration and pending work. |
 | `fm-linear --version` | Print the installed FM Linear version. |
 | `fm-linear --help` | List available commands and options. |
@@ -119,6 +120,21 @@ Show the reporting period and distinguish unavailable measurements from zero.
 
 Read existing records from SQLite without asking Firstmate to generate a summary.
 See [Metrics](/reference/metrics/) for each measurement's meaning and limitations.
+
+### `fm-linear incidents`
+
+Inspect a problem and its supporting evidence without asking Firstmate to investigate it first.
+
+| Command | What it does |
+| --- | --- |
+| `fm-linear incidents list --open` | List unresolved incidents and their impact. |
+| `fm-linear incidents show <id>` | Show a problem's timeline, delivery state, and available diagnostic evidence. |
+| `fm-linear incidents export <id>` | Prepare a sanitized local report draft for review. |
+
+The list and show commands support `--json` for structured output.
+These commands do not retry work, notify Firstmate, or submit a GitHub issue.
+Exporting a draft does not authorize publication.
+See [Reporting bugs](/guides/troubleshooting/) for the review and approval process.
 
 ## Update FM Linear
 

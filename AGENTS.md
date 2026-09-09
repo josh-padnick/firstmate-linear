@@ -13,11 +13,17 @@ FM Linear reliably translates between FirstMate's work and the user's Linear wor
 
 ## Architecture
 
+Before defining domain terms or changing their meaning, read [CONTEXT.md](CONTEXT.md).
+It defines the vocabulary of FM Linear's workflow-integration bounded context.
 Before designing or changing subsystem responsibilities, workflow integration, or data ownership, read [_internal/ARCHITECTURE.md](_internal/ARCHITECTURE.md).
 It describes the core architectural concepts, subsystem responsibilities, and ownership boundaries.
 Read [_internal/TECH_STACK.md](_internal/TECH_STACK.md) before choosing dependencies or changing runtime, storage, or transport technologies.
 It describes the recommended technologies and unresolved choices for the new design.
 Read [_internal/IMPLEMENTATION_NOTES.md](_internal/IMPLEMENTATION_NOTES.md) for concrete implementation guidance, configuration paths, compatibility findings, and verification expectations.
+
+## Engineering practices
+
+Before changing failure handling, retries, notifications, or bug reporting, read [_internal/ERRORS.md](_internal/ERRORS.md) for typed errors, recovery, incidents, and publication approval.
 
 ## Design principles
 

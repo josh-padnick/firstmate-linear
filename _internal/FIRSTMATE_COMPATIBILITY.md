@@ -35,12 +35,14 @@ It supplies no general pre-dispatch hook that requires every task to pass throug
 Preparing a brief for one task therefore does not establish coverage for independently created tasks, decomposition into new tasks, or replacement briefs.
 Asking FirstMate to remember a preparation command would not close this gap.
 
-### Decision needed
+### Selected implementation boundary
 
 The bounded implementation can prepare requirements for an identified task and verify the content that the upstream launch path receives.
 FirstMate must retain scheduling, delegation, and worker supervision.
 That implementation must describe its guarantee as applying to prepared briefs, with coverage of other dispatch paths unresolved.
-If every dispatch must be covered from the first milestone, the absence of a supported enforcement mechanism remains a blocker.
+Use the [explicit handshake and recovery approach](IMPLEMENTATION_NOTES.md#brief-preparation-handshake-and-recovery) for the first adapter implementation.
+Detect missed preparation from available launch evidence and request a corrective message through Firstmate.
+Universal dispatch coverage remains unproven; recovery cannot undo work already performed.
 Do not silently introduce command interception, an upstream fork, or plugin-owned scheduling to satisfy that requirement.
 
 ## Other adapter contracts

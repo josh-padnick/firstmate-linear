@@ -6,6 +6,7 @@ This document records concrete implementation guidance, unresolved integration d
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for subsystem responsibilities and core design decisions, and [TECH_STACK.md](TECH_STACK.md) for technology choices.
 These notes describe intended behavior and research findings, not a claim that the implementation is complete.
 Reference code informs the design without defining it.
+Shared [error-handling practices](ERRORS.md) apply across the subsystems.
 
 ## Polling and retrieval
 
@@ -51,7 +52,8 @@ The dispatch integration described below requires further verification.
 The inspected FirstMate version launches workers with task briefs.
 Its [extension contract](https://github.com/kunchenguid/firstmate/blob/b84e0e362face25f3dd8945297a3df1320d7668c/docs/extension-bindings.md) explicitly excludes instruction injection and before/after hooks.
 The brief is a candidate integration point.
-We have not demonstrated a reliable way for the plugin to include its requirements before dispatch.
+Use the [preparation handshake and recovery design](#brief-preparation-handshake-and-recovery).
+Prepared text can reach the worker, but Firstmate must choose to call the preparation command; the extension contract cannot enforce that choice.
 
 Verify a supported path that includes the applicable requirements before the worker begins, including restart and alternate-dispatch cases.
 An instruction telling FirstMate to remember a template is insufficient proof.

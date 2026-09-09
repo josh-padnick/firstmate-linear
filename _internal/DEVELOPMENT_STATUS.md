@@ -18,7 +18,14 @@ The compatibility investigation is complete; the working adapter milestone is no
 
 Firstmate's dispatch tests confirm that prepared brief content reaches worker launch instructions.
 Its extension contract does not provide a general hook to add instructions before every dispatch.
-We still need to resolve how workflow requirements reach every applicable assignment without depending on agent memory.
+The selected approach is an explicit preparation handshake plus detection and message recovery when available launch evidence shows missing requirements.
+Universal dispatch coverage remains unproven; the initial adapter must report that limit accurately.
+
+Start with installed-home discovery, revision and configuration fingerprints, compatibility checks, and read-only task observations.
+Prove home and execution-attempt isolation before those observations drive Linear changes.
+Then add prepared briefs and process-event delivery with explicit confirmation and recovery contracts.
+Introduce the shared error, logging, and testing interfaces with this first slice rather than building a separate infrastructure framework first.
+Use SQLite as soon as the slice needs persistent compatibility results or accepted delivery obligations.
 
 ## Planned next
 
@@ -89,6 +96,8 @@ The concrete customization is an interactive recap produced during build; its re
 The [CLI reference](../docs/src/content/docs/reference/cli.md) defines the proposed human-facing command set.
 Alongside setup, status, and compatibility checks, it proposes start, stop, restart, logs, metrics, update, help, and an explicit configuration path.
 These commands are not implemented; service control, updater recovery, diagnostic output, and metrics filters still need concrete contracts and validation.
+Read-only `fm-linear incidents list`, `show`, and `export` operations are also proposed, with privacy and ownership rules in [ERRORS.md](ERRORS.md).
+Their implementation must not imply report publication or automatic retry authority.
 Agent-facing brief preparation and report submission remain separate interfaces whose command names and schemas are not yet defined.
 
 Add `fm-linear test` to verify versioned adapter contracts against the actual installed Firstmate checkout and relevant local changes.
