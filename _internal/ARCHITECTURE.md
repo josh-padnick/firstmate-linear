@@ -6,7 +6,7 @@ This document describes FM Linear's intended subsystem responsibilities, relatio
 It does not claim that every capability is implemented.
 The [design principles](../AGENTS.md#design-principles) guide these responsibilities.
 Technology selections and their rationale are maintained in [TECH_STACK.md](TECH_STACK.md).
-Concrete implementation guidance, configuration paths, compatibility findings, and verification expectations are in [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md).
+Concrete implementation guidance, configuration paths, compatibility findings, and verification expectations are in [IMPLEMENTATION_NOTES.md](tmp/IMPLEMENTATION_NOTES.md).
 Shared engineering practices live in [TESTING.md](TESTING.md), [LOGGING.md](LOGGING.md), and [ERRORS.md](ERRORS.md).
 
 ## System ownership
@@ -210,7 +210,7 @@ Preserve unrelated, manually created Linear relationships under the configured e
 An unreadable source or missing issue mapping must not be interpreted as removal of a dependency.
 Dependencies within a single mapped issue must not create a self-blocking Linear relationship.
 A dependency edited in Linear is input for Firstmate to assess, not an automatic change to its execution queue.
-Concrete source interfaces, reporting fallback, and verification cases belong in [the implementation notes](IMPLEMENTATION_NOTES.md#task-dependency-synchronization).
+Concrete source interfaces, reporting fallback, and verification cases belong in [the implementation notes](tmp/IMPLEMENTATION_NOTES.md#task-dependency-synchronization).
 
 ## 6. Durable delivery and recovery
 
@@ -304,7 +304,7 @@ A review guide illustrates how requirements should accompany execution.
 
 The selected design uses an explicit preparation handshake and a message fallback when available launch evidence reveals missed instructions.
 Firstmate's agentic invocation cannot be guaranteed by its extension contract, and fallback cannot undo work already performed.
-See [the handshake and recovery notes](IMPLEMENTATION_NOTES.md#brief-preparation-handshake-and-recovery) for the implementation and verification boundaries.
+See [the handshake and recovery notes](tmp/IMPLEMENTATION_NOTES.md#brief-preparation-handshake-and-recovery) for the implementation and verification boundaries.
 Firstmate chooses a replacement worker if the original crewmate is unavailable.
 
 ## Persistence and the wider tool suite

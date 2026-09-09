@@ -4,7 +4,7 @@
 
 This document records the recommended technologies, their purpose, and the reasons for choosing them.
 Subsystem responsibilities, data ownership, and core design decisions belong in [ARCHITECTURE.md](ARCHITECTURE.md).
-Concrete implementation guidance and verification expectations belong in [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md).
+Concrete implementation guidance and verification expectations belong in [IMPLEMENTATION_NOTES.md](tmp/IMPLEMENTATION_NOTES.md).
 These are choices for the new design, not a claim that every integration or dependency is implemented.
 
 ## Technologies
@@ -24,7 +24,7 @@ These are choices for the new design, not a claim that every integration or depe
 
 Use [FirstMate's supported interfaces](https://github.com/kunchenguid/firstmate) as the integration surface.
 Supported upstream versions and any additional adapter runtime dependencies require verification.
-The unresolved dispatch capability is documented in [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md#firstmate-compatibility-and-dispatch).
+The unresolved dispatch capability is documented in [IMPLEMENTATION_NOTES.md](tmp/IMPLEMENTATION_NOTES.md#firstmate-compatibility-and-dispatch).
 
 Use the built-in `fetch` API with explicit operations for the [Linear GraphQL API](https://linear.app/developers/graphql).
 A separate GraphQL SDK is not selected at this stage.
@@ -54,4 +54,4 @@ Pin tool versions and commit the dependency lockfile for reproducible builds.
 Target macOS and Linux.
 Verify the chosen runtime, FirstMate integration, and release toolchain on both platforms.
 Specific operating-system versions and CPU architectures remain to be defined.
-Platform service mechanisms and artifact hosting technologies remain open selections; their requirements are in [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md).
+Platform service mechanisms and artifact hosting technologies remain open selections; their requirements are in [IMPLEMENTATION_NOTES.md](tmp/IMPLEMENTATION_NOTES.md).

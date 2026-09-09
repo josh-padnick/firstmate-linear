@@ -51,7 +51,7 @@ Start with the repository's instructions and follow the appropriate document for
 | [AGENTS.md](https://github.com/josh-padnick/fm-linear/blob/main/AGENTS.md) | Purpose, principles, and project instructions. |
 | [ARCHITECTURE.md](https://github.com/josh-padnick/fm-linear/blob/main/_internal/ARCHITECTURE.md) | Subsystems, relationships, and data ownership. |
 | [TECH_STACK.md](https://github.com/josh-padnick/fm-linear/blob/main/_internal/TECH_STACK.md) | Technology choices and their rationale. |
-| [IMPLEMENTATION_NOTES.md](https://github.com/josh-padnick/fm-linear/blob/main/_internal/IMPLEMENTATION_NOTES.md) | Configuration paths, polling, compatibility, and verification expectations. |
+| [IMPLEMENTATION_NOTES.md](https://github.com/josh-padnick/fm-linear/blob/main/_internal/tmp/IMPLEMENTATION_NOTES.md) | Configuration paths, polling, compatibility, and verification expectations. |
 
 Keep human-facing documentation about the user's experience.
 Keep implementation mechanics in the internal documents.

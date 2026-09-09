@@ -156,7 +156,7 @@ The diagnostic CLI contract should define JSON-lines stderr for that mode, inclu
 This does not require adding `--json` to every interactive command.
 
 The background service writes to a local log file in the state directory with configured size and retention bounds.
-Exact flags and filesystem paths belong in [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md) when selected.
+Exact flags and filesystem paths belong in [IMPLEMENTATION_NOTES.md](tmp/IMPLEMENTATION_NOTES.md) when selected.
 Changing the sink must not require changes throughout subsystem code.
 No hosted logging vendor or remote telemetry destination is required.
 

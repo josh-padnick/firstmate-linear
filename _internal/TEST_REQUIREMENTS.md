@@ -16,7 +16,7 @@ Add coverage with the implementation that makes the requirement applicable.
 This document specifies evidence for those contracts rather than redefining them.
 When expectations disagree, resolve the intended behavior in the owning document before changing assertions.
 
-Concrete fixture setup and isolation guidance live in [the test harness notes](IMPLEMENTATION_NOTES.md#test-harness-construction).
+Concrete fixture setup and isolation guidance live in [the test harness notes](tmp/IMPLEMENTATION_NOTES.md#test-harness-construction).
 
 ## Structured contracts
 
@@ -50,8 +50,8 @@ Verify the [Firstmate adapter's contracts](ARCHITECTURE.md#2-firstmate-integrati
 | Broken compatibility | A failed or unverified required contract holds affected operations and preserves work. A revision change refreshes evidence without creating a duplicate incident for the same ongoing failure; unused optional capabilities do not trigger urgent alerts. |
 | Checkout change | Installed code changes pause affected operations and trigger bounded settling and rechecking. Resume only after a successful check of the matching installation fingerprint, without restarting the service; unstable or unverified code remains held. |
 
-Exercise the versioned suite specified by [the compatibility-check contract](IMPLEMENTATION_NOTES.md#fm-linear-test-compatibility-command).
-Run probes under the [fixture isolation rules](IMPLEMENTATION_NOTES.md#test-isolation).
+Exercise the versioned suite specified by [the compatibility-check contract](tmp/IMPLEMENTATION_NOTES.md#fm-linear-test-compatibility-command).
+Run probes under the [fixture isolation rules](tmp/IMPLEMENTATION_NOTES.md#test-isolation).
 Test observable contracts: brief creation and preservation, preparation before launch copying, worker-state output, event capture and acknowledgment, and supported message delivery.
 Include alternate launch paths as their support is added.
 
@@ -62,7 +62,7 @@ Record the Firstmate revision, relevant local changes, adapter version, suite ve
 Use known compatible fixtures for reproducible CI and the installed checkout for local compatibility checks.
 Missing required coverage is an unverified result, not a passing result.
 A relevant code or configuration change during a run prevents that result from authorizing operations on the changed installation.
-See [the compatibility-check specification](IMPLEMENTATION_NOTES.md#fm-linear-test-compatibility-command) for activation and invalidation rules.
+See [the compatibility-check specification](tmp/IMPLEMENTATION_NOTES.md#fm-linear-test-compatibility-command) for activation and invalidation rules.
 
 A passing prepared-brief test establishes that prepared text reaches the worker.
 It cannot establish that an agent will always call the preparation command.
@@ -136,21 +136,21 @@ Prove that retained entries preceding incident grouping remain reachable through
 Test rotation, installation changes, capture-level changes, dropped entries, and unavailable correlation storage.
 Missing or never-captured history must remain distinct from no matching activity.
 Verify that `fm-linear logs`, `status`, and incident inspection do not notify Firstmate, dispatch workers, retry actions, or change pending work.
-Use recording boundaries together with the [fault-injection and isolation controls](IMPLEMENTATION_NOTES.md#test-harness-construction).
+Use recording boundaries together with the [fault-injection and isolation controls](tmp/IMPLEMENTATION_NOTES.md#test-harness-construction).
 For commands supporting `--json`, verify the documented stdout schema with diagnostics enabled on stderr.
 Check that progress output does not corrupt the structured result and that fallback diagnostics respect the documented stream format.
 Verify that an incident export contains the safe evidence and references required by the [agent reporting procedure](../docs/src/content/docs/for-agents/reporting-bugs.md).
 Unresolved references must be labeled as missing evidence, not silently replaced with guesses or private payloads.
 Test simultaneous SQLite and log-sink failure without claiming that unavailable diagnostics were saved or displayed.
 
-Exercise privacy cases with the [canary fixtures](IMPLEMENTATION_NOTES.md#privacy-canary-fixtures), alongside focused allowlist, redaction, and escaping tests.
+Exercise privacy cases with the [canary fixtures](tmp/IMPLEMENTATION_NOTES.md#privacy-canary-fixtures), alongside focused allowlist, redaction, and escaping tests.
 Record unavailable capture surfaces rather than claiming they were clean.
 
 ## Controlled live checks
 
 Live checks verify selected assumptions that local fixtures cannot establish.
 Keep an assumption list beside each check, including its source, observed behavior, and limits.
-Run live checks under [the live-check fixture rules](IMPLEMENTATION_NOTES.md#live-check-fixtures), separately from ordinary CI and the safe local `fm-linear test` command.
+Run live checks under [the live-check fixture rules](tmp/IMPLEMENTATION_NOTES.md#live-check-fixtures), separately from ordinary CI and the safe local `fm-linear test` command.
 
 Verify the actual queries and mutations we use, permission behavior, pagination, and the remote identity used to confirm a write.
 If an operation supports client-supplied IDs, verify its duplicate-submission and lookup behavior before relying on it for recovery.

@@ -243,7 +243,7 @@ Record their diagnostic purpose and remote identity durably; a removable label o
 The Firstmate account also creates ordinary work issues, so excluding all of its issues would break normal enrollment.
 A failed unused optional capability does not warrant an Urgent issue.
 Keep notification delivery pending when a route fails, and update the same alert after verified recovery.
-See [background compatibility handling](IMPLEMENTATION_NOTES.md#fm-linear-test-compatibility-command) for capability-specific holds and rechecks.
+See [background compatibility handling](tmp/IMPLEMENTATION_NOTES.md#fm-linear-test-compatibility-command) for capability-specific holds and rechecks.
 
 An operational Linear alert informs the captain about their installation.
 A GitHub issue publishes a report to the project; it requires separate approval.

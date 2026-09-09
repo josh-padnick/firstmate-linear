@@ -29,7 +29,7 @@ Use SQLite as soon as the slice needs persistent compatibility results or accept
 
 ## Planned next
 
-The [reporting guide](../docs/src/content/docs/guides/troubleshooting.mdx) proposes automatic incident detection, report drafts, user approval, and confirmed GitHub submission.
+The [reporting guide](../../docs/src/content/docs/guides/troubleshooting.mdx) proposes automatic incident detection, report drafts, user approval, and confirmed GitHub submission.
 Runtime detection and submission remain unimplemented; the docs provide a copyable prompt and a separate agent investigation procedure.
 
 - A tested Firstmate adapter with explicit delivery and observation contracts.
@@ -93,10 +93,10 @@ The concrete customization is an interactive recap produced during build; its re
 
 ## Runtime compatibility-check proposal
 
-The [CLI reference](../docs/src/content/docs/reference/cli.md) defines the proposed human-facing command set.
+The [CLI reference](../../docs/src/content/docs/reference/cli.md) defines the proposed human-facing command set.
 Alongside setup, status, and compatibility checks, it proposes start, stop, restart, logs, metrics, update, help, and an explicit configuration path.
 These commands are not implemented; service control, updater recovery, diagnostic output, and metrics filters still need concrete contracts and validation.
-Read-only `fm-linear incidents list`, `show`, and `export` operations are also proposed, with privacy and ownership rules in [ERRORS.md](ERRORS.md).
+Read-only `fm-linear incidents list`, `show`, and `export` operations are also proposed, with privacy and ownership rules in [ERRORS.md](../ERRORS.md).
 Their implementation must not imply report publication or automatic retry authority.
 Agent-facing brief preparation and report submission remain separate interfaces whose command names and schemas are not yet defined.
 

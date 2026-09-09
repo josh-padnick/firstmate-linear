@@ -3,10 +3,10 @@
 ## Scope
 
 This document records concrete implementation guidance, unresolved integration details, and verification expectations for the new design.
-Read [ARCHITECTURE.md](ARCHITECTURE.md) for subsystem responsibilities and core design decisions, and [TECH_STACK.md](TECH_STACK.md) for technology choices.
+Read [ARCHITECTURE.md](../ARCHITECTURE.md) for subsystem responsibilities and core design decisions, and [TECH_STACK.md](../TECH_STACK.md) for technology choices.
 These notes describe intended behavior and research findings, not a claim that the implementation is complete.
 Reference code informs the design without defining it.
-Shared practices for [testing](TESTING.md), [logging](LOGGING.md), and [error handling](ERRORS.md) apply across the subsystems.
+Shared practices for [testing](../TESTING.md), [logging](../LOGGING.md), and [error handling](../ERRORS.md) apply across the subsystems.
 
 ## Polling and retrieval
 
@@ -70,7 +70,7 @@ An approval applies to the reviewed destination and exact report content, includ
 Preserve declined drafts without prompting again for the same unchanged incident.
 An uncertain GitHub response requires checking for a successful prior submission before retrying.
 Automatic operational Linear issues remain outside normal task enrollment and do not authorize public GitHub publication.
-Use [the agent reporting procedure](../docs/src/content/docs/for-agents/reporting-bugs.md) for investigation, duplicate checks, data minimization, classification, and review.
+Use [the agent reporting procedure](../../docs/src/content/docs/for-agents/reporting-bugs.md) for investigation, duplicate checks, data minimization, classification, and review.
 Do not require an agent call merely to collect every low-level error or metric; request investigation only when it helps resolve or explain the incident.
 Runtime detection, authenticated GitHub submission, and approval delivery still require implementation.
 
@@ -255,7 +255,7 @@ Ordinary operation must not require a hosted telemetry service.
 Diagnostics owns metric definitions, aggregation, local summaries, and the structured export.
 Reuse the operational SQLite database for lightweight event history and derived aggregates.
 Record lifecycle facts in code without requesting extra agent reports for the sole purpose of measurement.
-Use the public [Metrics reference](../docs/src/content/docs/reference/metrics.md) as the human-readable definition of each measure.
+Use the public [Metrics reference](../../docs/src/content/docs/reference/metrics.md) as the human-readable definition of each measure.
 Its activity mapping and the task-brief and message pages define the instrumentation required for each integration path.
 Also collect preparation attempt/result/duration, launch comparison verdicts, poll/query attempt/result/duration and observation coverage, and Linear publication attempt/result/pending age.
 Keep worker inbox handoffs distinct from notifications to Firstmate; missing upstream observations remain unavailable.
@@ -403,12 +403,12 @@ Quiet unchanged incidents; notify on material impact changes or recovery rather 
 Creating an operational workspace issue is distinct from submitting a public GitHub report, which still requires the user's review and approval.
 
 Keep the guarantee bounded: tested local contracts do not prove universal brief preparation, agent compliance, live authorization, every task-discovery path, or every remote backend.
-Maintain the public [Compatibility page](../docs/src/content/docs/reference/compatibility.md) around that distinction.
+Maintain the public [Compatibility page](../../docs/src/content/docs/reference/compatibility.md) around that distinction.
 Exact runtime hooks, fingerprint dependencies, report schema, and command implementation remain work to complete.
 
 ## Test harness construction
 
-[TESTING.md](TESTING.md) guides test selection and [TEST_REQUIREMENTS.md](TEST_REQUIREMENTS.md) identifies the required evidence by capability.
+[TESTING.md](../TESTING.md) guides test selection and [TEST_REQUIREMENTS.md](../TEST_REQUIREMENTS.md) identifies the required evidence by capability.
 This section records construction guidance for the proposed fixtures; those fixtures are not implemented yet.
 Move concrete commands and helper usage beside the harness when it exists, retaining a pointer here.
 
@@ -453,7 +453,7 @@ Use a real file-backed database for restart, locking, and migration tests.
 An in-memory database is suitable only when file and process behavior are irrelevant to the assertion.
 Apply the same migrations and connection settings used by the service.
 Use isolated capacity or permission constraints where practical and controlled storage-boundary failures for other cases.
-Follow the [durable-delivery requirements](TEST_REQUIREMENTS.md#durable-delivery-and-recovery) for migration and restart evidence.
+Follow the [durable-delivery requirements](../TEST_REQUIREMENTS.md#durable-delivery-and-recovery) for migration and restart evidence.
 
 ### Privacy canary fixtures
 
@@ -476,7 +476,7 @@ Use explicitly configured disposable Linear and Firstmate resources with bounded
 Do not inherit the developer's normal credentials or destinations; live credentials must be explicitly supplied for the check.
 Clean up only resources the check owns, including after failures.
 Keep live checks opt-in and separate from ordinary CI and local compatibility probes.
-Follow [controlled live-check requirements](TEST_REQUIREMENTS.md#controlled-live-checks) for what their results can establish.
+Follow [controlled live-check requirements](../TEST_REQUIREMENTS.md#controlled-live-checks) for what their results can establish.
 
 ## Reference material
 
@@ -486,7 +486,7 @@ Verify compatibility against the FirstMate versions supported by each release.
 
 The [reference implementation](https://github.com/josh-padnick/fm-linear/tree/0325c6cbfa0b7adf8dbee74d65c54e349b411461) already contains intake, classification, task links, publication, retryable jobs, configuration, and diagnostics.
 Its [insights plan](https://github.com/josh-padnick/fm-linear/blob/0325c6cbfa0b7adf8dbee74d65c54e349b411461/docs/insights-plan.md) separates analytics from operational synchronization.
-Use that work as a reference while evaluating behavior against the responsibilities in [ARCHITECTURE.md](ARCHITECTURE.md).
+Use that work as a reference while evaluating behavior against the responsibilities in [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 The proposed subsystem names do not assert that matching directories or public interfaces already exist.
 The next design work is to define those interfaces and demonstrate the dispatch integration, rather than assuming the current implementation satisfies the architecture.

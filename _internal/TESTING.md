@@ -9,7 +9,7 @@ Runtime test commands and fixtures still need implementation; the existing docs 
 Use this guide to decide which tests a change needs and where those tests belong.
 Use [TEST_REQUIREMENTS.md](TEST_REQUIREMENTS.md) to find the verification requirements for the capability you are changing.
 Consult only the relevant sections after choosing a test level.
-Harness construction belongs in [the implementation notes](IMPLEMENTATION_NOTES.md#test-harness-construction).
+Harness construction belongs in [the implementation notes](tmp/IMPLEMENTATION_NOTES.md#test-harness-construction).
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for subsystem ownership, [ERRORS.md](ERRORS.md) for failure semantics, and [LOGGING.md](LOGGING.md) for diagnostic contracts.
 When a test and a source document disagree, establish the intended behavior before changing either.
