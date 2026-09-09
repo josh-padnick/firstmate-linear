@@ -31,7 +31,7 @@ It asks agents to supply interpretations or semantic reports when available evid
 ## Bounded context and module boundaries
 
 Treat FM Linear's workflow integration as one core bounded context: a boundary within which its domain terms and rules have consistent meanings.
-The [domain vocabulary](../CONTEXT.md) defines those terms.
+The [domain vocabulary](DOMAIN.md) defines those terms.
 Firstmate's execution model and Linear's issue model remain external models that FM Linear translates through adapters.
 Neither external application's internal bounded-context structure is prescribed by this design.
 

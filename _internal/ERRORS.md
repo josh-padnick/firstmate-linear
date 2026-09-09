@@ -16,7 +16,7 @@ Expected waiting and routine validation do not need an incident or a report draf
 
 FM Linear has one core bounded context for workflow integration, implemented through eight subsystems.
 These subsystems share a domain model; they are not eight independent bounded contexts.
-See [the architecture](ARCHITECTURE.md#bounded-context-and-module-boundaries) and [domain vocabulary](../CONTEXT.md).
+See [the architecture](ARCHITECTURE.md#bounded-context-and-module-boundaries) and [domain vocabulary](DOMAIN.md).
 
 | Owner | Responsibility for failures |
 | --- | --- |
