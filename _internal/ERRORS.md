@@ -8,7 +8,7 @@ The error registry, result contracts, incident storage, and incident-inspection 
 A failure should explain what could not happen, preserve the affected work, and provide a useful next step.
 It must never turn an unknown result into a successful result or create duplicate work through blind retries.
 
-Read [LOGGING.md](LOGGING.md) for diagnostic output.
+Read [LOGGING.md](LOGGING.md) for diagnostic output and [TESTING.md](TESTING.md) for failure verification.
 For failures that warrant an incident, preserve the path from the symptom to the occurrence, supporting evidence, and any approved bug report.
 Expected waiting and routine validation do not need an incident or a report draft.
 

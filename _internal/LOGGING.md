@@ -9,7 +9,7 @@ Every log entry should help someone understand what happened or decide what to d
 Routine polling must not bury the failure that matters.
 
 These rules define the logging contract to implement, not an existing logger API.
-See [ERRORS.md](ERRORS.md) for typed failures and incidents.
+See [ERRORS.md](ERRORS.md) for typed failures and incidents, and [TESTING.md](TESTING.md) for verification.
 
 Log entries are read by the captain through `fm-linear logs` and by Firstmate while following the [agent reporting procedure](../docs/src/content/docs/for-agents/reporting-bugs.md).
 Use structured fields for filtering and correlation, alongside short messages that explain the event to a person.

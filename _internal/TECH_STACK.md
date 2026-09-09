@@ -45,7 +45,7 @@ SQLite is the selected engine; Turso remains an alternative to reconsider only i
 Use [Zod](https://zod.dev/) for runtime schema validation and TypeScript type inference.
 Use [Biome](https://biomejs.dev/) for linting and formatting, alongside the TypeScript compiler.
 Use GitHub Actions for CI and release automation.
-Follow [LOGGING.md](LOGGING.md) for diagnostic output and [ERRORS.md](ERRORS.md) for failure contracts.
+Follow [TESTING.md](TESTING.md) for test layers and CI coverage, [LOGGING.md](LOGGING.md) for diagnostic output, and [ERRORS.md](ERRORS.md) for failure contracts.
 These practices do not require a hosted telemetry service or a separate logging database.
 Pin tool versions and commit the dependency lockfile for reproducible builds.
 
