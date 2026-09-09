@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build
+      - name: Lint public workflow contract
+        run: |
+          mkdir -p "$RUNNER_TEMP/fm-home/config"
+          cp examples/linear-workflow.example.yaml "$RUNNER_TEMP/fm-home/config/linear-workflow.yaml"
+          cp examples/reply.example.md "$RUNNER_TEMP/fm-home/config/reply.md"
+          cp examples/report.example.md "$RUNNER_TEMP/fm-home/config/report.md"
+          cp examples/review-walkthrough.example.html "$RUNNER_TEMP/fm-home/config/review-walkthrough.html"
+          FM_HOME="$RUNNER_TEMP/fm-home" ./dist/fm-linear contract lint

@@ -1,0 +1,28 @@
+{
+  "name": "fm-linear",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A durable, bidirectional Linear system of record for Firstmate fleets.",
+  "bin": {
+    "fm-linear": "./bin/fm-linear"
+  },
+  "scripts": {
+    "build": "bun build ./src/cli.ts --compile --outfile ./dist/fm-linear",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "test:tz": "TZ=UTC bun test && TZ=America/Phoenix bun test && TZ=America/New_York bun test",
+    "check": "bun run typecheck && bun test && bun run build"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/josh-padnick/firstmate-linear.git"
+  }
+}

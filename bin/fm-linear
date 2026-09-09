@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Development launcher. Releases ship a standalone compiled binary.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+if ! command -v bun >/dev/null 2>&1; then
+  printf 'fm-linear: bun is required on PATH\n' >&2
+  exit 127
+fi
+exec bun "$ROOT/src/cli.ts" "$@"

@@ -1,0 +1,388 @@
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { resolveHome } from "../env.ts";
+import { atomicWriteFile, ensurePrivateDir, lockAcquire, lockRelease, readText } from "../fsutil.ts";
+import { runtimePaths } from "../paths.ts";
+import { ASSETS } from "../assets.ts";
+import { sha256 } from "../hash.ts";
+
+const LABEL = "com.firstmate.linear";
+const CLAUDE_LINEAR_DENIES = ["Bash(linear-axi issue create:*)", "Bash(linear-axi issue update:*)", "Bash(linear-axi issue comment * --body:*)"] as const;
+
+type ClaudeSettingsOwnership = {
+  path: string;
+  addedDenies: string[];
+  previousOutputStyle: { present: boolean; value?: unknown };
+};
+
+type ExtensionOwnership = {
+  packageRoot: string;
+  bindOutput: string;
+  registerOutput: string;
+  bindingDigest: string | null;
+  ownerToken: string | null;
+};
+
+type ManagedFileOwnership = {
+  path: string;
+  installedSha: string;
+  previous: { existed: boolean; contents?: string; mode?: number };
+};
+
+type ManagedFileSpec = { path: string; contents: string; mode: number };
+
+type HarnessPlan = {
+  harness: string;
+  ownedFiles: ManagedFileOwnership[];
+  claudeSettings?: ClaudeSettingsOwnership;
+};
+
+type InstallRecord = {
+  schema: "fm-linear.install.v1";
+  binary?: string;
+  linearAxiGuard?: string;
+  plist?: string;
+  extension?: ExtensionOwnership | null;
+  harnesses?: string[];
+  accelerators?: string[];
+  ownedFiles?: ManagedFileOwnership[];
+  claudeSettings?: ClaudeSettingsOwnership;
+};
+
+function repoRoot(): string { return join(dirname(fileURLToPath(import.meta.url)), "../.."); }
+function uid(): string { return String(process.getuid?.() ?? 501); }
+
+function installRoot(env: NodeJS.ProcessEnv): string {
+  return env.FM_LINEAR_INSTALL_ROOT?.trim() || join(homedir(), ".local", "share", "fm-linear");
+}
+
+function agentsDir(env: NodeJS.ProcessEnv): string {
+  return env.FM_LINEAR_LAUNCH_AGENTS_DIR?.trim() || join(homedir(), "Library", "LaunchAgents");
+}
+
+export function renderLaunchAgent(binary: string, home: string, log: string, runtimePath = process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"): string {
+  const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>${LABEL}</string>
+<key>KeepAlive</key><true/><key>RunAtLoad</key><true/>
+<key>ProgramArguments</key><array><string>${escape(binary)}</string><string>service</string><string>run</string></array>
+<key>EnvironmentVariables</key><dict><key>FM_HOME</key><string>${escape(home)}</string><key>PATH</key><string>${escape(runtimePath)}</string></dict>
+<key>StandardOutPath</key><string>${escape(log)}</string>
+<key>StandardErrorPath</key><string>${escape(log)}</string>
+</dict></plist>
+`;
+}
+
+function installBinary(root: string): string {
+  const binary = join(root, "bin", "fm-linear");
+  ensurePrivateDir(dirname(binary));
+  if (basenameSafe(process.execPath) === "fm-linear") {
+    if (process.execPath !== binary) copyFileSync(process.execPath, binary);
+  } else {
+    const result = spawnSync(process.execPath, ["build", join(repoRoot(), "src", "cli.ts"), "--compile", "--outfile", binary], { encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`binary build failed: ${result.stderr || result.stdout}`);
+  }
+  chmodSync(binary, 0o755);
+  return binary;
+}
+
+function basenameSafe(path: string): string { return path.split("/").at(-1) ?? path; }
+
+export function renderLinearAxiGuard(realBinary: string): string {
+  const escaped = realBinary.replaceAll("'", `'\\''`);
+  return `#!/bin/sh
+set -eu
+real='${escaped}'
+case "\${1-} \${2-}" in
+  " "|"--help "|"-h "|"--version "|"-V "|"issue list"|"issue view"|"team list"|"milestone list") exec "$real" "$@" ;;
+  "issue comment")
+    for arg in "$@"; do
+      case "$arg" in --body|--body=*|--body-file|--body-file=*) echo "linear-axi: write refused; use fm-linear inbox show, then fm-linear act" >&2; exit 77 ;; esac
+    done
+    exec "$real" "$@"
+    ;;
+  *) echo "linear-axi: write or unknown command refused; use fm-linear act for Linear mutations" >&2; exit 77 ;;
+esac
+`;
+}
+
+function installLinearAxiGuard(root: string, env: NodeJS.ProcessEnv): string {
+  const guard = join(root, "bin", "linear-axi");
+  const explicit = env.FM_LINEAR_REAL_LINEAR_AXI?.trim();
+  const located = spawnSync("which", ["-a", "linear-axi"], { encoding: "utf8", env: { ...process.env, ...env } });
+  const candidates = located.status === 0 ? located.stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) : [];
+  const real = explicit || candidates.find((item) => item !== guard);
+  if (!real) throw new Error("linear-axi is required on PATH before installation");
+  atomicWriteFile(guard, renderLinearAxiGuard(real), 0o755);
+  return guard;
+}
+
+function outputField(output: string, name: string): string | null {
+  return output.split(/\r?\n/).find((line) => line.startsWith(`${name}: `))?.slice(name.length + 2).trim() || null;
+}
+
+function installExtension(root: string, env: NodeJS.ProcessEnv, persist: (ownership: ExtensionOwnership) => void): ExtensionOwnership {
+  const packageRoot = join(root, "extension", "1.0.0");
+  mkdirSync(join(packageRoot, "bin"), { recursive: true });
+  atomicWriteFile(join(packageRoot, "package.json"), ASSETS.extensionPackage, 0o644);
+  atomicWriteFile(join(packageRoot, "firstmate-extension.json"), ASSETS.extensionManifest, 0o644);
+  atomicWriteFile(join(packageRoot, "bin", "fm-linear-extension"), ASSETS.extensionEntrypoint, 0o755);
+  const home = resolveHome(env);
+  const firstmateRoot = env.FM_ROOT_OVERRIDE?.trim() || home;
+  const common = { encoding: "utf8" as const, env: { ...process.env, ...env, FM_HOME: home } };
+  const bind = spawnSync(join(firstmateRoot, "bin", "fm-extension.sh"), ["bind", packageRoot, "--adapter", "linear", "--trust-same-user-code"], common);
+  if (bind.status !== 0 && !`${bind.stderr}${bind.stdout}`.includes("already")) throw new Error(`extension bind failed: ${bind.stderr || bind.stdout}`);
+  const bindOutput = `${bind.stdout}${bind.stderr}`.trim();
+  const bindingDigest = outputField(bindOutput, "binding-digest");
+  const register = spawnSync(join(firstmateRoot, "bin", "fm-procevent.sh"), ["register-extension", "linear", "linear-main", "--config-ref", runtimePaths(env).socket], common);
+  if (register.status !== 0 && !`${register.stderr}${register.stdout}`.includes("already")) {
+    if (bindingDigest) {
+      spawnSync(join(firstmateRoot, "bin", "fm-extension.sh"), ["retire-binding", "dev.firstmate.linear", "--if-binding-digest", bindingDigest], common);
+    }
+    throw new Error(`source registration failed: ${register.stderr || register.stdout}`);
+  }
+  const registerOutput = `${register.stdout}${register.stderr}`.trim();
+  const ownership = { packageRoot, bindOutput, registerOutput, bindingDigest, ownerToken: outputField(registerOutput, "owner-token") };
+  try {
+    persist(ownership);
+  } catch (error) {
+    if (ownership.ownerToken) spawnSync(join(firstmateRoot, "bin", "fm-procevent.sh"), ["retire", "linear-main", "--if-owner", ownership.ownerToken], common);
+    if (ownership.bindingDigest) spawnSync(join(firstmateRoot, "bin", "fm-extension.sh"), ["retire-binding", "dev.firstmate.linear", "--if-binding-digest", ownership.bindingDigest], common);
+    throw error;
+  }
+  return ownership;
+}
+
+function managedFileOwnership(
+  specs: ManagedFileSpec[],
+  prior: ManagedFileOwnership[],
+  legacyAccelerators: string[],
+): ManagedFileOwnership[] {
+  return specs.map((spec) => {
+    const existingOwnership = prior.find((item) => item.path === spec.path);
+    const current = readText(spec.path);
+    if (existingOwnership && current !== null && sha256(current) !== existingOwnership.installedSha) {
+      throw new Error(`managed harness file changed since installation: ${spec.path}`);
+    }
+    if (existingOwnership) return { ...existingOwnership, installedSha: sha256(spec.contents) };
+    if (legacyAccelerators.includes(spec.path) && current !== null && sha256(current) === sha256(spec.contents)) {
+      return { path: spec.path, installedSha: sha256(spec.contents), previous: { existed: false } };
+    }
+    return {
+      path: spec.path,
+      installedSha: sha256(spec.contents),
+      previous: current === null ? { existed: false } : { existed: true, contents: current, mode: statSync(spec.path).mode & 0o777 },
+    };
+  });
+}
+
+function harnessFileSpecs(harness: string, home: string): ManagedFileSpec[] {
+  if (harness === "claude") {
+    return [
+      { path: join(home, ".claude", "commands", "report.md"), contents: "Run `fm-linear report` and relay its current findings to the captain.\n", mode: 0o600 },
+      { path: join(home, ".claude", "output-styles", "firstmate-linear.md"), contents: ASSETS.outputStyle, mode: 0o600 },
+    ];
+  }
+  if (harness === "codex") {
+    return [{ path: join(home, ".codex", "prompts", "report.md"), contents: "Run `fm-linear report` and relay its current findings to the user.\n", mode: 0o600 }];
+  }
+  return [];
+}
+
+function readClaudeSettings(home: string): { path: string; current: Record<string, any> } {
+  const path = join(home, ".claude", "settings.local.json");
+  const text = readText(path);
+  if (text === null) return { path, current: {} };
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("settings must be an object");
+    return { path, current: parsed as Record<string, any> };
+  } catch {
+    throw new Error(`refusing to overwrite malformed Claude settings: ${path}`);
+  }
+}
+
+function planHarness(harness: string, home: string, priorFiles: ManagedFileOwnership[], legacyAccelerators: string[], priorClaudeSettings?: ClaudeSettingsOwnership): HarnessPlan {
+  const ownedFiles = managedFileOwnership(harnessFileSpecs(harness, home), priorFiles, legacyAccelerators);
+  if (harness !== "claude") return { harness, ownedFiles };
+  const { path, current } = readClaudeSettings(home);
+  const claudeSettings = priorClaudeSettings ?? {
+    path,
+    addedDenies: CLAUDE_LINEAR_DENIES.filter((rule) => !current.permissions?.deny?.includes(rule)),
+    previousOutputStyle: { present: Object.hasOwn(current, "outputStyle"), value: current.outputStyle },
+  };
+  return { harness, ownedFiles, claudeSettings };
+}
+
+function installHarness(plan: HarnessPlan, home: string): HarnessPlan {
+  const specs = harnessFileSpecs(plan.harness, home);
+  for (const spec of specs) atomicWriteFile(spec.path, spec.contents, spec.mode);
+  if (plan.harness === "claude") {
+    const { path: settings, current } = readClaudeSettings(home);
+    const deny = new Set<string>(current.permissions?.deny ?? []);
+    for (const rule of CLAUDE_LINEAR_DENIES) deny.add(rule);
+    current.permissions = { ...(current.permissions ?? {}), deny: [...deny] };
+    current.outputStyle = "firstmate-linear";
+    atomicWriteFile(settings, `${JSON.stringify(current, null, 2)}\n`, 0o600);
+  }
+  return plan;
+}
+
+function writeInstallRecord(path: string, record: InstallRecord): void {
+  atomicWriteFile(path, `${JSON.stringify(record, null, 2)}\n`);
+}
+
+function requireOwnedOrAbsent(path: string, ownedPath: string | undefined): void {
+  if (existsSync(path) && ownedPath !== path) throw new Error(`refusing to overwrite unowned installation path: ${path}`);
+}
+
+export function install(options: { harnesses: string[]; bind: boolean; env?: NodeJS.ProcessEnv }): { binary: string; plist: string } {
+  const harnesses = [...new Set(options.harnesses)];
+  const invalidHarness = harnesses.find((harness) => !["claude", "codex", "grok"].includes(harness));
+  if (invalidHarness) throw new Error(`unknown harness: ${invalidHarness}`);
+  const env = options.env ?? process.env;
+  const home = resolveHome(env);
+  const root = installRoot(env);
+  const paths = runtimePaths(env);
+  let prior: InstallRecord | undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(join(paths.root, "install.json"), "utf8")) as InstallRecord;
+    if (parsed.schema === "fm-linear.install.v1") prior = parsed;
+  } catch { /* first installation */ }
+  const harnessPlans = harnesses.map((harness) => planHarness(harness, home, prior?.ownedFiles ?? [], prior?.accelerators ?? [], prior?.claudeSettings));
+  const binaryPath = join(root, "bin", "fm-linear");
+  const linearAxiGuardPath = join(root, "bin", "linear-axi");
+  const plist = join(agentsDir(env), `${LABEL}.plist`);
+  const plannedOwnedFiles = [...new Map([...(prior?.ownedFiles ?? []), ...harnessPlans.flatMap((plan) => plan.ownedFiles)].map((item) => [item.path, item])).values()];
+  const accelerators = [...new Set([...(prior?.accelerators ?? []), ...plannedOwnedFiles.map((item) => item.path)])];
+  const installedHarnesses = [...new Set([...(prior?.harnesses ?? []), ...harnesses])];
+  const claudeSettings = harnessPlans.find((plan) => plan.claudeSettings)?.claudeSettings ?? prior?.claudeSettings;
+  const extensionPath = join(root, "extension", "1.0.0");
+  if ((prior?.binary && prior.binary !== binaryPath) || (prior?.linearAxiGuard && prior.linearAxiGuard !== linearAxiGuardPath)) {
+    throw new Error(`refusing to change owned install root: ${prior.binary} -> ${binaryPath}`);
+  }
+  const ownedExtension = prior?.extension?.packageRoot === extensionPath ? prior.extension : undefined;
+  if (options.bind && prior?.extension && !ownedExtension) {
+    throw new Error(`refusing to change owned extension destination: ${prior.extension.packageRoot} -> ${extensionPath}`);
+  }
+  const stagedExtension = options.bind
+    ? ownedExtension ?? { packageRoot: extensionPath, bindOutput: "", registerOutput: "", bindingDigest: null, ownerToken: null }
+    : prior?.extension ?? null;
+  requireOwnedOrAbsent(binaryPath, prior?.binary);
+  requireOwnedOrAbsent(linearAxiGuardPath, prior?.linearAxiGuard);
+  requireOwnedOrAbsent(plist, prior?.plist);
+  if (options.bind) requireOwnedOrAbsent(extensionPath, ownedExtension?.packageRoot);
+  const record: InstallRecord = {
+    schema: "fm-linear.install.v1",
+    binary: binaryPath,
+    linearAxiGuard: linearAxiGuardPath,
+    plist,
+    extension: stagedExtension,
+    harnesses: installedHarnesses,
+    accelerators,
+    ownedFiles: plannedOwnedFiles,
+    claudeSettings,
+  };
+  ensurePrivateDir(paths.root);
+  const installRecord = join(paths.root, "install.json");
+  writeInstallRecord(installRecord, record);
+  ensurePrivateDir(root);
+  const binary = installBinary(root);
+  const linearAxiGuard = installLinearAxiGuard(root, env);
+  mkdirSync(dirname(plist), { recursive: true });
+  atomicWriteFile(plist, renderLaunchAgent(binary, home, paths.serviceLog, env.PATH || process.env.PATH), 0o644);
+  if (options.bind) {
+    installExtension(root, env, (installedExtension) => {
+      record.extension = {
+        ...installedExtension,
+        bindingDigest: installedExtension.bindingDigest ?? prior?.extension?.bindingDigest ?? null,
+        ownerToken: installedExtension.ownerToken ?? prior?.extension?.ownerToken ?? null,
+      };
+      writeInstallRecord(installRecord, record);
+    });
+  }
+  for (const plan of harnessPlans) installHarness(plan, home);
+  if (!env.FM_LINEAR_SKIP_LAUNCHCTL) {
+    spawnSync("launchctl", ["bootout", `gui/${uid()}/${LABEL}`], { encoding: "utf8" });
+    const result = spawnSync("launchctl", ["bootstrap", `gui/${uid()}`, plist], { encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`launchctl bootstrap failed: ${result.stderr || result.stdout}`);
+  }
+  return { binary, plist };
+}
+
+export function uninstall(env: NodeJS.ProcessEnv = process.env): void {
+  const paths = runtimePaths(env);
+  if (!env.FM_LINEAR_SKIP_LAUNCHCTL) spawnSync("launchctl", ["bootout", `gui/${uid()}/${LABEL}`], { encoding: "utf8" });
+  const record = readText(join(paths.root, "install.json"));
+  if (record) {
+    let parsed: { schema?: string; binary?: string; linearAxiGuard?: string; plist?: string; extension?: { packageRoot?: string; bindingDigest?: string | null; ownerToken?: string | null }; accelerators?: string[]; ownedFiles?: ManagedFileOwnership[]; claudeSettings?: ClaudeSettingsOwnership } | null = null;
+    try { parsed = JSON.parse(record); } catch { parsed = null; }
+    if (parsed?.schema === "fm-linear.install.v1") {
+      const home = resolveHome(env);
+      const firstmateRoot = env.FM_ROOT_OVERRIDE?.trim() || home;
+      const common = { encoding: "utf8" as const, env: { ...process.env, ...env, FM_HOME: home } };
+      if (parsed.extension?.ownerToken) {
+        const retire = spawnSync(join(firstmateRoot, "bin", "fm-procevent.sh"), ["retire", "linear-main", "--if-owner", parsed.extension.ownerToken], common);
+        if (retire.status !== 0) throw new Error(`source retirement failed: ${retire.stderr || retire.stdout}`);
+      }
+      if (parsed.extension?.bindingDigest) {
+        const retire = spawnSync(join(firstmateRoot, "bin", "fm-extension.sh"), ["retire-binding", "dev.firstmate.linear", "--if-binding-digest", parsed.extension.bindingDigest], common);
+        if (retire.status !== 0) throw new Error(`extension retirement failed: ${retire.stderr || retire.stdout}`);
+      }
+      if (parsed.plist) rmSync(parsed.plist, { force: true });
+      const ownedPaths = new Set((parsed.ownedFiles ?? []).map((item) => item.path));
+      for (const file of parsed.accelerators ?? []) if (!ownedPaths.has(file)) rmSync(file, { force: true });
+      for (const file of parsed.ownedFiles ?? []) {
+        const current = readText(file.path);
+        if (current !== null && sha256(current) !== file.installedSha) continue;
+        if (file.previous.existed) atomicWriteFile(file.path, file.previous.contents ?? "", file.previous.mode ?? 0o600);
+        else rmSync(file.path, { force: true });
+      }
+      if (parsed.binary) rmSync(parsed.binary, { force: true });
+      if (parsed.linearAxiGuard) rmSync(parsed.linearAxiGuard, { force: true });
+      if (parsed.extension?.packageRoot) rmSync(parsed.extension.packageRoot, { recursive: true, force: true });
+      if (parsed.claudeSettings) {
+        try {
+          const settings = JSON.parse(readFileSync(parsed.claudeSettings.path, "utf8")) as Record<string, any>;
+          if (Array.isArray(settings.permissions?.deny)) {
+            const added = new Set(parsed.claudeSettings.addedDenies);
+            settings.permissions.deny = settings.permissions.deny.filter((rule: unknown) => typeof rule !== "string" || !added.has(rule));
+            if (settings.permissions.deny.length === 0) delete settings.permissions.deny;
+          }
+          if (settings.outputStyle === "firstmate-linear") {
+            if (parsed.claudeSettings.previousOutputStyle.present) settings.outputStyle = parsed.claudeSettings.previousOutputStyle.value;
+            else delete settings.outputStyle;
+          }
+          atomicWriteFile(parsed.claudeSettings.path, `${JSON.stringify(settings, null, 2)}\n`, 0o600);
+        } catch { /* no managed Claude settings */ }
+      }
+      rmSync(join(paths.root, "install.json"), { force: true });
+    }
+  }
+  const captainPath = join(resolveHome(env), "data", "captain.md");
+  try {
+    const text = readFileSync(captainPath, "utf8");
+    const updated = text.replace(/\n?<!-- fm-linear:start -->[\s\S]*?<!-- fm-linear:end -->\n?/, "\n").trimEnd();
+    atomicWriteFile(captainPath, updated ? `${updated}\n` : "", 0o600);
+  } catch { /* absent captain guidance */ }
+}
+
+export function cutover(mode: "enable" | "disable", env: NodeJS.ProcessEnv = process.env): void {
+  const home = resolveHome(env);
+  const lock = join(home, "state", "linear-cutover.lock");
+  const acquired = lockAcquire(lock);
+  if (acquired !== "ok") throw new Error(`cutover lease ${acquired}`);
+  try {
+    atomicWriteFile(join(home, "config", "linear-cutover"), `${mode === "enable" ? "service" : "legacy"}\n`);
+    if (!env.FM_LINEAR_SKIP_LAUNCHCTL) {
+      const action = mode === "enable" ? "kickstart" : "kill";
+      const args = action === "kickstart" ? [action, "-k", `gui/${uid()}/${LABEL}`] : [action, "SIGTERM", `gui/${uid()}/${LABEL}`];
+      spawnSync("launchctl", args, { encoding: "utf8" });
+    }
+  } finally { lockRelease(lock); }
+}
