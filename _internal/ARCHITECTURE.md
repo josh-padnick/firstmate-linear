@@ -7,7 +7,7 @@ It does not claim that every capability is implemented.
 The [design principles](../AGENTS.md#design-principles) guide these responsibilities.
 Technology selections and their rationale are maintained in [TECH_STACK.md](TECH_STACK.md).
 Concrete implementation guidance, configuration paths, compatibility findings, and verification expectations are in [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md).
-Shared error-handling practices live in [ERRORS.md](ERRORS.md).
+Shared logging and error-handling practices live in [LOGGING.md](LOGGING.md) and [ERRORS.md](ERRORS.md).
 
 ## System ownership
 

@@ -8,6 +8,7 @@ The error registry, result contracts, incident storage, and incident-inspection 
 A failure should explain what could not happen, preserve the affected work, and provide a useful next step.
 It must never turn an unknown result into a successful result or create duplicate work through blind retries.
 
+Read [LOGGING.md](LOGGING.md) for diagnostic output.
 For failures that warrant an incident, preserve the path from the symptom to the occurrence, supporting evidence, and any approved bug report.
 Expected waiting and routine validation do not need an incident or a report draft.
 
@@ -203,7 +204,7 @@ A bounded local fallback file may preserve startup failures when that destinatio
 If disk space or permissions prevent that write too, do not claim the occurrence was saved.
 A diagnostic fallback never substitutes for durably accepting a work request.
 Local status should show available failure evidence and clearly identify unavailable storage or incomplete history.
-Use bounded diagnostic buffering and avoid recursively reporting a failure of the diagnostic sink itself.
+See [LOGGING.md](LOGGING.md#failure-of-diagnostics) for buffering and recursion limits.
 
 ## Help the user act
 

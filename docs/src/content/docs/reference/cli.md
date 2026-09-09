@@ -107,9 +107,15 @@ See [Compatibility](/reference/compatibility/) for when checks run automatically
 
 Show recent integration activity and errors, including the affected connection, task, or pending delivery when available.
 Use logs to investigate a problem reported by `fm-linear status`.
-Exclude credentials and avoid including private issue or conversation content by default.
+Filter by subsystem, minimum severity, event, time window, incident, operation, task, or Linear issue.
+For a task filter, include its Firstmate home so tasks with the same name remain distinct.
+Use `--json` for structured output.
 
-The command displays local diagnostics; it does not submit a bug report.
+Results show a bounded recent window and exclude debug entries by default.
+If entries were not collected, have rotated away, or cannot be read, the result explains the available coverage.
+Log output excludes credentials and private issue or conversation content, including at debug level.
+
+The command displays local diagnostics; it does not notify Firstmate, retry work, or submit a bug report.
 See [Reporting bugs](/guides/troubleshooting/) for collecting and reviewing information before sharing it.
 
 ### `fm-linear metrics`

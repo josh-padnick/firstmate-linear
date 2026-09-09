@@ -6,7 +6,7 @@ This document records concrete implementation guidance, unresolved integration d
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for subsystem responsibilities and core design decisions, and [TECH_STACK.md](TECH_STACK.md) for technology choices.
 These notes describe intended behavior and research findings, not a claim that the implementation is complete.
 Reference code informs the design without defining it.
-Shared [error-handling practices](ERRORS.md) apply across the subsystems.
+Shared practices for [logging](LOGGING.md) and [error handling](ERRORS.md) apply across the subsystems.
 
 ## Polling and retrieval
 
