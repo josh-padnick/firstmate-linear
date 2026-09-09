@@ -1,0 +1,63 @@
+---
+title: Approve a deliverable
+description: Review what the crew produced before the work proceeds to validation.
+---
+
+import WorkflowFlow from '../../../components/WorkflowFlow.astro';
+import { deliverableFlow } from '../../../data/workflowFlows';
+
+## Motivation
+
+You want to inspect what the crew produced and decide whether it meets your request.
+In the recommended workflow, the issue is in **Approve Deliverable** and is assigned to the designated reviewer.
+
+## How to do it
+
+Open the deliverable linked from the Linear issue and any supporting materials reported with it.
+Read what changed, what was checked, and any remaining limitations.
+Inspect the result against your original request.
+
+If you asked the crew to create an interactive recap, use it to walk through the work.
+A recap is optional: you can [add that instruction to the building stage](/reference/workflow/#add-an-instruction-when-you-need-one) when you want one.
+Other supporting materials might include screenshots, test results, or a PR.
+
+Reply in the deliverable's review thread.
+If it needs changes, describe them together in one comment if that is easiest.
+To accept the result, identify the version you reviewed and the next action you authorize:
+
+> I approve this deliverable at the linked PR revision.
+> Proceed with code validation; bring it back before merging.
+
+## What happens
+
+Firstmate receives your decision with the deliverable reference.
+For revisions, it coordinates the changes and brings the updated result back for review.
+For an authorized approval of the current result, it can begin validation.
+
+When validation starts, FM Linear sets the issue to **Validating Code** and assigns Firstmate.
+The approval stays attached to the version you reviewed.
+Validation findings and supporting materials are added to the same issue as they become available.
+
+Accepting the deliverable does not authorize merging the PR or mark this code workflow Done.
+For non-code work, use the next action and completion condition appropriate to your workflow, such as acceptance of an investigation report.
+
+## How it works
+
+FM Linear retrieves the review comment on its next poll, every 30 seconds by default, and matches it to the connected task and deliverable.
+Firstmate interprets the decision; FM Linear checks who may approve and which version was reviewed.
+
+<WorkflowFlow {...deliverableFlow} />
+
+1. **Capture the decision.**
+   FM Linear saves the comment, reviewer identity, and artifact reference with the issue's conversation context.
+2. **Deliver the authorized next step.**
+   An authorized acceptance of the current deliverable permits validation in the recommended workflow.
+   Feedback is delivered as feedback, with no implied merge permission.
+3. **Arrange validation.**
+   Firstmate coordinates the validation work, including applicable instructions for any new worker assignment.
+4. **Publish progress and findings.**
+   FM Linear updates the issue from observed progress and reported results.
+   It includes supporting links actually reported with the work; it does not assume a recap exists.
+
+The [task-brief guide](/reference/firstmate/#workflow-instructions-before-work-starts) explains how assignment instructions are supplied and where coverage remains limited.
+Next, [merge the PR](/guides/merge-pr/) when validation and the required checks are complete.

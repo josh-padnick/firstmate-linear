@@ -1,0 +1,52 @@
+---
+title: Reporting bugs
+description: Let FM Linear and Firstmate gather the details, then review a GitHub issue before it is submitted.
+---
+
+import BugReportPrompt from '../../../components/BugReportPrompt.astro';
+
+You do not need to diagnose FM Linear yourself.
+Describe what went wrong and let Firstmate gather the relevant details and prepare a report for your review.
+
+## When FM Linear detects an error
+
+FM Linear should detect unexpected errors and persistent integration failures, collect a diagnostic summary, and prepare a GitHub issue draft.
+You receive a short explanation of what failed and a request to review the report.
+After you approve the title, body, attachments, and destination, the report can be submitted to the [FM Linear repository](https://github.com/josh-padnick/fm-linear/issues).
+
+Repeated occurrences of the same error should update one incident rather than generate new approval requests.
+Brief connection interruptions that recover normally do not need bug reports.
+See [background failure notifications](/reference/compatibility/#how-you-hear-about-a-background-failure) for how blocking problems reach you when the service is running in the background.
+
+Automatic error detection and report submission are planned capabilities.
+If no alert appears, you can still ask Firstmate for help using the prompt below.
+
+## When something looks wrong
+
+Tell Firstmate what you expected and what happened instead.
+Include the Linear issue link if you have it; Firstmate should collect the technical details and ask only for information it cannot find.
+
+For example:
+
+> I replied to the plan-review thread on ENG-42, but Firstmate answered in a new thread.
+> I expected the conversation to stay together.
+
+Copy this prompt into your conversation with Firstmate, then add your description:
+
+<BugReportPrompt />
+
+The prompt points Firstmate to the [bug-reporting instructions for agents](/for-agents/reporting-bugs/).
+Firstmate checks whether the behavior is a bug, a supported workflow customization, or a feature request before proposing the next step.
+
+If the Linear connection is broken, paste the prompt directly into your Firstmate conversation.
+If Firstmate is unavailable too, you can [open a GitHub issue yourself](https://github.com/josh-padnick/fm-linear/issues/new) with a short description.
+
+## Review and approve
+
+Firstmate shows you the report before posting it publicly.
+The draft should explain the problem without exposing credentials, private code, or unrelated conversations.
+You can edit it or decline submission.
+
+After submission, Firstmate gives you the confirmed GitHub issue link.
+If it cannot submit the report, it should preserve the draft and explain what is needed.
+An Urgent diagnostic issue in your Linear workspace does not automatically authorize a public GitHub report.

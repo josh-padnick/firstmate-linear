@@ -1,0 +1,48 @@
+---
+const instructions = `Help me investigate unexpected behavior in FM Linear.
+Read FM Linear's bug-reporting instructions for agents.
+Gather the relevant diagnostics, check for an existing report, and prepare a GitHub issue if this is a bug.
+Remove private information and show me the title, body, attachments, and destination for approval before posting.
+
+What I expected: [describe the expected behavior]
+What happened instead: [describe the problem]
+Linear issue, if available: [paste the link]`;
+---
+<div class="bug-report-prompt">
+  <div class="prompt-header"><strong>Ask Firstmate to investigate</strong><button type="button" hidden>Copy prompt</button></div>
+  <pre tabindex="0" aria-label="Bug-reporting prompt"><code>{instructions}</code></pre>
+  <p class="prompt-status" role="status"></p>
+</div>
+<script>
+  document.querySelectorAll<HTMLElement>('.bug-report-prompt').forEach((container) => {
+    const code = container.querySelector('code')!;
+    const button = container.querySelector('button')!;
+    const status = container.querySelector<HTMLElement>('.prompt-status')!;
+    const guide = new URL('/for-agents/reporting-bugs/', window.location.origin).href;
+    code.textContent = code.textContent!.replace(
+      "Read FM Linear's bug-reporting instructions for agents.",
+      `Read and follow the bug-reporting instructions at ${guide}`,
+    );
+    button.hidden = false;
+    button.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(code.textContent!);
+        status.textContent = 'Copied. Paste into Firstmate and add your description.';
+      } catch {
+        status.textContent = 'Select the prompt text and copy it manually.';
+      }
+    });
+  });
+</script>
+<style>
+  .bug-report-prompt { border: 1px solid var(--fm-line); border-radius: var(--fm-radius-md); background: var(--fm-surface); overflow: hidden; }
+  .prompt-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; padding: .75rem 1rem; border-bottom: 1px solid var(--fm-line); }
+  strong { font-size: var(--fm-text-sm); color: var(--fm-ink); }
+  button { min-height: 44px; padding: .5rem .75rem; font: inherit; font-size: var(--fm-text-sm); border: 1px solid var(--fm-line); border-radius: var(--fm-radius-sm); background: var(--fm-paper); color: var(--fm-ink); cursor: pointer; }
+  button:hover { background: var(--fm-faint); }
+  pre { margin: 0; padding: 1rem; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fm-text-sm)/1.7 var(--fm-font-mono); background: transparent; color: var(--fm-ink); }
+  code { font: inherit; padding: 0; background: transparent; }
+  .prompt-status { margin: 0; padding: 0 1rem 1rem; font-size: var(--fm-text-sm); }
+  .prompt-status:empty { display: none; }
+  :is(pre, button):focus-visible { outline-offset: -3px; }
+</style>

@@ -1,0 +1,62 @@
+---
+import { Code } from 'astro:components';
+import githubDark from 'shiki/themes/github-dark.mjs';
+import yaml from 'shiki/langs/yaml.mjs';
+interface Props { code: string }
+const { code } = Astro.props;
+---
+<figure class="workflow-code">
+  <figcaption>
+    <span class="code-filename"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>workflow.yaml</span>
+    <div class="code-actions"><span class="code-language">YAML</span><button type="button" class="copy-code" data-code={code} aria-label="Copy workflow YAML"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span>Copy</span></button></div>
+  </figcaption>
+  <Code code={code} lang={yaml[0]} embeddedLangs={yaml.slice(1)} theme={githubDark} wrap tabindex="0" aria-label="Illustrative workflow configuration" />
+  <div class="code-footer"><span>Example configuration</span><a href="/reference/workflow/">View options <span aria-hidden="true">→</span></a></div>
+  <p class="copy-status" role="status" aria-live="polite"></p>
+</figure>
+<script>
+  document.querySelectorAll<HTMLButtonElement>('.copy-code').forEach((button) => {
+    const label = button.querySelector('span')!;
+    const status = button.closest('figure')!.querySelector<HTMLElement>('.copy-status')!;
+    let reset: ReturnType<typeof setTimeout>;
+    button.addEventListener('click', async () => {
+      clearTimeout(reset);
+      try {
+        await navigator.clipboard.writeText(button.dataset.code ?? '');
+        label.textContent = 'Copied';
+        status.classList.remove('copy-error');
+        status.textContent = 'Workflow YAML copied to clipboard.';
+      } catch {
+        label.textContent = 'Copy';
+        status.classList.add('copy-error');
+        status.textContent = 'Copy unavailable. Select the code and copy it manually.';
+      }
+      reset = setTimeout(() => { label.textContent = 'Copy'; }, 2000);
+    });
+  });
+</script>
+<style>
+  .workflow-code { min-width: 0; margin: 0; color: #e1e4e8; background: #24292e; border: 1px solid #414952; border-radius: var(--fm-radius-lg); box-shadow: 0 8px 28px #00000010; }
+  figcaption { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--fm-space-3); padding: var(--fm-space-3) var(--fm-space-6); border-bottom: 1px solid #414952; background: #1f2428; border-radius: var(--fm-radius-lg) var(--fm-radius-lg) 0 0; }
+  .code-filename { display: inline-flex; align-items: center; gap: var(--fm-space-2); font: var(--fm-text-sm)/1.5 var(--fm-font-mono); }
+  .code-filename svg { color: #b8c0c7; }
+  .code-actions { display: flex; align-items: center; gap: var(--fm-space-4); }
+  .code-language { color: #b8c0c7; font-size: var(--fm-text-xs); letter-spacing: .06em; }
+  .copy-code { display: inline-flex; align-items: center; justify-content: center; gap: var(--fm-space-2); min-height: 36px; min-width: 86px; padding: var(--fm-space-2); font: 500 var(--fm-text-xs)/1 var(--sl-font); color: #e1e4e8; background: transparent; border: 1px solid #57606a; border-radius: var(--fm-radius-sm); cursor: pointer; }
+  .copy-code:hover { background: #353d45; border-color: #8b949e; }
+  .workflow-code :global(pre) { margin: 0; padding: var(--fm-space-6); font: var(--fm-text-sm)/1.8 var(--fm-font-mono); tab-size: 2; overflow-wrap: anywhere; }
+  .workflow-code :global(code) { font: inherit; }
+  .workflow-code :global(:focus-visible) { outline: 3px solid #9ecbff; outline-offset: 3px; }
+  .workflow-code :global(pre:focus-visible) { outline-offset: -4px; }
+  .code-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--fm-space-2); border-top: 1px solid #414952; padding: var(--fm-space-3) var(--fm-space-6); color: #b8c0c7; font-size: var(--fm-text-xs); line-height: 1.7; }
+  .code-footer a { color: #e1e4e8; text-decoration: none; padding-block: var(--fm-space-2); }
+  .code-footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
+  .copy-status:not(.copy-error) { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .copy-error { color: #e1e4e8; font-size: var(--fm-text-xs); padding: 0 var(--fm-space-6) var(--fm-space-4); margin: 0; }
+  @media (max-width: 520px) {
+    figcaption, .code-footer { padding-inline: var(--fm-space-4); }
+    .workflow-code :global(pre) { padding: var(--fm-space-4); }
+    .code-actions { gap: var(--fm-space-3); }
+    .copy-code { min-height: 44px; }
+  }
+</style>

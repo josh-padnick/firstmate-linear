@@ -1,0 +1,61 @@
+---
+title: Approve a plan
+description: Review the proposed approach and authorize the crew to implement it.
+---
+
+import WorkflowFlow from '../../../components/WorkflowFlow.astro';
+import { planFlow } from '../../../data/workflowFlows';
+
+## Motivation
+
+You want to review the crew's proposed approach before it starts implementation.
+In the recommended workflow, the issue is in **Approve Plan** and is assigned to you as the captain, or to another reviewer selected in your configuration.
+
+## How to do it
+
+Open the plan linked from the Linear issue.
+Check that its scope, constraints, and acceptance criteria match your request.
+The review conversation should identify the plan version, explain important tradeoffs, and surface any open questions.
+
+If the approach needs revision, reply in the review thread with your feedback.
+If you are ready to proceed, approve the specific plan:
+
+> I approve version 2 of this plan for implementation.
+> Keep the proposed scope; we will review the deliverable before merging.
+
+You can answer questions and give approval in the same reply when the scope is clear.
+If requested changes make your approval ambiguous, Firstmate asks for clarification before proceeding.
+
+## What happens
+
+Firstmate receives your decision with the plan it concerns.
+An authorized approval of the current plan permits implementation of that plan.
+If you request revisions, Firstmate coordinates an updated plan and brings it back for review.
+
+When implementation starts, FM Linear sets the issue to **Building** and assigns Firstmate.
+The plan and approval remain accessible from the issue.
+Approval is permission to proceed, not evidence that a worker has already begun.
+
+Plan approval does not authorize an unrelated deployment or approve the later pull request.
+A material change to the plan may require another review under your configured workflow.
+
+## How it works
+
+FM Linear retrieves the review comment on its next poll, every 30 seconds by default.
+It preserves the author, thread, and plan reference so the decision can be applied to the correct work.
+
+<WorkflowFlow {...planFlow} />
+
+1. **Capture the review.**
+   FM Linear saves the comment and matches the Linear issue to its Firstmate task.
+2. **Establish what is authorized.**
+   Firstmate interprets the comment; FM Linear checks the reviewer's authority and the plan version the decision applies to.
+   Ambiguous feedback needs clarification before proceeding.
+3. **Coordinate implementation.**
+   Firstmate schedules and dispatches the authorized work.
+   Applicable workflow instructions belong in the assignment before it starts.
+4. **Update Linear from progress.**
+   FM Linear updates the status and assignee when implementation starts, while preserving the review history.
+
+See [how instructions reach the crew](/reference/firstmate/#workflow-instructions-before-work-starts) for the preparation mechanism and its limits.
+Next, [track implementation](/guides/track-work/) and [approve the deliverable](/guides/approve-deliverable/) when it is ready.

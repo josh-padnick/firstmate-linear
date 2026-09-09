@@ -1,0 +1,188 @@
+---
+title: Configuration
+description: Choose Linear teams, statuses, people, labels, and agent instructions, then maintain the workflow over time.
+---
+
+import WorkflowFlow from '../../../components/WorkflowFlow.astro';
+import { configurationFlow } from '../../../data/workflowFlows';
+
+## Motivation
+
+You want FM Linear to follow your team's workflow from idea to delivered work.
+You want to choose teams, statuses, reviewers, labels, and optional crew instructions, then maintain those choices as your process changes.
+
+## How to do it
+
+During [setup](/guides/setup/), choose the recommended workflow or customize it.
+After setup, ask Firstmate to change your saved configuration, or edit the YAML file directly.
+Use the [workflow configuration reference](/reference/workflow/) for a minimal example and the available stage keys and fields.
+
+For example:
+
+> Send plan reviews to Maya from now on.
+> During building, ask the crew to create an interactive HTML recap and include its link when reporting the result.
+
+Review the proposed changes, especially any new Linear statuses or labels and any effect on work already underway.
+The sections below explain the choices you can maintain.
+
+### Teams, projects, and repositories
+
+Choose the Linear teams and projects that belong to each connection.
+Map them to the Firstmate home and repositories that should handle their work.
+Keep issues outside that scope untouched.
+
+Define how an issue enters the integration and which status means “ready for Firstmate.”
+Those are separate choices: an enrolled issue may still be a draft or wait for a review.
+
+If one issue could belong to several repositories, require enough context to resolve the destination.
+Do not silently pick a repository from an ambiguous title.
+
+### Statuses and handoffs
+
+Use the [recommended workflow](/reference/workflow/#recommended-workflow), or map those meanings to your existing statuses.
+The recommended code workflow includes **Plan In Progress**, **Approve Plan**, **Building**, **Approve Deliverable**, **Validating Code**, **Approve Merge**, and **Done**.
+It also includes Backlog, ToDo, Waiting, Needs Decision, Needs Firstmate Decision, and Canceled.
+
+For each stage, define what establishes readiness, who owes the next action, and what permits work to leave that stage.
+For example, entering Approve Deliverable means the result is ready for review; leaving it for validation requires the authorized reviewer's approval of the current result.
+A plan approval, a deliverable approval, and a merge approval authorize different actions.
+
+Define the review path for each kind of work.
+An accepted investigation report can have a different completion condition from a merged code change.
+
+Also decide what manual field changes mean.
+For example, reassigning a reviewer should preserve that choice, while a manually moved Done card should not falsely declare unfinished work complete.
+Conflicting changes should surface a question or a visible exception rather than cause repeated competing edits.
+
+### Teammates and approval authority
+
+Map the captain and other reviewers to their actual Linear accounts.
+Choose which person, or explicitly defined set of people, may approve each kind of decision.
+Commenting on an issue and authorizing deployment are different permissions.
+
+Choose the Linear assignee used while the crew owns the next action.
+The recommended setup requires a dedicated Firstmate account, which you can reuse if you already have one.
+Keep the publishing identity separate from this handoff mapping; see [why we recommend a dedicated account](#why-a-dedicated-firstmate-account).
+A model is not a Linear user account, so identify the model through a label rather than inventing a teammate account for it.
+
+At each handoff, the assignee should identify who needs to act next.
+For a plan review, that may be a product reviewer; for a release, it may be a different approver.
+
+#### Why a dedicated Firstmate account?
+
+**Yes, for the setup and workflow recommended by FM Linear.**
+Use one dedicated Linear account for Firstmate, separate from your personal account.
+You can reuse it across crewmates; each crewmate does not need its own account.
+
+This gives automated comments a clear identity and lets the assignee show whether Firstmate or a person owes the next action.
+Crew and model labels identify the worker involved without changing that handoff model.
+FM Linear does not create a workspace member for you; [setup step 1](/guides/setup/#1-create-a-linear-account-for-firstmate) walks you through creating the account and giving it team access.
+
+This is FM Linear's setup requirement, not a restriction imposed by Linear's API.
+Linear supports [personal API keys and OAuth](https://linear.app/developers/graphql#authentication), and its [agent model](https://linear.app/developers/agents) supports delegation while a human remains the assignee.
+Those alternatives require different identity or handoff choices and are not the setup described here.
+
+### Labels for crewmates and models
+
+Setup can suggest labels and show which observed identities they represent.
+Approve any label creation before it changes your workspace.
+Map existing labels when you prefer their names or colors.
+
+Keep the underlying model identifier separate from the label's display name.
+Renaming a label should not change which model an old issue records.
+FM Linear manages the labels you designate and preserves unrelated labels.
+
+When a new model becomes available, a software update may offer a new mapping.
+Review that mapping separately from updating the software.
+New defaults should not overwrite your choices or relabel historical work as though a different model did it.
+
+### Customize Linear issue details
+
+Choose which execution details FM Linear publishes in a managed section of each issue.
+Alongside the plan, artifacts, and PR, you should be able to include the **Herdr panel name** so you can find the crew's work in your terminal.
+
+For example, an issue could show:
+
+> **Firstmate work**
+>
+> - Task: team-invitations
+> - Herdr panel: team-invitations
+> - Current plan: version 2
+> - Review guide: linked when ready
+
+These are example values; choose the issue details that help you follow the work.
+The panel reference should show its host or session context when necessary to distinguish it from a similarly named panel.
+If several tasks or workers contribute to the issue, show the relevant references separately.
+
+FM Linear should obtain panel details from recorded execution context through the Firstmate adapter, preserve your unrelated description text, and update the managed details when the active execution changes.
+[Herdr display labels are not unique identities](https://github.com/kunchenguid/firstmate/blob/b84e0e362face25f3dd8945297a3df1320d7668c/docs/herdr-backend.md), so a panel name is a display aid and must not select a message destination.
+Renamed, closed, or unavailable panels should not make an old reference appear current.
+The exact lookup and any clickable “open panel” navigation still need compatibility verification.
+Herdr is optional; other Firstmate backends do not need to provide a Herdr panel reference.
+
+### Agent instructions
+
+Add instructions for behavior you want beyond Firstmate's usual work.
+For example, ask the crewmate to create an interactive HTML recap during implementation and report its link so FM Linear can include it in the review handoff.
+See the [workflow instruction example](/reference/workflow/#add-an-instruction-when-you-need-one).
+
+Instructions apply to the stage where the agent performs the work.
+They are optional; a human review stage does not need generic agent instructions.
+Firstmate remains responsible for dispatching and supervising the crew.
+Read [how instructions reach crewmates](/reference/firstmate/#workflow-instructions-before-work-starts) for the preparation mechanism and its limitations.
+
+### Maintain the workflow
+
+Edit configuration directly or ask Firstmate to change it through supported FM Linear operations.
+A request such as “Send plan reviews to Maya from now on” should become a saved, validated change.
+It should not remain a preference that only one agent conversation remembers.
+
+Preview changes to managed Linear resources before applying them.
+Invalid edits should leave the last valid configuration active.
+Pending deliveries and issue history must survive a configuration update.
+
+Changes for active assignments should be explicit.
+Updating a default must not silently rewrite what an already-dispatched crewmate was asked to deliver.
+
+## What happens
+
+Your accepted settings become saved configuration, so they survive the current conversation.
+FM Linear uses them to select the connected team, map workflow stages to Linear statuses, assign the next person to act, and maintain managed labels.
+Optional agent instructions accompany the relevant work assignment.
+
+Invalid edits leave the last valid configuration active.
+Updating your preferences preserves issue history and pending deliveries.
+An already-running assignment needs an explicit update if you want it to adopt new instructions.
+
+## How it works
+
+Firstmate can help express your preferences as a configuration change.
+FM Linear validates and saves that change, then applies the resulting rules during synchronization and preparation of future assignments.
+You can also make the same change by editing the configuration file directly.
+
+<WorkflowFlow {...configurationFlow} />
+
+The [task-brief guide](/reference/firstmate/#workflow-instructions-before-work-starts) explains the brief-preparation handshake and why configuration alone cannot guarantee that Firstmate follows it on every dispatch.
+
+### Where configuration lives
+
+Configuration belongs to your user account and can serve multiple projects and Firstmate homes.
+
+| Platform | Default file |
+| --- | --- |
+| macOS | `~/.config/fm-linear/config.yaml` |
+| Linux | `~/.config/fm-linear/config.yaml` |
+
+On macOS and Linux, `XDG_CONFIG_HOME` replaces the `~/.config` directory when set.
+Use an explicit `--config` path to override the default.
+The CLI and background service must use the same resolved configuration.
+
+Credentials stay in separate protected storage.
+
+### Synchronization settings
+
+The design polls Linear every 30 seconds by default through outbound API requests.
+You can change the polling interval in configuration.
+Shorter intervals consume more API requests; longer intervals delay incoming feedback.
+The service must validate the interval and respect API rate limits even when you request a faster cadence.
+There is no public endpoint to configure.

@@ -1,0 +1,55 @@
+---
+import IntegrationShowcase from './IntegrationShowcase.astro';
+import WorkflowCodeExample from './WorkflowCodeExample.astro';
+const workflowExample = `team: Engineering
+
+teammates:
+  captain: You
+  firstmate: Firstmate
+
+workflow:
+  plan:
+    linear_status: Plan In Progress
+  plan_review:
+    linear_status: Approve Plan
+    linear_assignee: captain
+  build:
+    linear_status: Building
+    linear_assignee: firstmate
+    instructions: |
+      Create an interactive HTML recap.
+      Include verification results.`;
+---
+<section class="fm-hero" aria-labelledby="_top">
+  <div class="hero-copy">
+    <div class="hero-brands" aria-label="Firstmate and Linear">
+      <a class="hero-firstmate" href="https://github.com/kunchenguid/firstmate">
+        <img src="/firstmate-logo.png" width="400" height="400" alt="" />
+        <span>Firstmate</span>
+      </a>
+      <span class="hero-brand-connector" aria-hidden="true">×</span>
+      <a class="hero-linear" href="https://linear.app" aria-label="Linear">
+        <span class="linear-wordmark"><img class="linear-logo-dark" src="/linear-wordmark-dark.svg" alt="" width="150" height="37" /><img class="linear-logo-light" src="/linear-wordmark-light.svg" alt="" width="150" height="37" /></span>
+      </a>
+    </div>
+    <h1 id="_top" data-page-title>Track your Firstmate<br class="desktop-break" /> <span>work in Linear</span></h1>
+    <p class="fm-tagline">Connect every crewmate to a Linear issue, visualize your work-in-progress, and communicate to Firstmate directly from Linear.</p>
+    <div class="fm-actions"><a class="fm-button primary" href="/overview/">Read the docs <span aria-hidden="true">↗</span></a><a class="fm-button secondary" href="/guides/setup/">Install <span aria-hidden="true">→</span></a></div>
+  </div>
+</section>
+<IntegrationShowcase />
+<section class="product-features" aria-label="What FM Linear does">
+  <article class="product-feature">
+    <div class="feature-copy"><span class="feature-index">01 / TRACK</span><h2>Connect every crewmate's work to a Linear issue.</h2><p>Follow the work across your crew. See what’s in progress, who needs to act, and where to find the plan or deliverable.</p><a class="fm-text-link" href="/guides/track-work/">Track progress <span aria-hidden="true">→</span></a></div>
+    <div class="feature-placeholder" role="img" aria-label="Placeholder for a screenshot of Firstmate work tracked in a Linear board"><div class="placeholder-chrome"><span>WORK IN PROGRESS</span><span>Screenshot placeholder</span></div><div class="placeholder-board" aria-hidden="true"><div><span>Building</span><i></i><i></i></div><div><span>Needs input</span><i></i></div><div><span>Approve Deliverable</span><i></i><i></i></div></div><p>A view of your crew’s work</p></div>
+  </article>
+  <article class="product-feature">
+    <div class="feature-copy"><span class="feature-index">02 / DISCUSS</span><h2>Talk to Firstmate from Linear comments.</h2><p>Answer questions, review a plan, or approve the next step. Firstmate replies directly in the right Linear thread.</p><a class="fm-text-link" href="/guides/reviews/">Give feedback <span aria-hidden="true">→</span></a></div>
+    <div class="feature-placeholder" role="img" aria-label="Placeholder for a screenshot of a Linear comment thread with Firstmate"><div class="placeholder-chrome"><span>CONVERSATION</span><span>Screenshot placeholder</span></div><div class="placeholder-thread" aria-hidden="true"><div><b>FM</b><span><strong>Firstmate</strong><i></i><i></i></span></div><div><b>You</b><span><strong>Your feedback</strong><i></i></span></div></div><p>The context stays with the conversation</p></div>
+  </article>
+  <article class="product-feature">
+    <div class="feature-copy"><span class="feature-index">03 / CUSTOMIZE</span><h2>Customize your workflow</h2><p>Choose your Linear teams, statuses, labels, and teammates. Customize the instructions given to crewmates. Ask Firstmate directly to customize your workflow as needed.</p><a class="fm-text-link" href="/reference/configuration/">Customize your workflow <span aria-hidden="true">→</span></a></div>
+    <WorkflowCodeExample code={workflowExample} />
+  </article>
+</section>
+<section class="fm-start" aria-labelledby="fm-start-title"><div><p class="fm-eyebrow">OPEN SOURCE</p><h2 id="fm-start-title">Install it now</h2><p>Connect Firstmate to the place you track your work.</p></div><a class="fm-button secondary" href="/guides/setup/">Install <span aria-hidden="true">→</span></a></section>

@@ -1,0 +1,65 @@
+---
+title: Give feedback
+description: Send feedback to Firstmate from a Linear comment and keep the reply in the same conversation.
+---
+
+import WorkflowFlow from '../../../components/WorkflowFlow.astro';
+import { feedbackFlow } from '../../../data/workflowFlows';
+
+## Motivation
+
+You want to clarify a request, change direction, answer a question, or ask the crew to revise its work.
+You want to do that in Linear, with the discussion kept alongside the work it concerns.
+
+## How to do it
+
+Write a comment on the corresponding Linear issue.
+When you are responding to an existing question or update, reply in that thread.
+Describe the outcome you want and link a screenshot, plan section, or artifact when it helps.
+
+For example:
+
+> The invitation flow looks good so far.
+> Please make the expiry clearer, add a way to revoke an invitation, and show me the revised screen before continuing.
+
+You can put several feedback points in one comment.
+You do not need a separate thread for every sentence or a new issue for each revision.
+
+A request for changes does not approve the current artifact.
+When you want to authorize the next step, explicitly [approve the plan](/guides/approve-plan/), [approve the deliverable](/guides/approve-deliverable/), or [authorize the merge](/guides/merge-pr/).
+
+## What happens
+
+Firstmate receives your comment with its issue and conversation context.
+It interprets the feedback and decides how to respond or update the crew's assignment.
+Firstmate replies directly in the same Linear thread, explaining the next action or asking for clarification.
+
+The issue keeps the conversation and any revised materials together.
+Receiving the comment, delivering it to Firstmate, and completing your requested change are distinct steps.
+An acknowledgment does not mean the revision is finished, and unresolved feedback should remain visible while other work continues.
+
+If you request a pause or cancellation, wait for Firstmate to confirm the execution change.
+A comment or status edit alone does not prove that a running worker stopped.
+
+## How it works
+
+FM Linear retrieves comments from Linear, matches them to connected Firstmate tasks, and delivers them through the Firstmate adapter.
+Firstmate supplies the response; FM Linear publishes it using the original thread reference.
+
+<WorkflowFlow {...feedbackFlow} />
+
+1. **Retrieve the comment.**
+   FM Linear polls Linear every 30 seconds by default and saves incoming comments with their authors and thread context.
+2. **Deliver the context.**
+   The saved issue-to-task connection identifies the Firstmate work that the comment concerns.
+   Pending delivery survives a restart; delivery confirmation is separate from resolving the request.
+3. **Publish the response.**
+   Firstmate interprets the feedback and coordinates the crew.
+   FM Linear publishes the reported response in the same Linear thread.
+
+<span id="what-happens-next"></span>
+
+See [why FM Linear polls instead of receiving webhooks](/reference/messages/#why-polling-instead-of-webhooks) for the tradeoff behind the default interval.
+
+Read [Sending messages](/reference/messages/) for delivery mechanisms and their limits.
+For a lasting process change, ask Firstmate to update the saved [workflow configuration](/reference/configuration/#maintain-the-workflow).

@@ -1,0 +1,12 @@
+---
+import MobileIssueExample from './MobileIssueExample.astro';
+import { linearScreenshot } from '../data/visuals';
+---
+<section class="integration-showcase" aria-label="Firstmate and Linear integration">
+  <figure class="linear-figure">
+    <div class="image-label"><span>LINEAR / BOARD VIEW</span><a href={linearScreenshot.src} target="_blank" rel="noreferrer">View full screenshot <span aria-hidden="true">↗</span></a></div>
+    <img class="linear-screenshot" src={linearScreenshot.src} alt={linearScreenshot.alt} width={linearScreenshot.width} height={linearScreenshot.height} loading="eager" fetchpriority="high" />
+    <figcaption>Generic product screenshot from <a href={linearScreenshot.source}>Linear’s documentation</a>. An FM Linear workspace example will replace it.</figcaption>
+  </figure>
+  <MobileIssueExample />
+</section>

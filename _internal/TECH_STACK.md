@@ -49,7 +49,7 @@ Pin tool versions and commit the dependency lockfile for reproducible builds.
 
 ## Platform support
 
-Target macOS, Windows, and Linux.
-Verify the chosen runtime, FirstMate integration, and release toolchain on all three.
+Target macOS and Linux.
+Verify the chosen runtime, FirstMate integration, and release toolchain on both platforms.
 Specific operating-system versions and CPU architectures remain to be defined.
 Platform service mechanisms and artifact hosting technologies remain open selections; their requirements are in [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md).
