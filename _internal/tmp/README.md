@@ -5,12 +5,16 @@ It holds development status, implementation proposals, and research checkpoints 
 These documents guide the work; they do not establish that a capability is implemented or verified.
 
 Lasting architecture, domain definitions, technology choices, and engineering practices belong in the parent [`_internal`](../) directory.
-Test requirements also stay there because they describe behavior that future changes must continue to protect.
+Lasting test requirements also stay there because they describe behavior that future changes must continue to protect.
+Detailed first-release verification scenarios belong here; reusable harness procedures should move beside the tests as they are implemented.
 
 ## Working documents
 
 | Document | Purpose |
 | --- | --- |
+| [TEST_VERIFICATION.md](TEST_VERIFICATION.md) | Detailed first-release test scenarios, separate from lasting risks and required evidence. |
+| [Secondmate support plan](../../plan.md) | Active Markdown plan for extending the adapter to registered secondmate homes. |
+| [SECONDMATE_REVIEW.md](SECONDMATE_REVIEW.md) | Implemented adapter scope, live read evidence, and manual secondmate checks. |
 | [WORK_CONTEXT_PLAN.mdx](WORK_CONTEXT_PLAN.mdx) | Pending work and conversation context plan, preserved while secondmate adapter support is reviewed. |
 | [FIRSTMATE_ADAPTER_PLAN.mdx](FIRSTMATE_ADAPTER_PLAN.mdx) | Approved plan for the first-pass adapter, preserved before planning the next subsystem. |
 | [EARLY_FIRSTMATE_CHECK.md](EARLY_FIRSTMATE_CHECK.md) | Historical-source compatibility check and operation-gate evidence. |

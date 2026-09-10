@@ -112,7 +112,8 @@ Passing the other home's task to the first adapter produces `firstmate.scope_mis
 ### 3. Brief instructions and missing preparation
 
 ```sh
-<```
+bun run scripts/review.ts briefs
+```
 
 Open the authored and launch brief paths printed by the helper.
 The captain's assignment remains intact, and the recap instruction appears once in the managed section.

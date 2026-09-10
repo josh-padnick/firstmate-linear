@@ -8,8 +8,9 @@ The [adapter review guide](tmp/ADAPTER_REVIEW.md) provides runnable commands and
 ## Purpose
 
 Use this guide to decide which tests a change needs and where those tests belong.
-Use [TEST_REQUIREMENTS.md](TEST_REQUIREMENTS.md) to find the verification requirements for the capability you are changing.
+Use [TEST_REQUIREMENTS.md](TEST_REQUIREMENTS.md) to find lasting risks and required evidence for the capability you are changing.
 Consult only the relevant sections after choosing a test level.
+Detailed first-release scenarios live in [the verification notes](tmp/TEST_VERIFICATION.md).
 Harness construction belongs in [the implementation notes](tmp/IMPLEMENTATION_NOTES.md#test-harness-construction).
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for subsystem ownership, [ERRORS.md](ERRORS.md) for failure semantics, and [LOGGING.md](LOGGING.md) for diagnostic contracts.

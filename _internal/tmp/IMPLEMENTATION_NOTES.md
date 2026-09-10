@@ -342,16 +342,16 @@ The coverage checklist moved from the public Compatibility page is:
 
 - **Task-brief preparation.**
   The existing brief-copy path is verified, but ensuring preparation on every dispatch remains unresolved.
-  See [Updating task briefs](/reference/firstmate/).
+  See [Updating task briefs](../../docs/src/content/docs/reference/firstmate.md).
 - **Task tracking.**
   Automatic coverage for independently created child tasks, replacement attempts, and work moved between homes still needs verification.
 - **Observations and dependencies.**
   Task queries must be verified for the selected backlog backend, including whether they return a complete dependency graph or only unresolved blockers.
   Missing observations remain unknown.
-  See [Synchronizing issues](/reference/synchronization/).
+  See [Synchronizing issues](../../docs/src/content/docs/reference/synchronization.md).
 - **Message delivery.**
   The process-event binding, selected worker-message path, acknowledgment, and retry semantics need verification for each supported target.
-  See [Sending messages](/reference/messages/).
+  See [Sending messages](../../docs/src/content/docs/reference/messages.md).
 - **Reports and optional execution details.**
   The structured reporting interface and Herdr panel lookup still need implementation and verification.
   An available upstream script does not establish coverage of the entire integration.
@@ -427,6 +427,7 @@ Exact runtime hooks, fingerprint dependencies, report schema, and command implem
 ## Test harness construction
 
 [TESTING.md](../TESTING.md) guides test selection and [TEST_REQUIREMENTS.md](../TEST_REQUIREMENTS.md) identifies the required evidence by capability.
+Use [TEST_VERIFICATION.md](TEST_VERIFICATION.md) for detailed first-release scenarios to exercise with these fixtures.
 This section records construction guidance for the proposed fixtures; those fixtures are not implemented yet.
 Move concrete commands and helper usage beside the harness when it exists, retaining a pointer here.
 
