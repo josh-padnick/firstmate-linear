@@ -7,7 +7,7 @@ import { freshness, getFirstmateFleet, normalizeHome, primaryRoute } from "../sr
 import { FleetReader } from "../src/firstmate/fleet-reader";
 import { FleetDocument, parseFleet } from "../src/firstmate/fleet-schema";
 import { FleetStore } from "../src/firstmate/fleet-store";
-import { readRoutedTask } from "../src/firstmate/routed-task";
+import { RoutedHomeReader } from "../src/firstmate/routed-task";
 import { AdapterStore } from "../src/firstmate/store";
 import { Digest, type FirstmateInstallation, HomeId, TaskId } from "../src/firstmate/types";
 import { hash } from "../src/support/files";
@@ -158,15 +158,13 @@ test("SQLite upgrade preserves receipts; home identity survives restart, outages
     await writeFile(join(root, "data", "secondmates.md"), "changed registry");
     store.put(i.homeId, "fleet", "registry-revision", { revision: hash("changed registry") });
     await expect(
-      readRoutedTask(
+      new RoutedHomeReader(
         i,
         store,
-        heldHome.route,
-        heldHome.work[0].task,
         new FleetReader(i, async () => {
           throw new Error("A held route must not execute");
         }),
-      ),
+      ).readTask(heldHome.work[0].task),
     ).rejects.toMatchObject({ code: "firstmate.route_changed" });
     const persistence = new FleetStore(store, i.homeId);
     const lease = persistence.acquire(Date.now());

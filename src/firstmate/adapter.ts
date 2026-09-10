@@ -7,7 +7,7 @@ import { FleetStore } from "./fleet-store";
 import type { FleetReadOptions } from "./fleet-types";
 import { getFirstmateInstallation } from "./installation";
 import { receiveMessage, sendMessage } from "./messages";
-import { checkRoutedBrief, readRoutedTask } from "./routed-task";
+import { RoutedHomeReader } from "./routed-task";
 import { AdapterStore } from "./store";
 import { readFirstmateTask } from "./task";
 import {
@@ -70,17 +70,9 @@ export class FirstmateAdapter {
     const task = TaskRef.parse(input);
     if (task.homeId !== this.installation.homeId) {
       await requireCapability(this.installation, this.store, "routed-reads");
-      const route = new FleetStore(this.store, this.installation.homeId)
-        .routes()
-        .find((r) => r.owner.homeId === task.homeId);
-      if (!route)
-        throw new FmError(
-          "firstmate.scope_mismatch",
-          "The task's owning home has not been discovered through this primary.",
-        );
       try {
         return this.withSuggestions(
-          await readRoutedTask(this.installation, this.store, route, task),
+          await new RoutedHomeReader(this.installation, this.store).readTask(task),
         );
       } catch (error) {
         if (
@@ -131,15 +123,7 @@ export class FirstmateAdapter {
   ) {
     if (attempt.task.homeId !== this.installation.homeId) {
       await requireCapability(this.installation, this.store, "routed-reads");
-      const route = new FleetStore(this.store, this.installation.homeId)
-        .routes()
-        .find((r) => r.owner.homeId === attempt.task.homeId);
-      if (!route)
-        throw new FmError(
-          "firstmate.scope_mismatch",
-          "The task's owning home has not been discovered.",
-        );
-      return checkRoutedBrief(this.installation, this.store, route, receipt, attempt);
+      return new RoutedHomeReader(this.installation, this.store).checkBrief(receipt, attempt);
     }
     await requireCapability(this.installation, this.store, "briefs");
     return checkBrief(this.installation, receipt, attempt);

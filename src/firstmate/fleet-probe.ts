@@ -9,7 +9,7 @@ import { parseFleet } from "./fleet-schema";
 import { FleetStore } from "./fleet-store";
 import { getFirstmateInstallation } from "./installation";
 import type { IsolatedFirstmate } from "./isolation";
-import { checkRoutedBrief, readRoutedTask } from "./routed-task";
+import { RoutedHomeReader } from "./routed-task";
 import { AdapterStore } from "./store";
 import { AttemptId, TaskId } from "./types";
 
@@ -155,7 +155,8 @@ exec /bin/bash "$root/bin/\${args[0]}" "\${args[@]:1}"
       revision: await reader.registryRevision(),
     });
     const task = { homeId: route.owner.homeId, taskId: TaskId.parse("child-24") };
-    const snapshot = await readRoutedTask(installation, store, route, task, reader);
+    const routed = new RoutedHomeReader(installation, store, reader);
+    const snapshot = await routed.readTask(task);
     if (
       snapshot.presence !== "found" ||
       snapshot.attempt?.attemptId !== "attempt-24" ||
@@ -168,10 +169,7 @@ exec /bin/bash "$root/bin/\${args[0]}" "\${args[@]:1}"
     const text = instructionBlock("Create a review recap.", "v1");
     await mkdir(join(child, "data", "child-24"), { recursive: true });
     await writeFile(join(child, "data", "child-24", "launch-brief.md"), text);
-    const check = await checkRoutedBrief(
-      installation,
-      store,
-      route,
+    const check = await routed.checkBrief(
       {
         receiptId: crypto.randomUUID(),
         task,
@@ -182,7 +180,6 @@ exec /bin/bash "$root/bin/\${args[0]}" "\${args[@]:1}"
         updatedAt: new Date().toISOString(),
       },
       { task, attemptId: AttemptId.parse("attempt-24") },
-      reader,
     );
     if (check.status !== "included")
       throw new FmError(

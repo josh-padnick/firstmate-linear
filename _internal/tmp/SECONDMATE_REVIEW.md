@@ -23,6 +23,20 @@ The adapter does not create Linear issues, resolve workflow policy, schedule pol
 Remote brief writes remain unsupported.
 Instruction checks verify an exact managed instruction block; they do not certify a paraphrase or agent compliance.
 
+### Detailed-read ownership
+
+`RoutedHomeReader` in `src/firstmate/routed-task.ts` resolves saved home identities and verifies registered routes for task reads and brief checks.
+Callers supply home-qualified task references; they do not look up or supply transport routes.
+The module checks the saved hold and registry revision before reading, then checks the registry again before returning evidence.
+A registry change rejects a task result and marks brief evidence `not-verified`.
+`FirstmateAdapter` still owns capability checks and the last-known fallback when a task read fails.
+`FleetReader` owns bounded transport, and `FleetStore` owns durable identities, observations, and scan leases.
+
+The detailed-read tests in `tests/routed-task.test.ts` exercise both local and remote reads through this interface.
+They use real SQLite and local files with controlled transport and registry observations to verify held, missing, stale, and foreign evidence, plus changes during a read.
+Static checks alone cannot prove that persisted evidence is scoped to the correct primary or that a result is discarded after the registry changes.
+The existing upstream contract and compiled CLI tests continue to verify the actual Firstmate scripts in isolated homes.
+
 ## Before you start
 
 Build the executable:
