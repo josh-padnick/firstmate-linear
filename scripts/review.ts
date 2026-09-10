@@ -129,7 +129,7 @@ try {
       output.step("Check the installed contracts");
       output.say("   Binding and checking the disposable extension...");
       await messageProbe(fixture);
-      capabilities(await adapter.testFirstmateInstallation(), {
+      capabilities(await adapter.testFirstmateInstallation(["task-state", "briefs", "messages"]), {
         "task-state": "passed",
         briefs: "passed",
         messages: "passed",

@@ -11,7 +11,7 @@ import { hash, readBounded } from "../support/files";
 import { type FirstmateInstallation, HomeId } from "./types";
 
 export const ADAPTER_VERSION = "0.1.0";
-export const SUITE_VERSION = "2";
+export const SUITE_VERSION = "3";
 export async function fingerprintTree(root: string): Promise<string[]> {
   const entries: string[] = [];
   async function walk(dir: string, prefix: string) {

@@ -37,7 +37,7 @@ test("installed contracts pass in OS isolation and a changed script invalidates 
       ),
     ).rejects.toMatchObject({ code: "firstmate.capability_held" });
     await messageProbe(fixture);
-    const report = await adapter.testFirstmateInstallation();
+    const report = await adapter.testFirstmateInstallation(["task-state", "briefs", "messages"]);
     expect(report.capabilities.map((c) => [c.capability, c.status])).toEqual([
       ["task-state", "passed"],
       ["briefs", "passed"],

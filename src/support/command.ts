@@ -9,6 +9,11 @@ export interface CommandResult {
 }
 // Labels are authored here, never derived from private argv, paths, or child output.
 const operations = {
+  "fleet-read": {
+    label: "Firstmate's fleet read",
+    nextAction:
+      "Check the registered home's availability and retry. Previous observations remain last-known.",
+  },
   command: {
     label: "The Firstmate command",
     nextAction: "Run fm-linear test with the same required options.",

@@ -14,14 +14,19 @@ Windows is not supported.
 
 ## Check your Firstmate installation
 
-The proposed compatibility command is:
+Run the compatibility command with your installation paths:
 
 ```sh
-fm-linear test
+fm-linear test --home /path/to/firstmate-home \
+  --code-root /path/to/firstmate --state /path/to/private/fm-linear.sqlite
 ```
 
 It checks the configured Firstmate installation and reports the FM Linear version, Firstmate commit, relevant local modifications, and integration capabilities tested.
-The command still needs implementation; the behavior below defines its intended contract.
+The adapter command is implemented; automatic service-start and change-detection checks below belong to the service lifecycle still to be built.
+
+Use `--capability fleet` to test full task inventory and `--capability routed-reads` to test registered routing, task reads, and launch evidence.
+The routed fixture replaces SSH with a local transport boundary while running the actual Firstmate scripts.
+It does not certify the remote job runner or fingerprint the remote checkout; live responses are validated when read.
 
 Checks should exercise the command behavior and data formats FM Linear depends on, including reading task state, preparing briefs, handling external events, and the selected message and dependency interfaces.
 Read-only checks inspect the installed configuration.

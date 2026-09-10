@@ -4,6 +4,10 @@ import { z } from "zod";
 export const errorCodes = {
   "config.invalid": "Check the supplied input and retry.",
   "firstmate.scope_mismatch": "Select the Firstmate home that owns this task.",
+  "firstmate.route_changed":
+    "Restore the original registered route before retrying. Replacing a home requires a new secondmate ID so existing task links stay intact.",
+  "firstmate.scan_busy": "Wait for the current fleet read to finish, then retry.",
+  "firstmate.read_backoff": "Wait for the retry time or use fleet --refresh for an explicit read.",
   "firstmate.contract_failed": "Run fm-linear test and inspect the affected capability.",
   "firstmate.capability_held":
     "Run fm-linear test against the current installation before retrying.",

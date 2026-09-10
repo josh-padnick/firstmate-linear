@@ -2,132 +2,84 @@
 
 Track delegated work through the primary Firstmate without installing FM Linear on secondmates or asking agents for routine status.
 
-<QuickSummary>
-<Why>
+**Status: Implemented for adapter review.**
+See the [review guide](_internal/tmp/SECONDMATE_REVIEW.md) for current interfaces, verified scope, and manual checks.
+Extend the Firstmate adapter before building the work and conversation context subsystem.
+
+## Summary
 
 - Keep delegated work visible without interrupting the crew.
+- Discover and inspect secondmate tasks through the primary Firstmate, with one FM Linear installation.
+- Preserve task identity, observation age, and incomplete evidence.
+- Route instructions through the primary and verify the limits of agent forwarding.
 
-</Why>
-<What>
+## Context
 
-- Extend the adapter to discover and inspect secondmate tasks through Firstmate.
-
-</What>
-<How>
-
-- Read structured records and preserve their freshness.
-- Route instructions through the primary Firstmate.
-- Test task identity, missing evidence, and recovery before release.
-
-</How>
-</QuickSummary>
-
-<TableOfContents>
-<Entry section="Status quo" gist="Local task reads work; secondmate summaries need a new contract." />
-<Entry section="Desired outcome" gist="See delegated tasks without installing another integration." />
-<Entry section="Keep one integration at the primary home" gist="Firstmate owns remote transport and agent coordination." />
-<Entry section="Read facts without asking agents" gist="Scripts publish and collect structured home summaries." />
-<Entry section="Treat summaries as discovery hints" gist="Bounded summaries cannot establish a complete task inventory." />
-<Entry section="Give each home and task an explicit identity" gist="Separate owners, task names, attempts, and remote routes." />
-<Entry section="Measure freshness before choosing a faster cadence" gist="A 30-second poll cannot refresh a five-minute-old source." />
-<Entry section="Keep missing information distinct from missing tasks" gist="Do not infer completion from absence or transport failures." />
-<Entry section="Deliver instructions through the primary" gist="Forwarding remains agentic; receipt does not prove child compliance." />
-<Entry section="Use agents only for decisions and missing meaning" gist="Deduplicate questions and measure message volume." />
-<Entry section="Expose home-aware adapter operations" gist="Add fleet discovery while preserving existing local interfaces." />
-<Entry section="Keep downstream responsibilities in their subsystems" gist="The adapter observes; other modules decide and publish." />
-<Entry section="Build four increments for adapter review" gist="Prove upstream behavior before exposing discovery and CLI support." />
-<Entry section="Test the boundaries that can mislead the captain" gist="Exercise actual scripts with controlled records and transport." />
-<Entry section="Try four checks on the laptop and Mac Mini" gist="Verify identity, visibility, staleness, and delegated instructions." />
-<Entry section="Acceptance criteria" gist="Separate adapter acceptance from complete v1 integration." />
-<Entry section="Evidence and unresolved contracts" gist="Pin the research and identify what implementation must establish." />
-</TableOfContents>
-
-<Part title="Context" />
-
-<Slide type="status-quo" />
-## One task read does not describe a secondmate's crew
+### One task read does not describe a secondmate's crew
 
 - The adapter checks an explicitly selected installation and reads one task from its home.
-- The local `big-plan` record represents the secondmate; it is not the inventory of that secondmate's tasks.
+- A primary home's record for a secondmate represents that agent, not an inventory of its child tasks.
 - The compatibility probe covers a local Claude/scout worker, not the fleet snapshot or remote routes.
 - Firstmate already publishes structured home summaries and retrieves remote summaries using its own scripts.
-- Existing work and conversation planning is preserved in `_internal/tmp/WORK_CONTEXT_PLAN.mdx`; this adapter extension comes before that subsystem.
+- The [work and conversation context plan](_internal/tmp/WORK_CONTEXT_PLAN.mdx) remains pending.
+  This adapter extension comes first.
 
-<Slide type="desired-outcome" />
-## The captain can inspect delegated work without asking for updates
+### Desired outcome
 
-- List tasks owned by the primary and its registered secondmates, with the owning home clearly shown.
-- Inspect `bp-big299-table-controls` on the Mac Mini without installing FM Linear there.
-- See when a task was observed and whether the available inventory is incomplete.
+See work delegated to secondmates across local and remote machines through one FM Linear installation.
+
+- List tasks owned by the primary and its registered secondmates, with the owning home shown.
+- See each task's observation time and whether the available inventory is incomplete.
 - Continue talking to the primary Firstmate; it coordinates requests, approvals, and secondmate instructions.
 - Approve the adapter independently before building the remaining Linear synchronization subsystems.
 
-<Part title="Design" />
+## Design
 
-## Keep one integration at the primary home
+### Keep one integration at the primary home
 
 **The problem.** A second FM Linear installation would add configuration, credentials, and coordination that the user's existing setup does not need.
 
-- **[DECISION]** Run FM Linear beside the primary Firstmate; use its registered homes and existing transport.
-- Local secondmate homes can be read through the installed Firstmate scripts with an explicit home selection.
+- **Decision:** Run FM Linear beside the primary Firstmate; use its registered homes and existing transport.
+- Read local secondmate homes through the installed Firstmate scripts with an explicit home selection.
 - Remote reads go through `fm-on.sh`, using Firstmate's registered secondmate ID; FM Linear does not invent SSH routes.
 - Secondmates receive normal Firstmate assignments, not FM Linear configuration or Linear credentials.
-- **[NON-GOAL]** Do not launch, supervise, restart, upgrade, or install software on secondmates.
-- Support directly registered local and remote secondmates first; nested delegation is disclosed as outside verified coverage rather than recursively traversed without bounds.
+- **Out of scope:** Do not launch, supervise, restart, upgrade, or install software on secondmates.
+- Support directly registered local and remote secondmates first.
+  Report nested delegation as outside verified coverage rather than traversing it without bounds.
 
-## Read facts without asking agents
+### Read facts without asking agents
 
 **The problem.** Asking an agent to narrate every state change is noisy and can miss updates.
 
 The captain asks the primary Firstmate for work; it delegates assignments to a secondmate, whose normal task commands maintain the task records.
 
-<FlowDiagram>
-  <Stage id="secondmate-records" title="Record work">
-    <Node id="records" label="Secondmate task records" tone="source">
+1. **Secondmate records:** Normal task commands maintain records in the secondmate's home.
+2. **Home summary:** Scripts publish those records as a structured summary.
+3. **Primary snapshot:** Firstmate's existing transport collects the summaries.
+4. **Adapter observations:** FM Linear reads the snapshot and associates each observation with its owning home.
+5. **Linear updates:** Work context and workflow rules turn observations into intended updates for Linear publication.
 
-Scripts publish a structured home summary.
-
-</Node>
-  </Stage>
-  <Stage id="primary-snapshot" title="Collect observations">
-    <Node id="snapshot" label="Primary fleet snapshot">
-
-Firstmate's existing transport reads the home summaries.
-
-</Node>
-  </Stage>
-  <Stage id="adapter-read" title="Normalize facts">
-    <Node id="adapter" label="Firstmate adapter" tone="destination">
-
-FM Linear reads the snapshot and returns observations qualified by home.
-
-</Node>
-  </Stage>
-  <Edge from="records" to="snapshot" label="Summarizes" />
-  <Edge from="snapshot" to="adapter" label="Feeds" />
-
-Work context and workflow rules turn these observations into intended Linear updates.
-Only exceptional questions are sent back to the primary Firstmate agent.
-</FlowDiagram>
+Only exceptional questions go back to the primary Firstmate agent.
 
 - `fm-fleet-snapshot.sh --json` is the primary observation interface.
 - `fm-home-summary-refresh.sh` publishes each home's summary from structured records, independently of conversational reports.
 - The primary snapshot retrieves `state/home-summary.json` through `fm-on.sh` and may refresh its local observation cache.
 - A successful script read is evidence about records, not proof that a deliverable is correct or deployed.
 
-## Treat summaries as discovery hints
+### Treat summaries as discovery hints
 
 **The problem.** Summary arrays are capped and omit some fields needed for reliable task identity and execution tracking.
 
 - The installed summary defaults include 20 secondmates and 20 children per summary; it reports omitted records.
 - Child summaries omit `spawn_gen`; FM Linear must not invent an execution-attempt ID from a timestamp or task name.
-- Read each selected home's full `fm-fleet-snapshot.sh --json` when establishing its inventory, then periodically reconcile it; remote calls still use the primary's `fm-on.sh`.
+- To establish an inventory, read each selected home's full `fm-fleet-snapshot.sh --json`, then periodically reconcile it.
+  Remote calls still use the primary's `fm-on.sh`.
 - Use the full snapshot's local `tasks` and structured backlog records; do not recursively enroll its nested secondmate summaries.
 - Read a known task's state and metadata through existing Firstmate interfaces when detailed or newer evidence is needed, checking generation before and after.
-- **[CONSTRAINT]** Bound bytes, duration, and concurrency; if the full inventory cannot be obtained, return partial coverage and retain prior tasks.
+- **Constraint:** Bound bytes, duration, and concurrency; if the full inventory cannot be obtained, return partial coverage and retain prior tasks.
 - Prove this full-read path in the first increment; a truncated summary alone cannot satisfy the inventory acceptance criterion.
 
-## Give each home and task an explicit identity
+### Give each home and task an explicit identity
 
 **The problem.** Two machines can contain the same task name and filesystem path.
 
@@ -140,11 +92,12 @@ Only exceptional questions are sent back to the primary Firstmate agent.
 
 - Preserve existing local home IDs and stored receipts; allocate persisted child home IDs within the primary connection's namespace.
 - Bind routes to those IDs; a host alias or directory alone is not a global identity.
-- If a registered route changes, hold affected operations until its identity is checked; never silently reuse links for a replacement home.
+- If a registered route changes, hold affected operations until the adapter checks its identity.
+  Never silently reuse links for a replacement home.
 - Owning-home relationships identify delegation ownership, not necessarily the original request or a Linear issue.
 - A task ID reused without verifiable attempt evidence remains ambiguous for attempt-sensitive updates.
 
-## Measure freshness before choosing a faster cadence
+### Measure freshness before choosing a faster cadence
 
 **The problem.** Reading a cached summary every 30 seconds does not make its source 30 seconds old.
 
@@ -156,9 +109,9 @@ Only exceptional questions are sent back to the primary Firstmate agent.
 - Measure latency and command duration on the real setup before selecting a faster producer cadence; do not change Firstmate's configuration automatically.
 - Serialize overlapping scans, cap concurrent home reads, and back off unavailable routes without waking agents.
 
-## Keep missing information distinct from missing tasks
+### Keep missing information distinct from missing tasks
 
-**The problem.** The CLI currently reports `unknown` for both absent task metadata and unreadable task activity.
+**The problem.** The CLI reports `unknown` for both absent task metadata and unreadable task activity.
 
 - Return task presence separately: `found`, `not-found`, or `not-verified`, together with the observation source and owning home.
 - A confirmed missing exact ID can report `not-found`; an unavailable remote read cannot.
@@ -168,7 +121,7 @@ Only exceptional questions are sent back to the primary Firstmate agent.
 - Store task generations and observation times so old snapshots cannot overwrite evidence from newer attempts.
 - A `done` secondmate record never completes all work owned by that secondmate.
 
-## Deliver instructions through the primary
+### Deliver instructions through the primary
 
 **The problem.** Observing a child task does not provide a guaranteed pre-dispatch instruction hook.
 
@@ -176,11 +129,12 @@ Only exceptional questions are sent back to the primary Firstmate agent.
 - Send that context to the primary using the existing process-event adapter; ask it to carry the requirements into the secondmate assignment.
 - Firstmate retains control of forwarding through `fm-send.sh` and its normal steering and correlated parent-report channels.
 - Verify a child's actual launch brief when an existing bounded read can establish its identity and generation; otherwise report instruction inclusion as unverified.
-- If a requirement was missed, send one tracked corrective request through the primary; do not repeatedly send the entire assignment.
+- If launch evidence omits a requirement, send one tracked corrective request through the primary.
+  Do not repeatedly send the entire assignment.
 - Do not extend `updateFirstmateBrief` to write remote files or ask secondmates to run FM Linear commands in v1.
-- **[CONSTRAINT]** This preserves the existing agentic limitation: delivery to the primary does not guarantee forwarding before every child launch or compliance afterward.
+- **Constraint:** This preserves the existing agentic limitation: delivery to the primary does not guarantee forwarding before every child launch or compliance afterward.
 
-## Use agents only for decisions and missing meaning
+### Use agents only for decisions and missing meaning
 
 **The problem.** A polling integration can overwhelm the primary if each observation becomes a message.
 
@@ -188,11 +142,12 @@ Only exceptional questions are sent back to the primary Firstmate agent.
 - Ask only when missing meaning blocks a concrete action, such as identifying the accepted deliverable after a worker stops.
 - Deduplicate by work, attempt, question purpose, and relevant evidence version; keep one outstanding request per unresolved question.
 - Batch compatible questions and related comments for the same work, preserving individual request IDs and approval scope.
-- A structured response keeps the FM Linear request ID; Firstmate's internal parent correlation tokens are separate and must not be assumed identical.
+- A structured response keeps the FM Linear request ID.
+  Firstmate's internal parent correlation tokens are separate; do not assume they are identical.
 - Record scan count, source age, scan duration, stale homes, omitted records, material changes, agent requests, and unresolved-request age.
 - Measure routine discovery's zero-message target directly; report per-work message counts alongside totals rather than inferring noise from token estimates.
 
-## Expose home-aware adapter operations
+### Expose home-aware adapter operations
 
 **The problem.** Callers need useful observations without learning Firstmate's files, SSH commands, or snapshot schemas.
 
@@ -209,7 +164,7 @@ Only exceptional questions are sent back to the primary Firstmate agent.
 - Show owning home, presence, current or last-known state, observation time, and coverage in human output; JSON and TOON retain full typed results.
 - Reject cross-home brief updates through the existing local method; only the new verified read path expands task lookup scope.
 
-## Keep downstream responsibilities in their subsystems
+### Keep downstream responsibilities in their subsystems
 
 Each subsystem owns one part of secondmate support.
 
@@ -228,9 +183,9 @@ Each subsystem owns one part of secondmate support.
 - Deterministic issue enrollment consumes stable task identities later; matching similar titles or assuming one issue per secondmate is forbidden.
 - Dependency IDs remain owning-home-qualified; truncated or ambiguous references must not become Linear blocking relationships.
 
-<Part title="Implementation and review" />
+## Implementation and review
 
-## Build four increments for adapter review
+### Build four increments for adapter review
 
 Each increment produces a concrete adapter capability before live review.
 
@@ -239,36 +194,38 @@ Each increment produces a concrete adapter capability before live review.
 | 1. Verify upstream reads | Executable fixtures proving fleet collection, full child inventory, routed reads, and their limits. |
 | 2. Normalize identity and coverage | Typed observations and SQLite persistence for homes, tasks, attempts, freshness, and partial results. |
 | 3. Expose discovery and inspection | Human, JSON, and TOON output for fleet listing and a task selected by secondmate. |
-| 4. Validate the real setup | A review guide with measured laptop-to-Mac-Mini discovery latency, outage behavior, and routing evidence. |
+| 4. Validate the real setup | A review guide with measured discovery latency between primary and remote homes, outage behavior, and routing evidence. |
 
 - Finish and review these as an extension to the Firstmate adapter before starting the work and conversation context subsystem.
 - Publish fresh compatibility evidence; do not reuse the local-only task probe as proof of secondmate coverage.
 - The later context, workflow, delivery, and publication milestones consume these interfaces to complete v1 Linear behavior.
 - Report instruction propagation as a separately verified agentic path; do not make unconditional dispatch guarantees a hidden definition of done.
 
-## Test the boundaries that can mislead the captain
+### Test the boundaries that can mislead the captain
 
 - **Static and unit:** schemas, home identity, freshness calculations, duplicate detection, truncated fields, out-of-order evidence, and exact task lookup.
 - **Component integration:** actual Firstmate snapshot and summary scripts with disposable local and simulated remote homes, plus the real SQLite migration.
 - **Transport fixtures:** fake only the SSH or terminal boundary; exercise Firstmate's routing scripts, timeout handling, cached summaries, and isolated file reads.
 - **Inventory:** exceed the summary's child limit; discover records through the full read or explicitly report incomplete coverage without deleting prior records.
 - **Process:** verify `fleet`, secondmate-qualified `task`, formats, exit codes, and absence of unrequested message sends.
-- **Controlled live:** compare script evidence and resulting FM Linear observations on the laptop and Mac Mini; run no paid agents during ordinary automated tests.
-- Follow `_internal/TESTING.md`: name the regression each added test catches and choose the lowest level that can expose it.
+- **Controlled live:** compare script evidence and FM Linear observations in the primary and a registered remote home.
+  Run no paid agents during ordinary automated tests.
+- Follow the [testing guide](_internal/TESTING.md): name the regression each added test catches and choose the lowest level that can expose it.
 
-## Try four checks on the laptop and Mac Mini
+### Four manual acceptance checks
 
-1. **Find the right work.** List the fleet and inspect one laptop task and one Mac Mini task; compare the owning home's actual records and attempt IDs.
+1. **Find the right work.** List the fleet and inspect an active task in each of the primary and a registered remote secondmate home.
+   Compare records and attempt IDs with the owning homes.
+   Do not install FM Linear in the secondmate home.
 2. **Measure a real change.** During ordinary authorized work, record when a child task appears or changes state, when its summary refreshes, and when FM Linear sees it.
 3. **Exercise loss and recovery.** Use a controlled route-failure fixture first; optionally interrupt only the read route during live review, then verify stale state, recovery, and zero repeated agent requests.
 4. **Follow one instruction and reply.** With captain approval, send a harmless requirement through the primary for a dedicated test assignment; inspect the child launch evidence and correlate its reply.
 
 - The guide will provide exact commands, expected results, cleanup, and which steps touch live Firstmate.
-- Actual Linear issue creation and threading are verified later with the publication and context subsystems.
+- Verify Linear issue creation and threading later with the publication and context subsystems.
 - The live instruction check establishes an observed successful path, not a guarantee that every future agent dispatch follows it.
 
-<Slide type="acceptance-criteria" />
-## Adapter acceptance requires accurate scope and visible uncertainty
+### Adapter acceptance requires accurate scope and visible uncertainty
 
 **Identity and discovery**
 
@@ -287,9 +244,9 @@ Each increment produces a concrete adapter capability before live review.
 - Documentation distinguishes verified task observation from agentic instruction forwarding; secondmates need no FM Linear installation.
 - Complete v1 still requires the separately reviewed context, workflow, delivery, and Linear publication integrations.
 
-## Evidence and unresolved contracts
+### Evidence and unresolved contracts
 
-- Research uses the local Firstmate checkout at `861b5dad2baaa0a64703a1b0c14fb4da9bda5269`; the Mac Mini's installed revision has not been checked.
+- Research uses the local Firstmate checkout at `861b5dad2baaa0a64703a1b0c14fb4da9bda5269`; remote installations have not yet been checked.
 - [Fleet snapshot](https://github.com/kunchenguid/firstmate/blob/861b5dad2baaa0a64703a1b0c14fb4da9bda5269/bin/fm-fleet-snapshot.sh) defines schemas, summaries, bounds, provenance, and full local task observations.
 - [Home summary refresh](https://github.com/kunchenguid/firstmate/blob/861b5dad2baaa0a64703a1b0c14fb4da9bda5269/bin/fm-home-summary-refresh.sh) and [watcher](https://github.com/kunchenguid/firstmate/blob/861b5dad2baaa0a64703a1b0c14fb4da9bda5269/bin/fm-watch.sh) establish publication and periodic refresh behavior.
 - [Remote routing](https://github.com/kunchenguid/firstmate/blob/861b5dad2baaa0a64703a1b0c14fb4da9bda5269/bin/fm-on.sh) and [bounded file reads](https://github.com/kunchenguid/firstmate/blob/861b5dad2baaa0a64703a1b0c14fb4da9bda5269/bin/fm-remote-file.sh) are existing read-through mechanisms, not FM Linear plugins on remote hosts.

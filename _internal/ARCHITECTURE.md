@@ -115,6 +115,11 @@ Normalize those observations for the rest of FM Linear while preserving their so
 Keep upstream-specific commands, state formats, and compatibility checks in this adapter.
 Prefer Firstmate's structured state interfaces over independent interpretations of raw status history.
 Keep unknown execution state explicitly unknown.
+Discover directly registered secondmate homes through the primary's fleet snapshot and use Firstmate's registered transport for full child inventories and detailed reads.
+Keep home identity separate from its route, and qualify each task by its owning home and execution generation.
+Retain last-known observations when inventory is unavailable or incomplete; a missing record does not establish completion.
+Routine discovery makes no agent requests.
+Messages still go to the primary, which owns forwarding to secondmates; remote observation does not create a guaranteed instruction-injection hook.
 Own a versioned behavioral contract suite for the installed Firstmate code, exposed through the proposed `fm-linear test` command and reused by setup and change-triggered checks.
 Scope results to the actual revision, relevant local changes, configuration, and environment; isolated test probes must not operate on live tasks or services.
 Invalidate results when their inputs change and hold only affected integration operations when a required contract fails or cannot be verified.

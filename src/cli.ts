@@ -36,6 +36,8 @@ function parseCliArgs() {
       capability: { type: "string", multiple: true },
       executable: { type: "string" },
       "message-id": { type: "string" },
+      secondmate: { type: "string" },
+      refresh: { type: "boolean" },
     },
   });
 }
@@ -89,6 +91,7 @@ async function main() {
   if (
     ![
       "installation",
+      "fleet",
       "test",
       "task",
       "brief-update",
@@ -128,12 +131,38 @@ async function main() {
         process.exitCode = report.capabilities.some((c) => c.status !== "passed") ? 1 : 0;
         break;
       }
-      case "task":
-        result = await adapter.getFirstmateTask({
-          homeId: adapter.installation.homeId,
+      case "fleet": {
+        const fleet = await adapter.getFirstmateFleet({
+          ...(values.secondmate ? { secondmateIds: [values.secondmate] } : {}),
+          refresh: values.refresh ?? false,
+        });
+        result = fleet;
+        process.exitCode = fleet.coverage === "complete" ? 0 : 1;
+        break;
+      }
+      case "task": {
+        let homeId = adapter.installation.homeId;
+        if (values.secondmate) {
+          const fleet = await adapter.getFirstmateFleet({
+            secondmateIds: [values.secondmate],
+            refresh: true,
+          });
+          const home = fleet.homes.find((h) => h.owner.secondmateId === values.secondmate);
+          if (!home || home.coverage === "held")
+            throw new FmError(
+              "firstmate.scope_mismatch",
+              "The selected secondmate is not available through a verified registered route.",
+            );
+          homeId = home.owner.homeId;
+        }
+        const snapshot = await adapter.getFirstmateTask({
+          homeId,
           taskId: TaskId.parse(positionals[1]),
         });
+        result = snapshot;
+        if (snapshot.readIssue) process.exitCode = 1;
         break;
+      }
       case "brief-update":
         result = await adapter.updateFirstmateBrief(BriefUpdate.parse(await payload()));
         break;

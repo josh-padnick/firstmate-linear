@@ -13,6 +13,10 @@ It does not show a running FM Linear integration.
 
 ## Firstmate adapter ready for review
 
+The adapter now reads full inventories in the primary and directly registered secondmate homes through Firstmate's existing transport.
+It retains home identity, source age, incomplete coverage, and last-known work in SQLite, and exposes `fleet` and secondmate-qualified `task` commands.
+The [secondmate review guide](SECONDMATE_REVIEW.md) records the scope, limitations, live evidence, and manual checks.
+
 The adapter implements installation checks, task reads, brief updates, launch checks, message delivery, and response capture.
 The [adapter review guide](ADAPTER_REVIEW.md) describes its seven interfaces and four runnable manual checks.
 Automated coverage uses real SQLite, process termination, and installed Firstmate scripts in isolated fixtures.

@@ -15,13 +15,29 @@ const commands: Record<string, CommandHelp> = {
   test: {
     usage: "test",
     description: "Check compatibility using isolated fixtures.",
-    options: [["--capability NAME", "Test task-state, briefs, or messages; repeat to select."]],
+    options: [
+      [
+        "--capability NAME",
+        "Test task-state, briefs, messages, fleet, or routed-reads; repeat to select.",
+      ],
+    ],
     example: "--capability task-state",
   },
   task: {
     usage: "task TASK_ID",
     description: "Read a Firstmate task's state and execution attempt.",
     example: "sample-task",
+    options: [
+      ["--secondmate ID", "Read a task owned by this registered secondmate through the primary."],
+    ],
+  },
+  fleet: {
+    usage: "fleet",
+    description: "List work in the primary and its registered secondmate homes.",
+    options: [
+      ["--secondmate ID", "Limit child discovery to one registered secondmate."],
+      ["--refresh", "Read now, bypassing failed-home retry backoff."],
+    ],
   },
   "brief-update": {
     usage: "brief-update",

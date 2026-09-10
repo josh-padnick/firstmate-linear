@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { commandEnvironment, runCommand } from "../support/command";
 import { FmError } from "../support/errors";
 import { runBriefProbe } from "./brief-probe";
+import { fleetProbe } from "./fleet-probe";
 import { ADAPTER_VERSION, getFirstmateInstallation, SUITE_VERSION } from "./installation";
 import { IsolatedFirstmate } from "./isolation";
 import { messageProbe } from "./message-probe";
@@ -20,7 +21,7 @@ import { InstallationCheckSchema } from "./types";
 export async function testFirstmateInstallation(
   installation: FirstmateInstallation,
   store: AdapterStore,
-  selected: Capability[] = ["task-state", "briefs", "messages"],
+  selected: Capability[] = ["task-state", "briefs", "messages", "fleet", "routed-reads"],
 ): Promise<FirstmateInstallationCheck> {
   const before = await getFirstmateInstallation(installation);
   const capabilities: CapabilityCheck[] = [];
@@ -59,6 +60,17 @@ export async function testFirstmateInstallation(
               status: "passed",
               evidence: [
                 "Exercised authored-brief creation, overwrite refusal, launch-copy preservation and spawn generation with a fake tmux harness. Only ship/local-only launch is covered.",
+              ],
+            });
+          } else if (capability === "fleet" || capability === "routed-reads") {
+            await fleetProbe(fixture, capability === "routed-reads");
+            capabilities.push({
+              capability,
+              status: "passed",
+              evidence: [
+                capability === "fleet"
+                  ? "Read 25 tasks with execution generations and a queued backlog item using the installed full snapshot producer in an isolated home. Summary child limits do not truncate this inventory."
+                  : "Exercised the installed fm-on.sh registered route and encoded argv with a simulated SSH boundary and real child snapshot producer. Live SSH, the remote job worker, and remote checkout fingerprinting are not certified; each live response is schema-validated.",
               ],
             });
           } else {

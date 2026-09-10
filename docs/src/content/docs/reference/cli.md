@@ -19,6 +19,8 @@ Run `fm-linear --help` to see the commands available in your build.
 | `fm-linear restart` | Stop and start the service using your saved configuration. |
 | `fm-linear status` | Show service health, connection status, and work waiting to synchronize. |
 | `fm-linear test` | Check whether the installed Firstmate code satisfies FM Linear's integration assumptions. |
+| `fm-linear fleet` | Read work in the primary and its directly registered secondmate homes. |
+| `fm-linear task TASK_ID --secondmate ID` | Inspect an exact task through its registered secondmate route. Omit `--secondmate` for the primary home. |
 | `fm-linear logs` | Show recent diagnostics to help explain a problem. |
 | `fm-linear metrics` | Summarize synchronization performance and how often FM Linear interrupts Firstmate. |
 | `fm-linear incidents` | Inspect integration problems and prepare a local report draft. |
@@ -27,6 +29,20 @@ Run `fm-linear --help` to see the commands available in your build.
 | `fm-linear --help` | List available commands and options. |
 
 ## Setup and configuration
+
+### Read the current fleet
+
+`fleet` and `task` currently require explicit `--home`, `--code-root`, and `--state` paths.
+Use `--format json` or `--format toon` for machine-readable output.
+Run `test --capability fleet --capability routed-reads` with those paths before reading secondmate work.
+
+`fleet --secondmate ID` selects one directly registered secondmate.
+Unavailable homes retain last-known work, with source age and incomplete coverage shown explicitly.
+`fleet --refresh` bypasses failed-read backoff; an explicit task inspection also requests a current read.
+No FM Linear installation is required in the secondmate home.
+
+The fleet command exits `1` when coverage is partial, while retaining available results in its output.
+A changed registered route is held so an existing task link cannot silently point to a replacement home.
 
 ### `fm-linear setup`
 

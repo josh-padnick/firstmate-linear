@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { encode } from "@toon-format/toon";
+import type { FirstmateFleetSnapshot } from "./firstmate/fleet-types";
 import { InstallationCheckSchema } from "./firstmate/types";
 import { FmError } from "./support/errors";
 import { logFailure } from "./support/logging";
@@ -53,6 +54,34 @@ function fields(value: unknown, indent = ""): string {
 export function formatResult(command: string, result: unknown, format: OutputFormat): string {
   if (format === "json") return JSON.stringify(result);
   if (format === "toon") return encode(result);
+  if (command === "fleet") {
+    const fleet = result as FirstmateFleetSnapshot;
+    return [
+      `Firstmate fleet - ${fleet.coverage} coverage`,
+      `Collected: ${fleet.collectedAt}\nRead time: ${(fleet.metrics.durationMs / 1000).toFixed(1)}s | Source reads: ${fleet.metrics.sourceReads} | Agent messages: ${fleet.metrics.agentMessages}`,
+      ...fleet.homes.map((home) =>
+        [
+          `${home.owner.secondmateId ?? "Primary"}${home.route.host ? ` (${plain(home.route.host)})` : ""}`,
+          `  Home: ${plain(home.route.home)}\n  ID: ${home.owner.homeId}`,
+          `  Coverage: ${home.coverage} | Source age: ${home.ageSeconds === null ? "unknown" : `${Math.round(home.ageSeconds)}s`} (${home.freshness})`,
+          ...(home.reasons.length ? [`  Notes: ${home.reasons.map(plain).join(", ")}`] : []),
+          ...(home.retryAfter ? [`  Retry after: ${home.retryAfter}`] : []),
+          "",
+          `  ${"Task".padEnd(40)}  ${"State".padEnd(25)}  Attempt`,
+          ...home.work.map(
+            (work) =>
+              `  ${plain(work.task.taskId).padEnd(40)}  ${plain(work.visibility === "last-known" ? `last-known: ${work.activity.state}` : work.backlogState && work.kind === "backlog" ? work.backlogState : work.activity.state).padEnd(25)}  ${work.attempt?.attemptId ?? "unknown"}`,
+          ),
+          ...(home.work.length ? [] : ["  No task records available."]),
+        ].join("\n"),
+      ),
+      ...(fleet.coverage === "partial"
+        ? [
+            "Some inventory could not be verified. Last-known work is retained; it is not a completion signal.",
+          ]
+        : []),
+    ].join("\n\n");
+  }
   if (command === "test") {
     const report = InstallationCheckSchema.parse(result);
     const checks = report.capabilities.map((check) => {

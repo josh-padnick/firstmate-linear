@@ -31,7 +31,7 @@ export class AdapterStore {
     const version = this.db
       .query<{ user_version: number }, []>("PRAGMA user_version")
       .get()?.user_version;
-    if (version !== 0 && version !== 1) {
+    if (version !== 0 && version !== 1 && version !== 2) {
       this.db.close();
       throw new FmError("storage.unavailable", "The state schema is newer than this adapter.");
     }
@@ -46,7 +46,15 @@ export class AdapterStore {
         home TEXT NOT NULL, host_request TEXT NOT NULL, request_id TEXT NOT NULL,
         PRIMARY KEY(home,host_request), UNIQUE(home,request_id),
         FOREIGN KEY(home,request_id) REFERENCES requests(home,id));
-        PRAGMA user_version=1;`);
+        CREATE TABLE IF NOT EXISTS fleet_routes (
+          primary_home TEXT NOT NULL, secondmate TEXT NOT NULL, value TEXT NOT NULL CHECK(json_valid(value)),
+          PRIMARY KEY(primary_home,secondmate));
+        CREATE TABLE IF NOT EXISTS fleet_observations (
+          primary_home TEXT NOT NULL, home TEXT NOT NULL, value TEXT NOT NULL CHECK(json_valid(value)),
+          PRIMARY KEY(primary_home,home));
+        CREATE TABLE IF NOT EXISTS fleet_locks (
+          primary_home TEXT PRIMARY KEY, token TEXT NOT NULL, expires INTEGER NOT NULL);
+        PRAGMA user_version=2;`);
     })();
   }
   get<T>(home: string, kind: string, id: string): T | null {

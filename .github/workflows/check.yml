@@ -6,6 +6,9 @@ on:
 permissions:
   contents: read
 jobs:
+  # Check code quality and adapter behavior on both supported platforms.
+  # Tests use a pinned Firstmate revision for reproducible compatibility checks.
+  # Build the standalone CLI and confirm its help command runs on each platform.
   adapter:
     strategy:
       fail-fast: false
@@ -20,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: kunchenguid/firstmate
-          ref: 6ee33265b6232ecca5821dbb5a0f08952e133bb5
+          ref: 861b5dad2baaa0a64703a1b0c14fb4da9bda5269
           path: .fixtures/firstmate
       - name: Install Linux isolation prerequisite
         if: runner.os == 'Linux'
@@ -31,6 +34,7 @@ jobs:
           FIRSTMATE_SOURCE: ${{ github.workspace }}/.fixtures/firstmate
       - run: bun run build
       - run: ./dist/fm-linear help
+  # Check the Astro documentation for errors and verify the site builds for publication.
   docs:
     runs-on: ubuntu-latest
     steps:

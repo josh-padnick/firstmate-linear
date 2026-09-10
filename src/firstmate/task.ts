@@ -36,6 +36,7 @@ export async function readFirstmateTask(
   const path = await confinedFile(installation.home, ["data", task.taskId, "brief.md"], true);
   return {
     task,
+    presence: after || path ? "found" : "not-verified",
     attempt: stable && generation.success ? { task, attemptId: generation.data } : null,
     observedAt: new Date().toISOString(),
     activity: stable

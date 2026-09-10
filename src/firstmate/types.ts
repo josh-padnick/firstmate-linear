@@ -19,7 +19,7 @@ export const AttemptRef = z.object({ task: TaskRef, attemptId: AttemptId }).stri
 export type FirstmateTaskRef = z.infer<typeof TaskRef>;
 export type FirstmateTaskAttemptRef = z.infer<typeof AttemptRef>;
 export type Fingerprint = z.infer<typeof Digest>;
-export const Capability = z.enum(["task-state", "briefs", "messages"]);
+export const Capability = z.enum(["task-state", "briefs", "messages", "fleet", "routed-reads"]);
 export type Capability = z.infer<typeof Capability>;
 export interface FirstmateInstallation {
   homeId: z.infer<typeof HomeId>;
@@ -45,11 +45,19 @@ export interface FirstmateInstallationCheck {
 }
 export interface FirstmateTaskSnapshot {
   task: FirstmateTaskRef;
+  presence: "found" | "not-found" | "not-verified";
   attempt: FirstmateTaskAttemptRef | null;
   observedAt: string;
   activity: { state: string; source: string };
   dependencies: { status: "unknown"; reason: "no-verified-contract" };
   briefRevision: Fingerprint | null;
+  readIssue?: { code: string; nextAction: string };
+  suggestions?: FirstmateTaskRef[];
+  lastKnown?: {
+    activity: { state: string; source: string };
+    observedAt: string;
+    attempt: FirstmateTaskAttemptRef | null;
+  };
 }
 export const BriefUpdate = z
   .object({
