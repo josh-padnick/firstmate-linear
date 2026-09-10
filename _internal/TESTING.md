@@ -2,7 +2,8 @@
 
 **Status: Proposed.**
 This guide describes the intended testing approach.
-Runtime test commands and fixtures still need implementation; the existing docs commands are listed below.
+The Firstmate adapter has runtime tests and fixtures; later service journeys remain planned.
+The [adapter review guide](tmp/ADAPTER_REVIEW.md) provides runnable commands and examples at each implemented test level.
 
 ## Purpose
 

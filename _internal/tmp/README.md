@@ -11,6 +11,8 @@ Test requirements also stay there because they describe behavior that future cha
 
 | Document | Purpose |
 | --- | --- |
+| [FIRSTMATE_ADAPTER_PLAN.mdx](FIRSTMATE_ADAPTER_PLAN.mdx) | Approved plan for the first-pass adapter, preserved before planning the next subsystem. |
+| [ADAPTER_REVIEW.md](ADAPTER_REVIEW.md) | Firstmate adapter scope, validation evidence, and four manual checks. |
 | [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) | Current progress, planned work, and assumptions to validate before release. |
 | [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md) | Concrete implementation guidance, unresolved choices, and proposed verification mechanisms. |
 | [FIRSTMATE_COMPATIBILITY.md](FIRSTMATE_COMPATIBILITY.md) | Compatibility findings and boundaries for the first adapter milestone. |

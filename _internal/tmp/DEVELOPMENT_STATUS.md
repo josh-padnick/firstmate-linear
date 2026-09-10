@@ -11,28 +11,26 @@ The guides describe setup, requesting work, progress tracking, reviews, and work
 The homepage uses a generic screenshot from Linear’s documentation.
 It does not show a running FM Linear integration.
 
-## What we are proving first
+## Firstmate adapter ready for review
 
-The first implementation milestone is the Firstmate adapter.
-The compatibility investigation is complete; the working adapter milestone is not.
+The adapter implements installation checks, task reads, brief updates, launch checks, message delivery, and response capture.
+The [adapter review guide](ADAPTER_REVIEW.md) describes its seven interfaces and four runnable manual checks.
+Automated coverage uses real SQLite, process termination, and installed Firstmate scripts in isolated fixtures.
+Local macOS checks pass against Firstmate commit `6ee33265b6232ecca5821dbb5a0f08952e133bb5`.
+Linux CI is configured but remains unverified until it runs.
 
-Firstmate's dispatch tests confirm that prepared brief content reaches worker launch instructions.
-Its extension contract does not provide a general hook to add instructions before every dispatch.
-The selected approach is an explicit preparation handshake plus detection and message recovery when available launch evidence shows missing requirements.
-Universal dispatch coverage remains unproven; the initial adapter must report that limit accurately.
-
-Start with installed-home discovery, revision and configuration fingerprints, compatibility checks, and read-only task observations.
-Prove home and execution-attempt isolation before those observations drive Linear changes.
-Then add prepared briefs and process-event delivery with explicit confirmation and recovery contracts.
-Introduce the shared error, logging, and testing interfaces with this first slice rather than building a separate infrastructure framework first.
-Use SQLite as soon as the slice needs persistent compatibility results or accepted delivery obligations.
+Firstmate must call the brief-update command before launch.
+The adapter can inspect available launch evidence but cannot force preparation or agent compliance.
+Missing dependency evidence remains unknown, and ambiguous message delivery stays held for the caller to resolve.
+The adapter does not implement a service, Linear synchronization, workflow rules, or a setup wizard.
+Further subsystem work waits for human review of this adapter.
 
 ## Planned next
 
 The [reporting guide](../../docs/src/content/docs/guides/troubleshooting.mdx) proposes automatic incident detection, report drafts, user approval, and confirmed GitHub submission.
 Runtime detection and submission remain unimplemented; the docs provide a copyable prompt and a separate agent investigation procedure.
 
-- A tested Firstmate adapter with explicit delivery and observation contracts.
+- Work and conversation context, followed by workflow requirements and rules.
 - Durable delivery and recovery after restarts.
 - Linear intake through polling every 30 seconds by default, with a configurable interval.
 - Workflow configuration, publication, and reconciliation.

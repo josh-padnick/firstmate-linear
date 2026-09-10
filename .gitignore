@@ -3,3 +3,8 @@
 /docs/dist/
 /docs/.astro/
 .DS_Store
+
+/.build/
+/dist/
+
+/.fixtures/

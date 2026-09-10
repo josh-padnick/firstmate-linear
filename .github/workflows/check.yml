@@ -1,0 +1,43 @@
+name: Check
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  adapter:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/checkout@v4
+        with:
+          repository: kunchenguid/firstmate
+          ref: 6ee33265b6232ecca5821dbb5a0f08952e133bb5
+          path: .fixtures/firstmate
+      - name: Install Linux isolation prerequisite
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+        env:
+          FIRSTMATE_SOURCE: ${{ github.workspace }}/.fixtures/firstmate
+      - run: bun run build
+      - run: ./dist/fm-linear help
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run docs:check
+      - run: bun run docs:build
