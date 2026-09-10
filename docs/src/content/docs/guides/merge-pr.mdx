@@ -8,57 +8,35 @@ import { mergeFlow } from '../../../data/workflowFlows';
 
 ## Motivation
 
-You want to authorize a validated pull request to merge and confirm that the work has been delivered.
-In the recommended code workflow, the issue is in **Approve Merge** and is assigned to the person authorized to approve the merge.
+Authorize the reviewed PR to merge.
+In the recommended workflow, the issue arrives in **Approve Merge**, assigned to the configured merge approver.
 
 ## How to do it
 
-Open the PR attached to the Linear issue and read the validation results.
-Check the repository, target branch, reviewed revision, required checks, and any unresolved findings.
-The handoff should explain whether anything changed since you approved the deliverable.
+Open the attached PR and validation results.
+Check the target branch, reviewed revision, required checks, and unresolved findings.
+If the code changed since review, review the changes before approving.
 
-If new changes require another review, ask for it before authorizing the merge.
-Approval of an earlier revision should not silently apply to different code.
-
-Reply in the merge-review thread with an explicit instruction:
+Reply in the merge-review thread:
 
 > Merge the linked PR into main at the reviewed revision, once all required checks pass.
 
 You can also merge the PR yourself in GitHub.
-The same issue should be updated when the integration's configured evidence source confirms that merge.
+FM Linear updates the same issue once it confirms the merge.
 
 ## What happens
 
-Firstmate receives approval scoped to the PR and revision you reviewed.
-It coordinates the merge using its available repository tools and permissions.
-Approval does not bypass branch protections or authorize additional changes.
+Firstmate coordinates the merge using its repository tools and permissions.
+Approval does not bypass required checks or branch protections; a changed revision needs a new approval decision.
 
-The issue remains open until the merge is confirmed and the configured delivery conditions are satisfied.
-If merging fails or checks change, the issue explains what remains to be done.
-
-Once delivery is confirmed, FM Linear sets the issue to **Done**.
-The PR, approvals, validation results, and supporting materials stay available on the issue.
-Merging and deploying are separate actions unless your workflow explicitly includes deployment in the authorization and delivery requirements.
+FM Linear marks the issue **Done** only after it confirms the merge and any other configured delivery conditions.
+If the merge fails, the issue shows what still needs attention.
+Merging does not authorize deployment unless your workflow explicitly includes it.
 
 ## How it works
 
-FM Linear polls for your approval, preserves its context, and delivers it to Firstmate.
-Firstmate handles the repository action; FM Linear keeps the corresponding Linear issue current.
+FM Linear delivers your approval with the PR and revision, then checks for confirmed delivery before closing the issue.
 
 <WorkflowFlow {...mergeFlow} />
 
-1. **Capture and interpret the approval.**
-   FM Linear saves the comment and PR reference.
-   Firstmate interprets the instruction, while FM Linear checks approval authority and the reviewed revision.
-2. **Coordinate the authorized merge.**
-   Firstmate uses its available tools to attempt the merge subject to the required checks.
-   A changed revision needs a new approval decision.
-3. **Confirm delivery.**
-   FM Linear waits for its configured evidence source to establish that the PR merged and any other delivery conditions are met.
-   A worker finishing, or saying it intends to merge, is not sufficient evidence.
-4. **Update the issue.**
-   FM Linear sets the status to Done and retains the PR connection and review history.
-   It uses the same issue if you merged the PR yourself.
-
-Read the [integration overview](/reference/architecture/) for the observation and delivery boundaries.
-See [configuration](/reference/configuration/) to change approval authority or completion conditions.
+Read [How it works](/reference/architecture/) for the integration's limits, or [Configuration](/reference/configuration/) to change approvers and completion conditions.

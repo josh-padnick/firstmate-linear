@@ -66,9 +66,9 @@
 .placeholder-thread strong { display: block; font-size: var(--fm-text-sm); font-weight: 500; color: var(--fm-ink); margin-bottom: var(--fm-space-3); }
 .placeholder-thread i { display: block; height: 4px; background: var(--fm-line); margin: var(--fm-space-2) 0; max-width: 90%; border-radius: var(--fm-radius-sm); }
 .placeholder-thread i:last-child { width: 63%; }
-.fm-start { border-top: var(--fm-border-width) solid var(--fm-line); display: flex; align-items: center; justify-content: space-between; gap: var(--fm-space-8); padding: var(--fm-space-16) 0 var(--fm-space-4); }
+.fm-start { border-top: var(--fm-border-width) solid var(--fm-line); display: flex; flex-direction: column; align-items: flex-start; gap: var(--fm-space-6); padding: var(--fm-space-16) 0 var(--fm-space-4); }
 .fm-start h2 { font-size: var(--fm-text-title); font-weight: 500; letter-spacing: -.045em; margin: 0; }
-.fm-start p:not(.fm-eyebrow) { color: var(--fm-muted); font-size: var(--fm-text-body); line-height: var(--fm-leading); margin-top: var(--fm-space-4); }
+.fm-start p:not(.fm-eyebrow) { color: var(--fm-muted); font-size: var(--fm-text-body); line-height: var(--fm-leading); margin: var(--fm-space-4) 0 0; }
 .mobile-issue-example { display: none; }
 @media (max-width: 799px) {
   .fm-hero { padding: var(--fm-space-12) 0; }
@@ -99,7 +99,7 @@
   .issue-author > span { display: grid; place-items: center; width: 32px; height: 32px; border: var(--fm-border-width) solid var(--fm-line); border-radius: var(--fm-radius-pill); font-size: var(--fm-text-xs); }
   .issue-conversation a { display: inline-block; padding-block: var(--fm-space-2); color: var(--fm-ink); text-underline-offset: 4px; }
   .issue-example-caption { color: var(--fm-muted); font-size: var(--fm-text-xs); line-height: var(--fm-leading); border-top: var(--fm-border-width) solid var(--fm-line); margin: 0; padding: var(--fm-space-4) var(--fm-space-6); }
-  .fm-start { flex-direction: column; align-items: start; padding-top: var(--fm-space-12); }
+  .fm-start { padding-top: var(--fm-space-12); }
 }
 @media (max-width: 520px) {
   .desktop-break { display: none; }

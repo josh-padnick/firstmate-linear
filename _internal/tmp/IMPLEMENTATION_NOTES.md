@@ -8,6 +8,24 @@ These notes describe intended behavior and research findings, not a claim that t
 Reference code informs the design without defining it.
 Shared practices for [testing](../TESTING.md), [logging](../LOGGING.md), and [error handling](../ERRORS.md) apply across the subsystems.
 
+## Setup: refer to work by Linear issue identifier
+
+Offer a setup preference, enabled by default, asking Firstmate to refer to linked work by its Linear issue identifier and a short description, such as `BIG-299: Add team invitations`.
+Let users customize or disable this preference independently of stage-specific workflow instructions.
+
+Setup owns the option; the Firstmate adapter installs the standing instruction in the selected home's `data/captain.md`, preserving existing preferences and avoiding duplicate entries when setup is rerun.
+Firstmate's `bin/fm-session-start.sh` includes these preferences in its startup context.
+The work and conversation context subsystem supplies the actual issue identifier and URL with applicable briefs and messages; the adapter carries that context without owning the Linear mapping.
+
+Suggested instruction:
+
+> When discussing work linked to Linear, identify it by its Linear issue identifier and a short description, for example, “BIG-299: Add team invitations.”
+> Link the identifier to the issue when possible.
+> If no Linear issue is linked yet, use the task's description; never invent an identifier.
+
+Code supplies verified identifiers consistently, but following the communication preference remains agent behavior and cannot be guaranteed for every response.
+This is a setup requirement for a later milestone, not an expansion of the first adapter milestone.
+
 ## Polling and retrieval
 
 Poll each configured Linear connection every 30 seconds by default.

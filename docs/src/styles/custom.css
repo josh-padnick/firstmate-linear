@@ -87,6 +87,14 @@ header.header { border-bottom: 1px solid var(--fm-line); }
 .fm-nav { display: flex; align-items: center; gap: 1.6rem; font-size: var(--fm-text-sm); }
 .fm-nav a { display: inline-flex; color: var(--fm-ink); text-decoration: none; }
 .fm-nav a:hover { text-decoration: underline; text-underline-offset: 5px; }
+@media (max-width: 49.999rem) {
+  header .header .right-group { display: flex; order: 1; margin-inline-start: auto; }
+  header .header > .sl-flex.print\:hidden { order: 2; }
+  header .right-group > :not(.social-icons),
+  header .fm-nav a:not(.fm-nav-docs) { display: none; }
+  header .fm-nav-docs { align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
+  :root[data-has-hero] div.header > .sl-flex.print\:hidden { margin-left: 0; }
+}
 .social-icons::after { display: none; }
 starlight-theme-select { font-size: var(--fm-text-sm); }
 .sl-menu-button { background: var(--fm-surface); color: var(--fm-ink); border: 1px solid var(--fm-line); box-shadow: none; }

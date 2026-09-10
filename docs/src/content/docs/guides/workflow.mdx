@@ -8,74 +8,40 @@ import { requestFlow } from '../../../data/workflowFlows';
 
 ## Motivation
 
-You have something you want Firstmate and its crew to work on.
-You want to describe it once, let Firstmate organize the work, and follow its progress in Linear.
+Describe work once to Firstmate and follow its progress in Linear.
 
 ## How to do it
 
-Talk to Firstmate as you normally would.
-Describe the outcome, give it the relevant context, and let Firstmate organize the work.
-
-For example:
+Talk to Firstmate as usual.
+Describe the outcome, repository, and constraints:
 
 > Add team invitations to the app.
 > Invitations should expire after seven days and be usable only once.
 > Prepare a plan for my approval before implementation.
 
-Include the repository and constraints when they are not already clear from your conversation.
-You do not need to create a Linear issue yourself or add “track this in Linear” to each request.
-
-If an issue already exists, give Firstmate its link so it can use that issue.
-If you want to keep a particular request out of Linear, say so when you make it:
-
-> Investigate this locally, but don't create a Linear issue for this request.
+**FM Linear tracks new work requests automatically.**
+You do not need to create an issue yourself.
+If an issue already exists, share its link so Firstmate can reuse it.
+To keep a request out of Linear, say “Don't create a Linear issue for this request.”
 
 ## What happens
 
-**By default, every new work request you give Firstmate is automatically tracked as a Linear issue, unless you request otherwise.**
-Firstmate has FM Linear create the issue in your configured team and project, then shares the issue link in your conversation.
-An existing issue is linked and reused rather than duplicated.
+Firstmate shares the Linear issue link in your conversation.
+The issue collects the request, plan, decisions, and deliverables as work progresses.
 
-The issue captures the request, relevant context, and acceptance criteria.
-As the work progresses, it collects the plan, decisions, updates, and deliverables so you can pick up the thread later.
+In the recommended workflow:
 
-The status reflects the work's actual stage.
-A request waiting to begin can remain in **ToDo**; when planning begins, it moves to **Plan In Progress**.
-Managed labels identify the crewmate or model involved, while the assignee identifies who owes the next action.
-
-When the plan is ready, the issue moves to **Approve Plan** and is assigned to the reviewer.
-You can open the plan and [give feedback](/guides/reviews/) or [approve it](/guides/approve-plan/) in the issue's conversation.
-
-If Firstmate splits the request among several crewmates, FM Linear keeps their work connected to the request.
-A replacement worker or another execution attempt should not create a duplicate of the original request.
+- Work waiting to start uses **ToDo**; planning uses **Plan In Progress**.
+- A finished plan moves to **Approve Plan** for your [feedback](/guides/reviews/) or [approval](/guides/approve-plan/).
+- Labels identify the crew; the assignee tells you who needs to act next.
 
 ## How it works
 
 Firstmate records and organizes the work.
-FM Linear reads those records through its Firstmate adapter and handles the Linear API writes in code.
-The flow below shows the default path for a new request.
+FM Linear reads those records, creates or links the Linear issue, and keeps later updates connected to it.
+If Linear is unavailable, the update stays pending.
 
 <WorkflowFlow {...requestFlow} />
 
-1. **Firstmate records the request.**
-   It retains the task's identity and context in its own task data.
-   Its task brief lives at `data/<task-id>/brief.md` within the Firstmate home and carries the request into the crew's assignment.
-2. **FM Linear reads the recorded work.**
-   The adapter obtains the task identity and relevant context from Firstmate's records.
-   FM Linear applies your team and repository mappings, checks whether you opted out, and looks for an existing issue connection.
-3. **FM Linear creates or links the issue.**
-   It saves the pending action, creates or updates the issue through the Linear API, and records the confirmed relationship between the task and issue.
-   That relationship lets retries and later updates find the same issue.
-4. **The issue link returns to your conversation.**
-   FM Linear makes the confirmed issue reference available to Firstmate, which shares it with you.
-   Future progress updates and review handoffs use the same connection.
-
-An opt-out skips issue creation for that request.
-It does not prevent Firstmate from doing the work.
-If Linear is temporarily unavailable, the publication stays pending rather than being reported as successful.
-
-Firstmate continues to own planning, scheduling, and delegation.
-FM Linear owns the tracking connection, so creating and updating Linear issues does not depend on a crewmate remembering to do it.
-The [integration overview](/reference/architecture/) describes the available interfaces and compatibility limits, including coverage of independently created tasks.
-
-Next, [track progress](/guides/track-work/) or see the [recommended workflow](/reference/workflow/#recommended-workflow).
+For the interfaces and their limits, read [How it works](/reference/architecture/).
+Next, [track progress](/guides/track-work/).

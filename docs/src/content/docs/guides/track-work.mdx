@@ -8,90 +8,51 @@ import { progressFlow } from '../../../data/workflowFlows';
 
 ## Motivation
 
-You want to see what the crew is doing, what is waiting, and where someone needs to act.
-You also want to open any issue and recover the context behind its status without finding an old agent conversation.
+See what the crew is doing and where you need to act.
 
 ## How to do it
 
 Open your connected team or project in Linear.
-Use a board to follow work through your statuses, then open an issue for its plan, discussion, and deliverables.
-
-For example, create one view for issues assigned to you in **Approve Plan**, **Approve Deliverable**, **Approve Merge**, or **Needs Decision**.
-Keep another view for work in progress when you want to observe the crew without joining every conversation.
-Linear supports [custom views](https://linear.app/docs/custom-views) and a [board layout](https://linear.app/docs/board-layout).
+Use a board for progress and a view of issues assigned to you for reviews and decisions.
+Open an issue for its plan, discussion, PR, and deliverables.
 
 ### Read the issue at a glance
 
-Each field answers a different question:
-
-| Field | Question it answers | Example |
-| --- | --- | --- |
-| Status | What stage has the work reached? | Approve Plan |
-| Assignee | Who owes the next action? | You, as the plan reviewer |
-| Managed labels | Which crewmate or model is involved? | Your configured model label |
-| Blocks / blocked by | Which other work depends on this issue, or must finish first? | UI integration is blocked by the API task |
-| Current update | What happened, and what is needed next? | Plan ready; choose between two migration options |
-
-The crewmate doing the implementation and the person assigned in Linear may be different.
-During review, the assignee can be you while the labels retain the crew identity.
-A dependency can exist while useful work is still underway; it does not automatically mean the entire issue is waiting.
+| Field | What it tells you |
+| --- | --- |
+| Status | The work's stage, such as **Building** or **Approve Plan**. |
+| Assignee | Who needs to act next, including you during a review. |
+| Managed labels | Which crewmate or model is involved. |
+| Blocks / blocked by | Which issues depend on others. |
+| Current update | What happened and what is needed next. |
 
 ### Ask Firstmate to record a dependency
 
-Describe the relationship in your usual Firstmate conversation, using issue links or task IDs so the work is unambiguous:
+Use issue links or task IDs to identify the work:
 
 > UI integration is blocked by the API task until its endpoint is available.
-> Record that dependency in your backlog so it appears on the connected Linear issues.
+> Record that dependency so it appears on the connected Linear issues.
 
-Firstmate determines how the dependency affects scheduling.
-FM Linear uses explicit records to publish the relationship; it does not infer dependencies from an issue being in Waiting.
-See [how Firstmate supplies dependencies](/reference/synchronization/#dependencies-connect-the-issues) for the existing backlog source and the reporting fallback still to be defined.
+Firstmate decides how dependencies affect scheduling.
+FM Linear publishes explicit relationships; a dependency does not necessarily prevent all work on an issue.
 
 ## What happens
 
-FM Linear keeps the issue's status, assignee, managed labels, and reported progress aligned with the work Firstmate coordinates.
-It links explicit dependencies between connected tasks using Linear's blocks and blocked-by relationships.
+FM Linear keeps statuses, assignments, labels, dependencies, and reported progress up to date.
+Questions and review requests identify who should respond.
 
-When someone needs your input, the issue shows the relevant question or review handoff and who should act next.
-Open the issue to find:
+The issue retains context and supporting links for later use.
+You can [customize issue details](/reference/configuration/#customize-linear-issue-details), including the Herdr panel name.
+Keep linked artifacts somewhere reviewers can access after the crewmate's work ends.
 
-- The objective, constraints, and acceptance criteria.
-- The current plan and important decisions.
-- Progress, open questions, and remaining work.
-- The PR, verification results, and supporting materials.
-- Configured execution details, such as the current Herdr panel name.
-
-Links should remain accessible after an agent conversation or temporary worktree ends.
-A review guide stored only on a crewmate's temporary machine is not a durable deliverable.
-Configure artifact hosting and access separately from FM Linear.
-See [issue-detail customization](/reference/configuration/#customize-linear-issue-details) for panel references and other managed context.
-
-The issue reaches **Done** when the configured delivery condition is confirmed.
-For code, that might be a merged PR; for an investigation, it might be an accepted report.
-A worker stopping, a PR opening, and a PR merging mean different things.
+**Done means confirmed delivery**, such as a merged PR or accepted report, not merely a worker stopping.
 
 ## How it works
 
-Firstmate provides task information and substantive progress reports.
-FM Linear observes that evidence through its adapter and publishes the corresponding comments, relationships, and field changes through the Linear API.
+FM Linear reads Firstmate's task records and reports, publishes updates, and checks for missed changes.
+The service checks Linear every 30 seconds by default; sleep, API retries, or a busy Firstmate can delay updates.
 
 <WorkflowFlow {...progressFlow} />
 
-1. **Observe the work.**
-   FM Linear reads available task evidence and receives any necessary agent reports.
-   An old progress message does not prove a worker is active now.
-2. **Apply the workflow mapping.**
-   Confirmed facts and your configuration determine which status, assignee, and managed labels belong on the issue.
-   Explicit dependencies are matched to connected Linear issues; status names and vague comments are not enough to establish a dependency.
-3. **Publish and confirm.**
-   FM Linear saves pending updates, sends them to Linear, and records confirmed delivery.
-4. **Check for missed updates.**
-   Periodic reconciliation finds and repairs incomplete field changes, according to the policy for manual edits.
-   Uncertain or stale observations should remain visible as such.
-
-Linear comments and edits are polled every 30 seconds by default, with a configurable interval.
-Updates from Firstmate are published when the integration observes the relevant evidence; the polling interval is not a promise of a response within 30 seconds.
-A busy Firstmate, API retry, or sleeping local machine can add delay.
-
-Read the [integration overview](/reference/architecture/) for the available evidence sources and their limits.
-If updates stop, use [Reporting bugs](/guides/troubleshooting/) before assuming that the work stopped too.
+Read [issue synchronization](/reference/synchronization/) for details, including dependency sources and limitations.
+If updates stop, see [Reporting bugs](/guides/troubleshooting/).
