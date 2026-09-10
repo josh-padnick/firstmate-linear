@@ -8,6 +8,7 @@ import { IsolatedFirstmate } from "./isolation";
 import { messageProbe } from "./message-probe";
 import { EXTENSION_ADAPTER, EXTENSION_ID, EXTENSION_VERSION } from "./messages";
 import type { AdapterStore } from "./store";
+import { TaskStateProbeError, taskStateProbe } from "./task-probe";
 import type {
   Capability,
   CapabilityCheck,
@@ -39,19 +40,16 @@ export async function testFirstmateInstallation(
       for (const capability of selected) {
         try {
           if (capability === "task-state") {
-            const result = await fixture.run("/bin/bash", [
-              join(fixture.codeRoot, "bin/fm-crew-state.sh"),
-              "missing-task",
-            ]);
+            const observations = await taskStateProbe(fixture);
             capabilities.push({
               capability,
-              status:
-                result.code === 0 &&
-                /^state: unknown · source: none(?: · [^\n]*)?\n?$/.test(result.stdout)
-                  ? "passed"
-                  : "failed",
+              status: "passed",
               evidence: [
-                "Executed the installed worker-state command with missing metadata; it must report unknown with source none. Live backend-specific activity remains outside this probe.",
+                "Exercised the installed state query and FM Linear task reader with a synthetic local Claude/scout task and a fake readable tmux endpoint. Verified task identity and attempts, working-to-parked transition, stale incarnation evidence, missing lifecycle evidence, and removed metadata. Live agents, other backends, remote tasks, and no-mistakes run attribution are not covered.",
+                ...observations.map(
+                  (observation) =>
+                    `${observation.check}: ${observation.snapshot.activity.state} (${observation.snapshot.activity.source})`,
+                ),
               ],
             });
           } else if (capability === "briefs") {
@@ -100,11 +98,15 @@ export async function testFirstmateInstallation(
               ],
             });
           }
-        } catch {
+        } catch (error) {
           capabilities.push({
             capability,
             status: "failed",
-            evidence: ["The isolated contract exceeded its bound or could not execute."],
+            evidence: [
+              error instanceof TaskStateProbeError
+                ? error.message
+                : "The isolated contract exceeded its bound or could not execute.",
+            ],
           });
         }
       }

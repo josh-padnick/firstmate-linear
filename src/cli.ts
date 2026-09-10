@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { CliUsageError, formatResult, printFailure, requestedOutputFormat } from "./cli-output";
 import { FirstmateAdapter } from "./firstmate/adapter";
 import { extensionResponse } from "./firstmate/extension";
 import { createExtensionPackage } from "./firstmate/extension-package";
@@ -11,20 +12,25 @@ import {
   MessageToFirstmateSchema,
   TaskId,
 } from "./firstmate/types";
+import { cliHelp, requiredOptionsHelp } from "./help";
 import { FmError, normalizeError } from "./support/errors";
 import { hash, readBounded } from "./support/files";
 import { boundedStdin } from "./support/input";
-import { logFailure } from "./support/logging";
 
-async function main() {
-  const { positionals, values } = parseArgs({
-    args: process.argv.slice(2),
+const args = process.argv.slice(2);
+const outputFormat = requestedOutputFormat(args);
+
+function parseCliArgs() {
+  return parseArgs({
+    args,
     allowPositionals: true,
     options: {
       home: { type: "string" },
       "code-root": { type: "string" },
       state: { type: "string" },
       json: { type: "boolean" },
+      format: { type: "string" },
+      help: { type: "boolean", short: "h" },
       input: { type: "string" },
       receipt: { type: "string" },
       capability: { type: "string", multiple: true },
@@ -32,11 +38,32 @@ async function main() {
       "message-id": { type: "string" },
     },
   });
-  const command = positionals[0];
-  if (!command || command === "help") {
-    console.log(
-      "fm-linear <installation|test|task|brief-update|brief-check|send|receive|respond|extension-package> --home PATH --code-root PATH --state DATABASE [--json]\nPayload commands read --input FILE. brief-check also takes --receipt FILE. respond REQUEST_ID reads a content object and accepts --message-id for distinct follow-ups. extension-package DIRECTORY accepts --executable PATH. test accepts repeated --capability task-state|briefs|messages.",
+}
+
+async function main() {
+  let parsed: ReturnType<typeof parseCliArgs>;
+  try {
+    parsed = parseCliArgs();
+  } catch {
+    throw new CliUsageError(
+      "Invalid command options.",
+      "Run fm-linear --help for supported commands and options.",
     );
+  }
+  const { positionals, values } = parsed;
+  if (values.format !== undefined && !["human", "json", "toon"].includes(values.format))
+    throw new CliUsageError(
+      "Unknown output format.",
+      "Use --format human, --format json, or --format toon.",
+    );
+  if (values.json && values.format && values.format !== "json")
+    throw new CliUsageError(
+      "Conflicting output options.",
+      "Use --json or --format, not both with different formats.",
+    );
+  const command = positionals[0];
+  if (!command || command === "help" || values.help) {
+    console.log(cliHelp(command === "help" ? positionals[1] : command));
     return;
   }
   if (command === "extension") {
@@ -50,13 +77,32 @@ async function main() {
     const runtime = values.executable ?? process.execPath;
     if (!runtime)
       throw new FmError("config.invalid", "Supply --executable with the compiled FM Linear path.");
-    console.log(JSON.stringify(await createExtensionPackage(resolve(positionals[1]), runtime)));
+    console.log(
+      formatResult(
+        command,
+        await createExtensionPackage(resolve(positionals[1]), runtime),
+        outputFormat,
+      ),
+    );
     return;
   }
+  if (
+    ![
+      "installation",
+      "test",
+      "task",
+      "brief-update",
+      "brief-check",
+      "send",
+      "receive",
+      "respond",
+    ].includes(command)
+  )
+    throw new CliUsageError("Unknown command.", "Run fm-linear --help for supported commands.");
   if (!values.home || !values["code-root"] || !values.state)
-    throw new FmError(
-      "config.invalid",
-      "Supply --home, --code-root, and --state explicitly for this adapter milestone.",
+    throw new CliUsageError(
+      "Missing Firstmate installation paths.",
+      `${requiredOptionsHelp()}\n\nRun fm-linear ${command} --help for an example.`,
     );
   const adapter = await FirstmateAdapter.open({
     home: values.home,
@@ -121,13 +167,13 @@ async function main() {
       default:
         throw new FmError("config.invalid", "Unknown adapter command.");
     }
-    console.log(JSON.stringify(result, null, values.json ? undefined : 2));
+    console.log(formatResult(command, result, outputFormat));
   } finally {
     adapter.close();
   }
 }
 await main().catch((error) => {
   const normalized = normalizeError(error);
-  logFailure(normalized);
+  printFailure(normalized, args[0] === "extension" ? "json" : outputFormat);
   process.exitCode = 2;
 });

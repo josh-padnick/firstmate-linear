@@ -109,6 +109,7 @@ export async function sendMessage(
         cwd: installation.home,
         env: commandEnvironment(installation.home, installation.codeRoot),
         timeoutMs: 30000,
+        operation: "message-registration",
       },
     );
     if (result.code !== 0)

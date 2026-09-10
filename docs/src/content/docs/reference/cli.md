@@ -6,8 +6,8 @@ description: Set up FM Linear, control synchronization, check compatibility, and
 Use the `fm-linear` CLI to set up your connection and manage the local background service on macOS and Linux.
 You can continue requesting work and discussing issues through Firstmate and Linear.
 
-This page defines the proposed command interface.
-The commands below still need implementation.
+This page includes proposed service commands.
+Run `fm-linear --help` to see the commands available in your build.
 
 ## Command summary
 
@@ -153,6 +153,24 @@ Updating FM Linear does not update Firstmate's checkout.
 If a release offers new workflow defaults or model labels, present those changes separately for review.
 Keep existing customizations unless you choose to adopt the changes.
 Do not relabel historical work as though a newer model performed it.
+
+## Output formats
+
+Commands display readable results and errors by default.
+Agents and scripts should select a structured format:
+
+- `--format json` prints JSON.
+- `--format toon` prints the same fields in TOON.
+- `--format human` explicitly selects the default readable format.
+- `--json` is an alias for `--format json`.
+
+Results go to stdout and errors go to stderr.
+An error includes a stable code and a suggested next action in every format.
+Firstmate command errors distinguish a timeout (`firstmate.command_timed_out`) from excessive output (`firstmate.command_output_limit`).
+The message identifies the operation and the limit reached, without exposing command arguments or child-process output.
+If a command may have changed Firstmate before failing, its outcome remains uncertain and must be verified before retrying.
+The exit status is `0` for success, `1` for failed or unverified compatibility checks, and `2` for command errors.
+Firstmate's extension protocol always uses JSON.
 
 ## Get help
 

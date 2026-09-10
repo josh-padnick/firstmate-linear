@@ -11,6 +11,8 @@ export const errorCodes = {
   "firstmate.conflict": "Inspect the existing record before retrying with the same identity.",
   "firstmate.unknown_request": "Use the request ID supplied with the original message.",
   "firstmate.command_failed": "Check prerequisites and run fm-linear test.",
+  "firstmate.command_timed_out": "Run fm-linear test with the same required options.",
+  "firstmate.command_output_limit": "Run fm-linear test with the same required options.",
   "storage.unavailable": "Restore access to the local state directory before retrying.",
   "runtime.unexpected": "Inspect the local diagnostic and report the failure.",
 } as const;
@@ -24,15 +26,16 @@ export class FmError extends Error {
     readonly code: ErrorCode,
     message: string,
     readonly effect: "not-applicable" | "not-attempted" | "unknown" = "not-applicable",
+    readonly nextAction: string = errorCodes[code],
   ) {
     super(message);
   }
-  toJSON() {
+  toJSON(): z.infer<typeof ErrorRecord> {
     return {
       schemaVersion: this.schemaVersion,
       code: this.code,
       summary: this.message,
-      nextAction: errorCodes[this.code],
+      nextAction: this.nextAction,
       occurrenceId: this.occurrenceId,
       occurredAt: this.occurredAt,
       subsystem: this.subsystem,

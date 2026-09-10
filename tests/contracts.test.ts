@@ -72,3 +72,28 @@ test("installed contracts pass in OS isolation and a changed script invalidates 
     await rm(root, { recursive: true, force: true });
   }
 }, 240000);
+
+test("a state command that always returns unknown cannot pass known-task compatibility", async () => {
+  const source = process.env.FIRSTMATE_SOURCE;
+  if (!source) throw new Error("Set FIRSTMATE_SOURCE to the upstream checkout.");
+  const fixture = await IsolatedFirstmate.create(source);
+  let adapter: FirstmateAdapter | undefined;
+  try {
+    // Catches: a parser-compatible answer for absent tasks hiding broken reads of real tasks.
+    await writeFile(
+      join(fixture.codeRoot, "bin/fm-crew-state.sh"),
+      "#!/bin/bash\nprintf 'state: unknown · source: none\\n'\n",
+    );
+    adapter = await FirstmateAdapter.open({
+      home: fixture.home,
+      codeRoot: fixture.codeRoot,
+      database: join(fixture.root, "regression-state", "state.sqlite"),
+    });
+    const report = await adapter.testFirstmateInstallation(["task-state"]);
+    expect(report.capabilities[0]?.status).toBe("failed");
+    expect(report.capabilities[0]?.evidence[0]).toContain("known working task");
+  } finally {
+    adapter?.close();
+    await fixture.close();
+  }
+}, 120000);

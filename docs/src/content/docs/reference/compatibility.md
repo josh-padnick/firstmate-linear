@@ -65,6 +65,19 @@ Isolated checks also do not prove that live Linear credentials, an external serv
 Setup's connection checks and a small [test task](/guides/setup/#9-check-your-first-conversation) cover that separate path.
 The current design still needs verification of its report-submission interface and any optional backend-specific capabilities before they can be claimed as supported.
 
+### Task-state coverage
+
+The task-state check uses Firstmate's actual scripts and FM Linear's task reader with a disposable task and a simulated terminal.
+It verifies:
+
+- The task's identity and execution attempt.
+- A working task changing to a task awaiting a decision.
+- Stale or missing lifecycle evidence returning `unknown`, even if an older status remains.
+- A missing task returning `unknown` without an execution attempt.
+
+It does not launch a real agent or verify every harness, backend, remote task, or live terminal's health.
+A passing result applies to these tested behaviors.
+
 ## When a check fails
 
 FM Linear should explain what failed, which work is paused, and what you can do next.

@@ -8,3 +8,7 @@
 /dist/
 
 /.fixtures/
+
+# Local rendered review artifacts; their source plans remain versioned.
+/plan.html
+/.lavish/

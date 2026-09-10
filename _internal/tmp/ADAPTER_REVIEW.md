@@ -44,6 +44,38 @@ macOS uses `sandbox-exec`; Linux requires `bubblewrap` and permission to create 
 Bun, Node, Bash, Python 3, and Git must be available.
 Unavailable isolation produces `not-verified`, never a pass.
 
+## Review output and exit codes
+
+Human-readable output is the default.
+It shows the selected Firstmate source path and checkout revision at the start and in the final summary, and indicates local script changes.
+The checks use disposable copies of that source, not your live Firstmate home.
+Each numbered step reports whether the observed result matches its expectation.
+A deliberately broken contract is a successful review step only when the helper confirms the expected failure.
+Any mismatch stops the review and exits nonzero, including a missing, failed, or unverified initial capability and a failed restoration check.
+
+```sh
+bun run scripts/review.ts compatibility
+bun run scripts/review.ts compatibility --verbose
+bun run scripts/review.ts compatibility --format json
+bun run scripts/review.ts compatibility --format toon
+```
+
+All four review scenarios support these options.
+`--verbose` shows fixture paths and full details in human output.
+Interactive pauses and the optional fixture reply prompt appear only in human mode when both input and output are terminals.
+JSON and TOON run without prompts and write one result document to stdout after cleanup.
+They encode the same object using JSON or the official `@toon-format/toon` library.
+
+The version 1 result contains `scenario`, overall `status`, numbered `steps` with their checks, full `details`, and safe `errors`.
+Each check contains `name`, `expected`, `actual`, and a `status` describing whether those values match.
+For an intentionally broken contract, `actual: failed` and `expected: failed` produce check `status: passed`.
+Readers should tolerate additive fields.
+Fixture paths in the details refer to disposable files removed at the end of the run.
+
+Exit codes are `0` when all expectations pass, `1` for an assertion, execution, or cleanup failure, and `2` for invalid arguments or a missing `FIRSTMATE_SOURCE` setting.
+The helper retains completed steps in failed machine-readable results.
+These options apply to `scripts/review.ts`; the adapter CLI's existing JSON contract is unchanged.
+
 ## Four manual checks
 
 Run each command from the repository root.
@@ -71,6 +103,8 @@ The adapter does not fetch Firstmate or automatically schedule rechecks.
 bun run scripts/review.ts tasks
 ```
 
+The initial compatibility check exercises a known working task, a transition to awaiting a decision, and stale or missing lifecycle evidence.
+Add `--verbose` to see the individual observations.
 Expect different home IDs for the two fixtures, even with the same task name.
 Missing task metadata produces `unknown`, with source `none` and no execution attempt.
 Passing the other home's task to the first adapter produces `firstmate.scope_mismatch`.
@@ -78,8 +112,7 @@ Passing the other home's task to the first adapter produces `firstmate.scope_mis
 ### 3. Brief instructions and missing preparation
 
 ```sh
-bun run scripts/review.ts briefs
-```
+<```
 
 Open the authored and launch brief paths printed by the helper.
 The captain's assignment remains intact, and the recap instruction appears once in the managed section.
@@ -129,7 +162,12 @@ The database must live in a private directory with mode `700`.
 
 `respond` derives a stable message ID from the request and answer.
 For a distinct follow-up with identical text, supply a new `--message-id`.
-`--json` keeps stdout machine-readable.
+Commands print readable results and errors by default.
+Use `--format json` or `--format toon` for structured results; `--json` remains an alias for JSON.
+Successful results go to stdout; errors go to stderr in the selected format, with no extra human text.
+Both machine formats preserve the same result fields and diagnostic schema.
+The Firstmate extension protocol always uses JSON.
+Exit codes remain `0` for success, `1` for failed or unverified compatibility checks, and `2` for command errors.
 Exit codes are `0` for success, `1` for failed or unverified compatibility checks, and `2` for command errors.
 Safe diagnostics go to stderr.
 
@@ -162,7 +200,7 @@ bun run build
 
 CI checks macOS and Linux against Firstmate commit `6ee33265b6232ecca5821dbb5a0f08952e133bb5`.
 Linux coverage remains unverified until the CI workflow passes.
-The local macOS run exercises the same installed revision.
+The expanded task-state probe passes locally on macOS against both that pinned revision and checkout `861b5dad2baaa0a64703a1b0c14fb4da9bda5269`.
 
 | Behavior protected | Test level and reason | Evidence |
 | --- | --- | --- |
@@ -173,7 +211,19 @@ The local macOS run exercises the same installed revision.
 
 The brief probe covers Firstmate's ship/local-only launch with a fake tmux terminal.
 The probe does not verify every backend, remote execution, or agent compliance.
-The state probe verifies the output contract for missing evidence; it does not validate live backend health.
+The state probe runs Firstmate's actual state-query and lifecycle-event scripts against a disposable local Claude/scout task with a fake readable tmux endpoint.
+It verifies the task identity and execution attempt through FM Linear's task reader, then checks:
+
+- An absent task returns `unknown` without an execution attempt.
+- A known task with current lifecycle evidence returns `working`.
+- After an idle event and a `needs-decision` status, the next query returns `parked`.
+- Lifecycle evidence from a previous incarnation returns `unknown`, even when an old status still exists.
+- Missing lifecycle evidence returns `unknown` rather than trusting that old status.
+- Removing task metadata returns `unknown` without retaining the previous execution attempt.
+
+These cases run as part of `fm-linear test`, not just the manual review helper.
+The compatibility suite is version `2`; results from the earlier, narrower suite do not authorize task reads.
+This checks state interpretation with controlled evidence, not live backend health, remote tasks, other harnesses, or no-mistakes run attribution.
 Dependencies remain explicitly unknown because no reliable dependency-reporting contract has been selected.
 
 Brief edits serialize FM Linear writers using SQLite and reject changed source revisions.
@@ -192,3 +242,19 @@ The adapter now verifies that binding before marking messages usable, with a reg
 All 9 tests and 42 assertions, lint, and typechecking pass locally on macOS.
 A second external review attempt was blocked by automatic approval review because it could transmit repository source; the fix received local review instead.
 No clean second external-review result is claimed.
+
+## Review-helper validation
+
+Format tests verify that JSON and TOON preserve the same result, including multiline text and punctuation.
+Assertion tests distinguish an expected failure from incomplete evidence.
+A process test injects an unverified compatibility result at the adapter boundary and verifies that the actual review command exits `1` with a failed result instead of continuing.
+Process checks also verify a parseable JSON or TOON error and exit `2` when configuration is missing.
+These tests live in `tests/review.test.ts`; process coverage is necessary to prove stdout and exit-code behavior.
+
+## Expanded task-state validation
+
+The known-task regression in `tests/contracts.test.ts` replaces only a disposable copy of the state-query script with one that always returns a valid `unknown` answer.
+That script passed the earlier missing-task probe and now fails the known-working-task check.
+The test belongs at the component integration level because it must exercise the compatibility gate, the production task reader, and Firstmate's actual lifecycle scripts together.
+The full local check passes with 14 tests and 65 assertions, plus lint and typechecking.
+The manual task review also passes against the CI-pinned Firstmate scripts.

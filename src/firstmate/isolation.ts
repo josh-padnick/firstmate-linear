@@ -40,7 +40,7 @@ export class IsolatedFirstmate {
         const signed = await runCommand(
           "/usr/bin/codesign",
           ["--force", "--sign", "-", join(root, "tools", "ps")],
-          { cwd: root, env: commandEnvironment(home, code) },
+          { cwd: root, env: commandEnvironment(home, code, { isolated: true }) },
         );
         if (signed.code !== 0)
           throw new FmError(
@@ -126,8 +126,8 @@ export class IsolatedFirstmate {
         {
           cwd: this.home,
           env: {
-            ...commandEnvironment(this.home, this.codeRoot),
-            PATH: `${join(this.root, "tools")}:${commandEnvironment(this.home, this.codeRoot).PATH}`,
+            ...commandEnvironment(this.home, this.codeRoot, { isolated: true }),
+            PATH: `${join(this.root, "tools")}:${commandEnvironment(this.home, this.codeRoot, { isolated: true }).PATH}`,
             TMPDIR: join(this.root, "tmp"),
             FM_LINEAR_PROBE_TASK: basename(this.scratch).slice(3),
             ...extra,
