@@ -11,7 +11,9 @@ Test requirements also stay there because they describe behavior that future cha
 
 | Document | Purpose |
 | --- | --- |
+| [WORK_CONTEXT_PLAN.mdx](WORK_CONTEXT_PLAN.mdx) | Pending work and conversation context plan, preserved while secondmate adapter support is reviewed. |
 | [FIRSTMATE_ADAPTER_PLAN.mdx](FIRSTMATE_ADAPTER_PLAN.mdx) | Approved plan for the first-pass adapter, preserved before planning the next subsystem. |
+| [EARLY_FIRSTMATE_CHECK.md](EARLY_FIRSTMATE_CHECK.md) | Historical-source compatibility check and operation-gate evidence. |
 | [ADAPTER_REVIEW.md](ADAPTER_REVIEW.md) | Firstmate adapter scope, validation evidence, and four manual checks. |
 | [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) | Current progress, planned work, and assumptions to validate before release. |
 | [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md) | Concrete implementation guidance, unresolved choices, and proposed verification mechanisms. |

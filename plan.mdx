@@ -1,259 +1,298 @@
-# Connected work and conversations
+# Secondmate work through Firstmate
 
-Keep each work item, request, and reply connected to the correct Firstmate task and Linear conversation.
+Track delegated work through the primary Firstmate without installing FM Linear on secondmates or asking agents for routine status.
 
 <QuickSummary>
 <Why>
 
-- Keep work and conversations connected as the crew changes.
+- Keep delegated work visible without interrupting the crew.
 
 </Why>
 <What>
 
-- Build the work and conversation context subsystem.
+- Extend the adapter to discover and inspect secondmate tasks through Firstmate.
 
 </What>
 <How>
 
-- Link work, tasks, issues, and artifacts.
-- Preserve request origins and resolve reply destinations.
-- Verify persistence and routing with four manual checks.
+- Read structured records and preserve their freshness.
+- Route instructions through the primary Firstmate.
+- Test task identity, missing evidence, and recovery before release.
 
 </How>
 </QuickSummary>
 
 <TableOfContents>
-<Entry section="Status quo" gist="The adapter transports context but does not own its meaning." />
-<Entry section="Desired outcome" gist="Callers retrieve connected context instead of reconstructing relationships." />
-<Entry section="Own correspondence, not workflow decisions" gist="Keep routing separate from approvals, delivery, and publication." />
-<Entry section="Connect work without guessing its identity" gist="Use stable IDs and explicit links, including before a task exists." />
-<Entry section="Remember where each request began" gist="Freeze origin and context when preparing a request." />
-<Entry section="Return replies to their original conversation" gist="Resolve by request ID; hold missing or ambiguous destinations." />
-<Entry section="Keep execution evidence separate from conclusions" gist="Retain attempt scope, artifacts, and explicit dependency evidence." />
-<Entry section="Give callers meaningful objects" gist="Expose domain operations with validated inputs and explicit outcomes." />
-<Entry section="Assemble enough context to understand the work" gist="Preserve essential facts and bound optional supporting material." />
-<Entry section="Store context beside existing adapter records" gist="Use one database with module-owned tables and shared migrations." />
-<Entry section="Deliver three reviewable increments" gist="Finish identity, conversations, then composition and manual review." />
-<Entry section="Test the failures that could misroute work" gist="Use pure routing tests and real SQLite where persistence matters." />
-<Entry section="Try four manual checks" gist="Review routing, ambiguity, stale attempts, and restart recovery." />
-<Entry section="Acceptance criteria" gist="Prove correspondence without implementing the remaining subsystems." />
+<Entry section="Status quo" gist="Local task reads work; secondmate summaries need a new contract." />
+<Entry section="Desired outcome" gist="See delegated tasks without installing another integration." />
+<Entry section="Keep one integration at the primary home" gist="Firstmate owns remote transport and agent coordination." />
+<Entry section="Read facts without asking agents" gist="Scripts publish and collect structured home summaries." />
+<Entry section="Treat summaries as discovery hints" gist="Bounded summaries cannot establish a complete task inventory." />
+<Entry section="Give each home and task an explicit identity" gist="Separate owners, task names, attempts, and remote routes." />
+<Entry section="Measure freshness before choosing a faster cadence" gist="A 30-second poll cannot refresh a five-minute-old source." />
+<Entry section="Keep missing information distinct from missing tasks" gist="Do not infer completion from absence or transport failures." />
+<Entry section="Deliver instructions through the primary" gist="Forwarding remains agentic; receipt does not prove child compliance." />
+<Entry section="Use agents only for decisions and missing meaning" gist="Deduplicate questions and measure message volume." />
+<Entry section="Expose home-aware adapter operations" gist="Add fleet discovery while preserving existing local interfaces." />
+<Entry section="Keep downstream responsibilities in their subsystems" gist="The adapter observes; other modules decide and publish." />
+<Entry section="Build four increments for adapter review" gist="Prove upstream behavior before exposing discovery and CLI support." />
+<Entry section="Test the boundaries that can mislead the captain" gist="Exercise actual scripts with controlled records and transport." />
+<Entry section="Try four checks on the laptop and Mac Mini" gist="Verify identity, visibility, staleness, and delegated instructions." />
+<Entry section="Acceptance criteria" gist="Separate adapter acceptance from complete v1 integration." />
+<Entry section="Evidence and unresolved contracts" gist="Pin the research and identify what implementation must establish." />
 </TableOfContents>
 
 <Part title="Context" />
 
 <Slide type="status-quo" />
-## The adapter carries messages; callers still supply their context
+## One task read does not describe a secondmate's crew
 
-- The first-pass Firstmate adapter has seven interfaces for installation checks, tasks, briefs, and messages.
-- `MessageToFirstmate` carries a request ID, destination, text, and context; the adapter stores delivery receipts and correlated responses.
-- The adapter deliberately does not know Linear issue IDs or comment threads.
-- No implemented module preserves those relationships or assembles the context for a new request.
-- Task discovery and structured dependency reporting remain unimplemented; this subsystem will consume explicit records from callers and fixtures.
+- The adapter checks an explicitly selected installation and reads one task from its home.
+- The local `big-plan` record represents the secondmate; it is not the inventory of that secondmate's tasks.
+- The compatibility probe covers a local Claude/scout worker, not the fleet snapshot or remote routes.
+- Firstmate already publishes structured home summaries and retrieves remote summaries using its own scripts.
+- Existing work and conversation planning is preserved in `_internal/tmp/WORK_CONTEXT_PLAN.mdx`; this adapter extension comes before that subsystem.
 
 <Slide type="desired-outcome" />
-## A reply stays connected when the crew changes
+## The captain can inspect delegated work without asking for updates
 
-- A caller can ask for the context of `BIG-299` without finding its task, plan, and conversation independently.
-- A response to `req-123` resolves to the original Linear thread even when the issue changes status or assignee.
-- A replacement crewmate can receive the objective, relevant decisions, and artifact references already recorded for that work.
-- Missing links and old execution evidence remain visible instead of silently choosing a destination.
-- This milestone proves those behaviors through local fixtures; live Linear synchronization comes later.
+- List tasks owned by the primary and its registered secondmates, with the owning home clearly shown.
+- Inspect `bp-big299-table-controls` on the Mac Mini without installing FM Linear there.
+- See when a task was observed and whether the available inventory is incomplete.
+- Continue talking to the primary Firstmate; it coordinates requests, approvals, and secondmate instructions.
+- Approve the adapter independently before building the remaining Linear synchronization subsystems.
 
-<Part title="Proposal" />
+<Part title="Design" />
 
-## Own correspondence, not workflow decisions
+## Keep one integration at the primary home
 
-**The problem.** Passing a request ID is useful only if some code remembers what it identifies.
-This module owns that correspondence inside the existing workflow integration bounded context.
+**The problem.** A second FM Linear installation would add configuration, credentials, and coordination that the user's existing setup does not need.
 
-- **Context:** own work links, conversation origins, request context snapshots, and references to evidence.
-- **Workflow rules:** choose instructions, determine authorized actions, and interpret substantive reports.
-- **Firstmate adapter:** deliver prepared messages and return responses and observations.
-- **Durable delivery:** own retries, unanswered-request follow-up, and delivery obligations.
-- **Linear publication:** create issues, publish replies, and synchronize dependency relationships.
-- **Setup:** install the standing preference to refer to work by Linear issue identifier; context supplies the verified identifier and URL.
+- **[DECISION]** Run FM Linear beside the primary Firstmate; use its registered homes and existing transport.
+- Local secondmate homes can be read through the installed Firstmate scripts with an explicit home selection.
+- Remote reads go through `fm-on.sh`, using Firstmate's registered secondmate ID; FM Linear does not invent SSH routes.
+- Secondmates receive normal Firstmate assignments, not FM Linear configuration or Linear credentials.
+- **[NON-GOAL]** Do not launch, supervise, restart, upgrade, or install software on secondmates.
+- Support directly registered local and remote secondmates first; nested delegation is disclosed as outside verified coverage rather than recursively traversed without bounds.
 
-<MermaidDiagram>
+## Read facts without asking agents
 
-```mermaid
-flowchart LR
-    I[Linear intake] -->|Normalized facts| C[Work and conversation context]
-    W[Workflow rules] -->|Message purpose and text| C
-    C -->|Prepared message| A[Firstmate adapter]
-    A -->|Correlated response| C
-    C -->|Resolved destination and evidence| P[Linear publication]
-    D[Durable delivery] -->|Schedules delivery| A
-```
+**The problem.** Asking an agent to narrate every state change is noisy and can miss updates.
 
-The arrows describe module contracts, not an implemented background service.
+The captain asks the primary Firstmate for work; it delegates assignments to a secondmate, whose normal task commands maintain the task records.
 
-</MermaidDiagram>
+<FlowDiagram>
+  <Stage id="secondmate-records" title="Record work">
+    <Node id="records" label="Secondmate task records" tone="source">
 
-## Connect work without guessing its identity
+Scripts publish a structured home summary.
 
-**The problem.** A task name, issue title, or assignee can change or be reused.
-Use stable, scoped identities to retain the same work across those changes.
+</Node>
+  </Stage>
+  <Stage id="primary-snapshot" title="Collect observations">
+    <Node id="snapshot" label="Primary fleet snapshot">
 
-- `ConnectedWorkId` identifies a local work record with an objective and explicit enrollment state, even before its Linear issue or Firstmate task exists.
-- `LinearIssueRef` contains a connection ID, workspace ID, and immutable issue ID; the identifier and URL are display information.
-- `FirstmateTaskRef` retains the existing home ID and task ID; an execution attempt adds the existing attempt ID.
-- One connected work record may link several tasks and issues.
-  An issue or task may participate in more than one record; ambiguous lookups require the caller to select a work record.
-- Each task-to-issue association declares whether it is a tracking destination or a related issue; never select the first match as an implicit destination.
-- Linking cannot silently merge records or retarget an existing request; conflicting updates return a conflict for the caller to resolve.
-- Enrollment is explicit and independent of assignee, status, or whether the captain owes a review.
+Firstmate's existing transport reads the home summaries.
 
-## Remember where each request began
+</Node>
+  </Stage>
+  <Stage id="adapter-read" title="Normalize facts">
+    <Node id="adapter" label="Firstmate adapter" tone="destination">
 
-**The problem.** An issue can change between sending a question and receiving its answer.
-Retain the context sent with the request, not only a pointer to whatever the issue contains later.
+FM Linear reads the snapshot and returns observations qualified by home.
 
-- `ConversationRef` identifies the connection, issue, and root comment; each comment also retains its own immutable ID and author reference.
-- `ContextRequest` records `requestId`, connected work, purpose, destination, optional attempt scope, origin, and the exact context snapshot sent.
-- The caller supplies a stable idempotency key derived from its accepted action.
-  The module returns the same request on retry and rejects a different payload under that key.
-- Origin may be a Linear comment, a Firstmate observation, or a system action; system actions need an explicit reply destination if a public reply is expected.
-- Several feedback points can share one request and thread; this model does not force one tracked decision per sentence.
-- Explicit batch membership retains each constituent origin; replies must identify a constituent request or return for caller review rather than broadcasting one answer to every thread.
+</Node>
+  </Stage>
+  <Edge from="records" to="snapshot" label="Summarizes" />
+  <Edge from="snapshot" to="adapter" label="Feeds" />
 
-## Return replies to their original conversation
+Work context and workflow rules turn these observations into intended Linear updates.
+Only exceptional questions are sent back to the primary Firstmate agent.
+</FlowDiagram>
 
-**The problem.** A response contains an opaque request ID, not the Linear metadata required to publish it.
-Resolve that metadata in code without asking Firstmate to repeat it.
+- `fm-fleet-snapshot.sh --json` is the primary observation interface.
+- `fm-home-summary-refresh.sh` publishes each home's summary from structured records, independently of conversational reports.
+- The primary snapshot retrieves `state/home-summary.json` through `fm-on.sh` and may refresh its local observation cache.
+- A successful script read is evidence about records, not proof that a deliverable is correct or deployed.
 
-<MermaidDiagram>
+## Treat summaries as discovery hints
 
-```mermaid
-sequenceDiagram
-    participant W as Calling module
-    participant C as Context module
-    participant A as Firstmate adapter
-    W->>C: Prepare request with comment origin and text
-    C-->>W: Saved request and MessageToFirstmate
-    W->>A: Send prepared message
-    A-->>W: Later response for req-123
-    W->>C: Resolve response against req-123
-    C-->>W: Original thread, context, and current relevance
-    W->>W: Apply workflow and publication policy
-```
+**The problem.** Summary arrays are capped and omit some fields needed for reliable task identity and execution tracking.
 
-Context preparation does not send the message or mark its request fulfilled.
+- The installed summary defaults include 20 secondmates and 20 children per summary; it reports omitted records.
+- Child summaries omit `spawn_gen`; FM Linear must not invent an execution-attempt ID from a timestamp or task name.
+- Read each selected home's full `fm-fleet-snapshot.sh --json` when establishing its inventory, then periodically reconcile it; remote calls still use the primary's `fm-on.sh`.
+- Use the full snapshot's local `tasks` and structured backlog records; do not recursively enroll its nested secondmate summaries.
+- Read a known task's state and metadata through existing Firstmate interfaces when detailed or newer evidence is needed, checking generation before and after.
+- **[CONSTRAINT]** Bound bytes, duration, and concurrency; if the full inventory cannot be obtained, return partial coverage and retain prior tasks.
+- Prove this full-read path in the first increment; a truncated summary alone cannot satisfy the inventory acceptance criterion.
 
-</MermaidDiagram>
+## Give each home and task an explicit identity
 
-- A known reply resolves to its saved origin; later status and assignee changes do not replace the thread.
-- A task report without a request ID uses explicit task associations; zero or several eligible destinations return `unresolved` with the reason and candidate references.
-- A deleted or unavailable thread remains the recorded destination; publication reports the problem instead of silently opening another thread.
-- A response from an older attempt keeps its original context and is marked historical; it cannot automatically stand in for the current attempt's outcome.
-- Distinct message IDs preserve follow-up responses; replaying one ID with different content is a conflict.
+**The problem.** Two machines can contain the same task name and filesystem path.
 
-## Keep execution evidence separate from conclusions
-
-**The problem.** A worker stopping does not establish that a plan was approved or that delivery is complete.
-Store facts and their provenance without inventing workflow conclusions.
-
-- Record task observations with their source and observed time; attempt identifiers are opaque, so do not sort them to infer recency.
-- Advancing the current attempt requires an explicit observation and the expected context revision; a stale writer must reread before updating it.
-- `ArtifactRef` records its URL or path, title, optional version, originating task attempt, and source; availability checks and uploads belong elsewhere.
-- Preserve prior artifact versions; selecting an artifact as current must be explicit rather than inferred from its filename.
-- `DependencyEvidence` records directed work or task relationships, source, and whether the report is complete; unknown information never deletes existing relationships.
-- Only a newer, explicitly complete report from the same authority may replace that authority's dependency set; partial reports add evidence without implying removals.
-- Reports arrive as validated records from callers or fixtures; this milestone does not invent a Firstmate dependency-reporting command or extract relationships from prose.
-
-## Give callers meaningful objects
-
-**The problem.** A collection of generic setters would force each caller to rebuild the same routing rules.
-Expose a small set of domain operations backed by Zod-validated objects.
-
-| Operation | Input and result |
+| Object | Meaning |
 | --- | --- |
-| `connectWork` | Work description, scoped links, enrollment, and expected revision; returns a `ConnectedWork` or a conflict. |
-| `recordWorkEvidence` | Work ID and typed task, artifact, decision-summary, or dependency evidence; returns the new context revision. |
-| `recordConversation` | Scoped thread/comment records with provenance; returns the stored conversation or an identity conflict. |
-| `getWorkContext` | Work ID or scoped lookup, audience, and size budget; returns a `WorkContextSnapshot` or an explicit unresolved result. |
-| `prepareContextRequest` | Idempotency key, work, origin, purpose, destination, and caller-authored text; returns a saved `ContextRequest` and `MessageToFirstmate`. |
-| `resolveFirstmateResponse` | A validated `MessageFromFirstmate`; returns a saved `ResolvedResponse` with destination and relevance, or an unresolved reason. |
+| `FirstmateHomeRef` | A registered operational home selected through the primary connection. |
+| `FirstmateTaskRef` | Owning home ID plus exact task ID, preserving the existing shape. |
+| `FirstmateTaskAttemptRef` | That task plus an upstream execution generation, when verified. |
+| `FirstmateHomeRoute` | Local home selection or primary connection plus registered secondmate route. |
 
-- Results use operation-specific unions, not a global result-state registry.
-- Domain conflicts and unknown mappings are expected results; invalid inputs, corrupt state, and failed database operations follow the existing error practices.
-- An adapter message receipt stays an adapter object; this module adds context rather than duplicating transport state.
-- Re-resolving a response retains its original correlation but reevaluates current enrollment and attempt relevance before publication.
+- Preserve existing local home IDs and stored receipts; allocate persisted child home IDs within the primary connection's namespace.
+- Bind routes to those IDs; a host alias or directory alone is not a global identity.
+- If a registered route changes, hold affected operations until its identity is checked; never silently reuse links for a replacement home.
+- Owning-home relationships identify delegation ownership, not necessarily the original request or a Linear issue.
+- A task ID reused without verifiable attempt evidence remains ambiguous for attempt-sensitive updates.
 
-## Assemble enough context to understand the work
+## Measure freshness before choosing a faster cadence
 
-**The problem.** Sending only `req-123` leaves Firstmate unable to understand the request; sending every historical comment creates noise.
-Build a bounded snapshot from explicit, relevant records.
+**The problem.** Reading a cached summary every 30 seconds does not make its source 30 seconds old.
 
-- Always include the objective, issue identifier and URL when known, target task, caller's message, and applicable attempt scope.
-- Include the originating thread's relevant comments, caller-selected decision summaries, and artifact references with their provenance.
-- Preserve ordering supplied by the source; late-arriving records cannot overwrite newer revisions solely because they were received later.
-- Let callers select supporting material by reference; code formats it deterministically and does not ask an agent to gather routing IDs.
-- Fit the adapter's current `text` and `context` limits; omit optional material with a visible omission summary and retrievable references.
-- If essential material cannot fit, return `context-too-large` for the caller to revise; do not silently truncate the user's request.
-- Never fetch artifact URLs, invent a summary, or treat quoted issue text as trusted integration instructions.
+- Start with a configurable 30-second fleet observation cadence in the later service; the adapter exposes bounded reads without owning a background loop.
+- The installed watcher refreshes summaries every 300 seconds by default; spawn, teardown, and session start also trigger best-effort refreshes.
+- Record source observation time, collection time, source age, cache provenance, and completeness separately.
+- Use a proposed six-minute stale threshold as an initial display policy, configurable by home; unknown or future timestamps are not fresh evidence.
+- For an explicit task inspection or a consequential action, request a current bounded read rather than trusting a summary's freshness label.
+- Measure latency and command duration on the real setup before selecting a faster producer cadence; do not change Firstmate's configuration automatically.
+- Serialize overlapping scans, cap concurrent home reads, and back off unavailable routes without waking agents.
 
-## Store context beside existing adapter records
+## Keep missing information distinct from missing tasks
 
-**The problem.** Both modules need durable records, but competing migration counters or copies of delivery state would make recovery unreliable.
-Use one SQLite database with distinct ownership.
+**The problem.** The CLI currently reports `unknown` for both absent task metadata and unreadable task activity.
 
-- Extract only connection initialization and migration coordination from `AdapterStore`; preserve existing adapter records, requests, polls, and receipts unchanged.
-- Add context-owned tables for work links, conversations, evidence, request snapshots, and response correlations with scoped uniqueness and foreign keys.
-- Apply the schema upgrade transactionally from the existing version 1 database; never reset it or create a parallel context database by default.
-- Make each context operation atomic and use revision checks to reject conflicting updates across processes.
-- Save request context before returning a message to its caller; a crash before sending leaves a retryable prepared request, not a falsely delivered request.
-- On recovery, the same caller action retrieves the same request ID and exact message; the future delivery module owns scheduling that retry.
-- Keep bodies and artifact content out of logs; expose bounded IDs, outcomes, and error codes through the existing logging conventions.
+- Return task presence separately: `found`, `not-found`, or `not-verified`, together with the observation source and owning home.
+- A confirmed missing exact ID can report `not-found`; an unavailable remote read cannot.
+- An ID ending in a period remains an exact ID; suggest nearby discovered IDs without silently substituting one.
+- Preserve last-known state when a home becomes stale, unreachable, invalid, or truncated; show why it is no longer current.
+- Absence from a later inventory marks visibility as lost; it does not mark the task canceled, delivered, or deleted in Linear.
+- Store task generations and observation times so old snapshots cannot overwrite evidence from newer attempts.
+- A `done` secondmate record never completes all work owned by that secondmate.
 
-<Part title="Build and review" />
+## Deliver instructions through the primary
 
-## Deliver three reviewable increments
+**The problem.** Observing a child task does not provide a guaranteed pre-dispatch instruction hook.
 
-Build identity first, then conversation routing, then the adapter composition you can exercise locally.
+- Workflow rules resolve stage instructions before delegation; context includes the work identity, selected secondmate, and applicable instruction version.
+- Send that context to the primary using the existing process-event adapter; ask it to carry the requirements into the secondmate assignment.
+- Firstmate retains control of forwarding through `fm-send.sh` and its normal steering and correlated parent-report channels.
+- Verify a child's actual launch brief when an existing bounded read can establish its identity and generation; otherwise report instruction inclusion as unverified.
+- If a requirement was missed, send one tracked corrective request through the primary; do not repeatedly send the entire assignment.
+- Do not extend `updateFirstmateBrief` to write remote files or ask secondmates to run FM Linear commands in v1.
+- **[CONSTRAINT]** This preserves the existing agentic limitation: delivery to the primary does not guarantee forwarding before every child launch or compliance afterward.
 
-| Increment | What you can review |
+## Use agents only for decisions and missing meaning
+
+**The problem.** A polling integration can overwhelm the primary if each observation becomes a message.
+
+- Routine discovery, unchanged state, cache refreshes, and retryable transport failures generate zero agent messages.
+- Ask only when missing meaning blocks a concrete action, such as identifying the accepted deliverable after a worker stops.
+- Deduplicate by work, attempt, question purpose, and relevant evidence version; keep one outstanding request per unresolved question.
+- Batch compatible questions and related comments for the same work, preserving individual request IDs and approval scope.
+- A structured response keeps the FM Linear request ID; Firstmate's internal parent correlation tokens are separate and must not be assumed identical.
+- Record scan count, source age, scan duration, stale homes, omitted records, material changes, agent requests, and unresolved-request age.
+- Measure routine discovery's zero-message target directly; report per-work message counts alongside totals rather than inferring noise from token estimates.
+
+## Expose home-aware adapter operations
+
+**The problem.** Callers need useful observations without learning Firstmate's files, SSH commands, or snapshot schemas.
+
+| Interface | Contract |
 | --- | --- |
-| Work identity and evidence | Create connected work, add task/issue links, inspect artifacts and dependency evidence, and see explicit ambiguity and revision conflicts. |
-| Conversations and requests | Prepare a contextual message, reopen storage, resolve a response to the original thread, and preserve follow-ups and historical attempts. |
-| Adapter composition and handoff | Exercise those contracts through a local fixture command, publish interface documentation, and provide four reproducible manual checks. |
+| `getFirstmateFleet` | Return discovered homes, work records, source evidence, and per-home coverage. |
+| `getFirstmateTask` | Read an exact task in a verified registered home, including presence and attempt evidence. |
+| `testFirstmateInstallation` | Check local task reads, fleet discovery, and routed reads as separate capabilities. |
+| `sendFirstmateMessage` | Send contextual work requests to the primary; preserve receipt meaning. |
 
-- Put the module in `src/context/` with a single public entry point and private persistence/assembly code.
-- Keep the shared SQLite extraction narrow and verify the existing adapter throughout it.
-- Update `_internal/DOMAIN.md` and architecture only for accepted terminology and ownership decisions.
-- Add `_internal/tmp/CONTEXT_REVIEW.md` with scope, commands, expected results, and remaining limits.
-- Do not add Linear API calls, polling, workflow transitions, a setup wizard, or a delivery scheduler in this milestone.
+- Add `FirstmateFleetSnapshot`, `FirstmateHomeObservation`, and `FirstmateWorkObservation`, validated at the upstream boundary with Zod.
+- Distinguish backlog items, worker tasks, and secondmate records; missing worker metadata does not erase a queued work item.
+- Add `fm-linear fleet`; allow `task TASK_ID --secondmate ID` to resolve a registered owner, while existing local commands keep their meaning.
+- Show owning home, presence, current or last-known state, observation time, and coverage in human output; JSON and TOON retain full typed results.
+- Reject cross-home brief updates through the existing local method; only the new verified read path expands task lookup scope.
 
-## Test the failures that could misroute work
+## Keep downstream responsibilities in their subsystems
 
-- **Pure tests:** cover ambiguous routing, same task names in different homes, explicit artifact versions, unknown versus empty dependencies, and required context that exceeds its budget.
-- **SQLite component tests:** cover immutable origins, replay conflicts, restart recovery, transaction rollback, scoped uniqueness, and concurrent revision conflicts.
-- **Migration tests:** upgrade a real version 1 database containing adapter requests and receipts, then verify those records through the adapter's public interface.
-- **Composition tests:** prepare and resolve messages using the adapter's exported schemas; exercise one adapter delivery/response fixture rather than duplicate every upstream contract probe.
-- **CLI checks:** provide deterministic local scenarios that call production context code and use disposable databases, without Linear credentials or live Firstmate tasks.
-- Follow the testing ladder and add a `// Catches:` explanation where a test's distinct regression is not obvious; do not mirror every getter with a test.
+Each subsystem owns one part of secondmate support.
 
-## Try four manual checks
-
-Each command creates disposable data, prints expected outcomes, and identifies its database for inspection.
-The implementation will provide these commands and document cleanup.
-
-| Command | What it demonstrates |
+| Subsystem | Secondmate responsibility |
 | --- | --- |
-| `bun run scripts/review-context.ts reply` | Prepare a request from `BIG-299`, change the issue's assignee, and resolve a response to the original thread with readable context. |
-| `bun run scripts/review-context.ts ambiguity` | Link one task to two tracking issues; an unsolicited report returns both candidates instead of picking one. |
-| `bun run scripts/review-context.ts attempts` | Replace attempt A with B, then receive an A response; its origin remains intact and its relevance is historical. |
-| `bun run scripts/review-context.ts recovery` | Close and reopen SQLite after request preparation; repeat the action and verify the same ID, message, and thread without duplicate records. |
+| Firstmate integration | Read and normalize upstream facts, routes, provenance, compatibility, and instruction evidence. |
+| Work and conversation context | Associate home-qualified tasks with connected work, issues, requests, and threads. |
+| Workflow requirements and rules | Resolve instructions, approvals, review readiness, and missing-report needs. |
+| Linear publication | Publish verified changes, artifact references, and explicit dependency relationships. |
+| Durable delivery and recovery | Schedule retries, preserve unanswered requests, and suppress duplicate deliveries. |
+| Setup and service lifecycle | Select homes, run observation schedules, and manage freshness configuration. |
+| Diagnostics and metrics | Explain stale or partial coverage and measure operational noise. |
 
-The manual scenarios prove this subsystem; live Linear integration requires later modules.
+- Adapter-owned route and observation tables live in the existing SQLite database, with a migration that preserves prior receipts and checks.
+- Save accepted observations and their coverage atomically; timestamps alone do not imply an ordered, complete event stream.
+- Deterministic issue enrollment consumes stable task identities later; matching similar titles or assuming one issue per secondmate is forbidden.
+- Dependency IDs remain owning-home-qualified; truncated or ambiguous references must not become Linear blocking relationships.
+
+<Part title="Implementation and review" />
+
+## Build four increments for adapter review
+
+Each increment produces a concrete adapter capability before live review.
+
+| Increment | Deliverable the captain can inspect |
+| --- | --- |
+| 1. Verify upstream reads | Executable fixtures proving fleet collection, full child inventory, routed reads, and their limits. |
+| 2. Normalize identity and coverage | Typed observations and SQLite persistence for homes, tasks, attempts, freshness, and partial results. |
+| 3. Expose discovery and inspection | Human, JSON, and TOON output for fleet listing and a task selected by secondmate. |
+| 4. Validate the real setup | A review guide with measured laptop-to-Mac-Mini discovery latency, outage behavior, and routing evidence. |
+
+- Finish and review these as an extension to the Firstmate adapter before starting the work and conversation context subsystem.
+- Publish fresh compatibility evidence; do not reuse the local-only task probe as proof of secondmate coverage.
+- The later context, workflow, delivery, and publication milestones consume these interfaces to complete v1 Linear behavior.
+- Report instruction propagation as a separately verified agentic path; do not make unconditional dispatch guarantees a hidden definition of done.
+
+## Test the boundaries that can mislead the captain
+
+- **Static and unit:** schemas, home identity, freshness calculations, duplicate detection, truncated fields, out-of-order evidence, and exact task lookup.
+- **Component integration:** actual Firstmate snapshot and summary scripts with disposable local and simulated remote homes, plus the real SQLite migration.
+- **Transport fixtures:** fake only the SSH or terminal boundary; exercise Firstmate's routing scripts, timeout handling, cached summaries, and isolated file reads.
+- **Inventory:** exceed the summary's child limit; discover records through the full read or explicitly report incomplete coverage without deleting prior records.
+- **Process:** verify `fleet`, secondmate-qualified `task`, formats, exit codes, and absence of unrequested message sends.
+- **Controlled live:** compare script evidence and resulting FM Linear observations on the laptop and Mac Mini; run no paid agents during ordinary automated tests.
+- Follow `_internal/TESTING.md`: name the regression each added test catches and choose the lowest level that can expose it.
+
+## Try four checks on the laptop and Mac Mini
+
+1. **Find the right work.** List the fleet and inspect one laptop task and one Mac Mini task; compare the owning home's actual records and attempt IDs.
+2. **Measure a real change.** During ordinary authorized work, record when a child task appears or changes state, when its summary refreshes, and when FM Linear sees it.
+3. **Exercise loss and recovery.** Use a controlled route-failure fixture first; optionally interrupt only the read route during live review, then verify stale state, recovery, and zero repeated agent requests.
+4. **Follow one instruction and reply.** With captain approval, send a harmless requirement through the primary for a dedicated test assignment; inspect the child launch evidence and correlate its reply.
+
+- The guide will provide exact commands, expected results, cleanup, and which steps touch live Firstmate.
+- Actual Linear issue creation and threading are verified later with the publication and context subsystems.
+- The live instruction check establishes an observed successful path, not a guarantee that every future agent dispatch follows it.
 
 <Slide type="acceptance-criteria" />
-## Correspondence remains correct across change and restart
+## Adapter acceptance requires accurate scope and visible uncertainty
 
-- Same-named tasks in different homes and issues in different connections cannot collide.
-- Replaying an accepted action returns the same request and payload; conflicting identity reuse is rejected.
-- Replies retain their original thread, while unsolicited reports with ambiguous destinations remain unresolved.
-- Historical or unknown attempt evidence cannot silently become a current work outcome; the context module makes no approval decisions.
-- Unknown dependency information preserves existing evidence, and explicit complete updates affect only their own source.
-- Version 1 adapter data survives migration, and existing adapter checks continue to pass.
-  Run the new tests on both supported platforms and report any unverified platform.
-- Four manual scenarios and interface documentation are available for human review before another subsystem is implemented.
+**Identity and discovery**
+
+- A primary secondmate record and its child tasks remain distinct; identical task names in different homes never collide.
+- A bounded summary cannot masquerade as a complete inventory; missing attempts remain unknown.
+- Existing local task reads, messages, receipts, and installation checks continue working after migration.
+
+**Freshness and operation**
+
+- Stale, unreachable, malformed, and truncated inputs preserve prior work with explicit coverage rather than imply completion.
+- Routine observation invokes no agents, sends no messages, and stays within configured resource bounds.
+- Fixtures prove routed reads; the live review records source age and observed propagation delay.
+
+**Release boundary**
+
+- Documentation distinguishes verified task observation from agentic instruction forwarding; secondmates need no FM Linear installation.
+- Complete v1 still requires the separately reviewed context, workflow, delivery, and Linear publication integrations.
+
+## Evidence and unresolved contracts
+
+- Research uses the local Firstmate checkout at `861b5dad2baaa0a64703a1b0c14fb4da9bda5269`; the Mac Mini's installed revision has not been checked.
+- [Fleet snapshot](https://github.com/kunchenguid/firstmate/blob/861b5dad2baaa0a64703a1b0c14fb4da9bda5269/bin/fm-fleet-snapshot.sh) defines schemas, summaries, bounds, provenance, and full local task observations.
+- [Home summary refresh](https://github.com/kunchenguid/firstmate/blob/861b5dad2baaa0a64703a1b0c14fb4da9bda5269/bin/fm-home-summary-refresh.sh) and [watcher](https://github.com/kunchenguid/firstmate/blob/861b5dad2baaa0a64703a1b0c14fb4da9bda5269/bin/fm-watch.sh) establish publication and periodic refresh behavior.
+- [Remote routing](https://github.com/kunchenguid/firstmate/blob/861b5dad2baaa0a64703a1b0c14fb4da9bda5269/bin/fm-on.sh) and [bounded file reads](https://github.com/kunchenguid/firstmate/blob/861b5dad2baaa0a64703a1b0c14fb4da9bda5269/bin/fm-remote-file.sh) are existing read-through mechanisms, not FM Linear plugins on remote hosts.
+- **Verify in increment 1:** full-inventory coverage, remote command bounds, cost of fresh reads, and availability of attempt-scoped launch evidence.
+- **Compatibility limit:** validate remote schemas on every read; record remote code revision only if a verified read-only interface exposes it, never substitute the primary's revision.
+- If exact remote installation fingerprinting is unavailable, report behavioral/schema coverage explicitly; do not claim the entire remote checkout has been compatibility-tested.
